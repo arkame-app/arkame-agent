@@ -1,0 +1,19 @@
+# Build output
+bin/
+*.test
+*.out
+coverage.out
+
+# Env
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# IDE / OS
+.vscode/*
+.idea/
+.DS_Store
+
+# Logs
+*.log
