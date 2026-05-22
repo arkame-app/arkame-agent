@@ -80,6 +80,21 @@ func (c *Client) GET(ctx context.Context, path string, out any) error {
 	return c.do(req, out)
 }
 
+// PATCH faz um PATCH JSON e decodifica a resposta em out (se non-nil).
+func (c *Client) PATCH(ctx context.Context, path string, in, out any) error {
+	body, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, c.baseURL+path, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	c.setHeaders(req)
+	return c.do(req, out)
+}
+
 func (c *Client) setHeaders(req *http.Request) {
 	req.Header.Set("User-Agent", "arkame-agent")
 	if c.bearer != "" {

@@ -153,3 +153,43 @@ type Lifecycle struct {
 	Transitions     []string `json:"transitions,omitempty"`
 	ExpirationDays  int      `json:"expiration_days,omitempty"`
 }
+
+// --- Restore ---
+
+// RestoreItem é uma linha pendente em restore_items.
+// O agent puxa items via GET /api/agents/<id>/restore-items, baixa cada um do
+// bucket via GetObject(VersionId) e reporta status via PATCH.
+type RestoreItem struct {
+	ItemID           string `json:"item_id"`
+	JobID            string `json:"job_id"`
+	Bucket           string `json:"bucket"`
+	DestPath         string `json:"dest_path"`         // diretório destino absoluto
+	ConflictStrategy string `json:"conflict_strategy"` // suffix-version | overwrite | skip
+	SourceKey        string `json:"source_key"`        // S3 key dentro do bucket
+	SourceVersionID  string `json:"source_version_id"` // S3 VersionId
+	SourceSize       int64  `json:"source_size"`
+	SourceSha256     string `json:"source_sha256"` // hex
+	DestFilename     string `json:"dest_filename"` // basename a escrever em dest_path
+	Status           string `json:"status"`        // queued | running | complete | failed
+}
+
+// ListRestoreItemsResponse é a resposta de GET /api/agents/<id>/restore-items.
+type ListRestoreItemsResponse struct {
+	Items []RestoreItem `json:"items"`
+}
+
+// RestoreItemUpdate é o body de PATCH /api/agents/<id>/restore-items/<itemId>.
+type RestoreItemUpdate struct {
+	Status       string `json:"status"` // running | complete | failed
+	ErrorMessage string `json:"error_message,omitempty"`
+}
+
+// RestoreItemUpdateResponse retorna o estado agregado do job após o update.
+type RestoreItemUpdateResponse struct {
+	OK          bool   `json:"ok"`
+	JobID       string `json:"job_id"`
+	JobStatus   string `json:"job_status"`
+	ItemsDone   int    `json:"items_done"`
+	ItemsFailed int    `json:"items_failed"`
+	ItemsTotal  int    `json:"items_total"`
+}

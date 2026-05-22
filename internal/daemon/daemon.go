@@ -16,6 +16,7 @@ import (
 
 	"github.com/arkame-app/agent/internal/api"
 	"github.com/arkame-app/agent/internal/config"
+	"github.com/arkame-app/agent/internal/restore"
 	"github.com/arkame-app/agent/internal/scheduler"
 	"github.com/arkame-app/agent/internal/storage"
 	syncengine "github.com/arkame-app/agent/internal/sync"
@@ -47,10 +48,11 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(3)
+	wg.Add(4)
 	go func() { defer wg.Done(); heartbeatLoop(ctx, client, cfg) }()
 	go func() { defer wg.Done(); probeLoop(ctx, client, s3Client, cfg) }()
 	go func() { defer wg.Done(); planLoop(ctx, client, s3Client, cfg) }()
+	go func() { defer wg.Done(); restoreLoop(ctx, client, s3Client, cfg) }()
 
 	<-ctx.Done()
 	slog.Info("ctx cancelado, aguardando loops encerrarem...")
@@ -269,4 +271,81 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 		"files_uploaded", result.Stats.FilesUploaded,
 		"files_indexed", completeResp.FilesIndexed)
 	return nil
+}
+
+// restoreLoop puxa restore_items pendentes e executa cada um:
+//   1. GET /restore-items → lista pendentes (queued/running)
+//   2. Para cada item: PATCH status=running
+//   3. restore.Run → GetObject + write + sha256 verify
+//   4. PATCH status=complete (ou failed com error_message)
+//
+// Items running de execuções anteriores são reprocessados (recovery após crash).
+// A idempotência da escrita vem do conflict_strategy=suffix-version.
+func restoreLoop(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config.Config) {
+	ticker := time.NewTicker(time.Duration(cfg.PollIntervalSec) * time.Second)
+	defer ticker.Stop()
+
+	run := func() {
+		var resp api.ListRestoreItemsResponse
+		if err := c.GET(ctx, "/api/agents/"+cfg.AgentID+"/restore-items", &resp); err != nil {
+			slog.Warn("poll restore-items falhou", "err", err)
+			return
+		}
+		if len(resp.Items) == 0 {
+			return
+		}
+		slog.Info("restore-items pendentes", "count", len(resp.Items))
+
+		exec := restore.Options{S3: s3c, HostRoot: cfg.HostRoot}
+		for _, item := range resp.Items {
+			if ctx.Err() != nil {
+				return
+			}
+			// Marca running antes de tentar
+			markRunning := api.RestoreItemUpdate{Status: "running"}
+			if err := c.PATCH(ctx, "/api/agents/"+cfg.AgentID+"/restore-items/"+item.ItemID, markRunning, nil); err != nil {
+				slog.Warn("PATCH running falhou, pulando item", "item_id", item.ItemID, "err", err)
+				continue
+			}
+
+			err := restore.Run(ctx, exec, item)
+			update := api.RestoreItemUpdate{}
+			if err != nil {
+				update.Status = "failed"
+				update.ErrorMessage = err.Error()
+				slog.Error("restore item falhou",
+					"item_id", item.ItemID, "key", item.SourceKey, "err", err)
+			} else {
+				update.Status = "complete"
+				slog.Info("restore item OK",
+					"item_id", item.ItemID, "key", item.SourceKey,
+					"dest", item.DestPath+"/"+item.DestFilename)
+			}
+
+			var resp api.RestoreItemUpdateResponse
+			if perr := c.PATCH(ctx, "/api/agents/"+cfg.AgentID+"/restore-items/"+item.ItemID, update, &resp); perr != nil {
+				slog.Warn("PATCH final falhou", "item_id", item.ItemID, "err", perr)
+				continue
+			}
+			if resp.JobStatus == "complete" || resp.JobStatus == "partial" || resp.JobStatus == "failed" {
+				slog.Info("restore job concluído",
+					"job_id", resp.JobID,
+					"status", resp.JobStatus,
+					"done", resp.ItemsDone,
+					"failed", resp.ItemsFailed,
+					"total", resp.ItemsTotal)
+			}
+		}
+	}
+
+	// Primeiro tick imediato pra recuperar items "running" deixados num crash
+	run()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			run()
+		}
+	}
 }
