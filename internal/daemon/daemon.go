@@ -8,6 +8,7 @@ package daemon
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"runtime"
@@ -310,16 +311,33 @@ func restoreLoop(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 
 			err := restore.Run(ctx, exec, item)
 			update := api.RestoreItemUpdate{}
-			if err != nil {
-				update.Status = "failed"
-				update.ErrorMessage = err.Error()
-				slog.Error("restore item falhou",
-					"item_id", item.ItemID, "key", item.SourceKey, "err", err)
-			} else {
+
+			var warmReq *restore.ErrWarmingRequested
+			var warmInProg *restore.ErrWarmingInProgress
+			switch {
+			case err == nil:
 				update.Status = "complete"
 				slog.Info("restore item OK",
 					"item_id", item.ItemID, "key", item.SourceKey,
 					"dest", item.DestPath+"/"+item.DestFilename)
+			case errors.As(err, &warmReq):
+				// Objeto em cold storage. Mantém status=running, próximo poll re-tenta.
+				slog.Info("warming requested",
+					"item_id", item.ItemID, "key", item.SourceKey,
+					"class", warmReq.StorageClass, "tier", warmReq.Tier)
+				update.Status = "running"
+				update.ErrorMessage = "warming-requested"
+			case errors.As(err, &warmInProg):
+				slog.Info("warming in progress, aguardando",
+					"item_id", item.ItemID, "key", item.SourceKey,
+					"class", warmInProg.StorageClass)
+				update.Status = "running"
+				update.ErrorMessage = "warming-in-progress"
+			default:
+				update.Status = "failed"
+				update.ErrorMessage = err.Error()
+				slog.Error("restore item falhou",
+					"item_id", item.ItemID, "key", item.SourceKey, "err", err)
 			}
 
 			var resp api.RestoreItemUpdateResponse

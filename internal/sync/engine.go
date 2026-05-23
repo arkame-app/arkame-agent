@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/arkame-app/agent/internal/api"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
 // EngineOptions configura uma execução de sync.
@@ -55,7 +57,7 @@ func Run(ctx context.Context, o EngineOptions) (*Result, error) {
 			return result, ctx.Err()
 		}
 
-		entry, err := processFile(ctx, o, fi)
+		entry, dedupHit, err := processFile(ctx, o, fi)
 		if err != nil {
 			slog.Warn("arquivo falhou, pulando",
 				"path", fi.RelativePath,
@@ -65,9 +67,11 @@ func Run(ctx context.Context, o EngineOptions) (*Result, error) {
 		result.Stats.FilesTotal++
 		result.Stats.BytesTotal += fi.Size
 		if entry != nil {
-			result.Stats.FilesUploaded++
-			result.Stats.BytesUploaded += fi.Size
 			result.VersionMap = append(result.VersionMap, *entry)
+			if !dedupHit {
+				result.Stats.FilesUploaded++
+				result.Stats.BytesUploaded += fi.Size
+			}
 		}
 	}
 	if err, ok := <-errCh; ok && err != nil {
@@ -76,31 +80,44 @@ func Run(ctx context.Context, o EngineOptions) (*Result, error) {
 	return result, nil
 }
 
-// processFile sobe um arquivo individual. Retorna nil se arquivo não mudou
-// (dedup file-level) ou FileEntry se um novo upload foi feito.
+// processFile sobe um arquivo individual.
 //
-// TODO: implementar dedup checando HeadObject no bucket + comparando sha256.
+// Fluxo:
+//   1. Calcula SHA-256 do arquivo local
+//   2. HeadObject no bucket — se já existe com mesmo sha256 metadata, é dedup
+//      (mesmo hash = mesmo conteúdo, S3 já tem). Retorna FileEntry com o
+//      VersionId existente — o painel registra como se fosse novo upload (a
+//      version aparece no version_map atual mas referencia o objeto antigo).
+//   3. Senão, PutObject novo com sha256 no metadata.
+//
 // TODO: trocar PutObject por Multipart para arquivos > 100 MB.
-func processFile(ctx context.Context, o EngineOptions, fi FileInfo) (*api.FileEntry, error) {
+func processFile(ctx context.Context, o EngineOptions, fi FileInfo) (*api.FileEntry, bool, error) {
 	f, err := os.Open(fi.AbsolutePath)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer f.Close()
 
-	// Calcula SHA-256 streamed (e em paralelo lê pro upload)
+	// 1. SHA-256 streamed
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {
-		return nil, fmt.Errorf("hash: %w", err)
+		return nil, false, fmt.Errorf("hash: %w", err)
 	}
 	hash := hex.EncodeToString(h.Sum(nil))
 
-	// Reabre para upload (poderíamos usar io.TeeReader + pipe mas simplifica)
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return nil, err
+	key := path.Join(o.PrefixRoot, fi.RelativePath)
+
+	// 2. Dedup: HeadObject pra ver se o arquivo já existe com mesmo hash
+	if existing, ok := checkDedup(ctx, o.S3, o.Bucket, key, hash); ok {
+		slog.Debug("dedup hit, pulando upload",
+			"key", key, "sha256", hash[:8], "size", fi.Size)
+		return existing, true, nil
 	}
 
-	key := path.Join(o.PrefixRoot, fi.RelativePath)
+	// 3. Upload novo
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return nil, false, err
+	}
 	body := NewThrottledReader(f, o.MaxMbps)
 
 	putOut, err := o.S3.PutObject(ctx, &s3.PutObjectInput{
@@ -110,7 +127,7 @@ func processFile(ctx context.Context, o EngineOptions, fi FileInfo) (*api.FileEn
 		Metadata: map[string]string{"sha256": hash},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("put %s: %w", key, err)
+		return nil, false, fmt.Errorf("put %s: %w", key, err)
 	}
 
 	versionID := ""
@@ -124,5 +141,49 @@ func processFile(ctx context.Context, o EngineOptions, fi FileInfo) (*api.FileEn
 		Size:       fi.Size,
 		SHA256:     hash,
 		ModifiedAt: time.Unix(0, fi.ModTime),
-	}, nil
+	}, false, nil
+}
+
+// checkDedup retorna (entry, true) se o objeto já existe no bucket com o
+// mesmo sha256 metadata. Caso contrário (ou erro de Head), retorna (nil, false)
+// pra que o caller faça o upload novo.
+//
+// IMPORTANTE: comparamos por sha256 do metadata, não por ETag (que pode ser MD5
+// composto em multipart e não bate com sha256). Backups antigos sem o metadata
+// "sha256" não dão dedup (fallback seguro: re-upload).
+func checkDedup(ctx context.Context, s3c *s3.Client, bucket, key, hash string) (*api.FileEntry, bool) {
+	head, err := s3c.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: &bucket,
+		Key:    &key,
+	})
+	if err != nil {
+		var nf *s3types.NotFound
+		if !errors.As(err, &nf) {
+			slog.Debug("HeadObject erro, fazendo upload", "key", key, "err", err)
+		}
+		return nil, false
+	}
+	existingHash, ok := head.Metadata["sha256"]
+	if !ok || existingHash != hash {
+		return nil, false
+	}
+	versionID := ""
+	if head.VersionId != nil {
+		versionID = *head.VersionId
+	}
+	size := int64(0)
+	if head.ContentLength != nil {
+		size = *head.ContentLength
+	}
+	mtime := time.Now()
+	if head.LastModified != nil {
+		mtime = *head.LastModified
+	}
+	return &api.FileEntry{
+		Key:        key,
+		VersionID:  versionID,
+		Size:       size,
+		SHA256:     hash,
+		ModifiedAt: mtime,
+	}, true
 }
