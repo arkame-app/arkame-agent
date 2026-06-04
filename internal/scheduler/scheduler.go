@@ -16,7 +16,10 @@ import (
 //  3. now cai dentro de alguma janela de tempo (ou sem janelas = sempre permitido)
 func ShouldRun(plan api.Plan, now time.Time) bool {
 	if plan.Schedule.Type == "manual" {
-		return false // manual só executa via trigger explícito
+		// Manual só executa via trigger explícito do painel: next_run_at setado
+		// (botão "Executar agora") e já vencido. O painel limpa next_run_at ao
+		// iniciar a sessão, tornando o disparo one-shot.
+		return plan.NextRunAt != nil && !now.Before(*plan.NextRunAt)
 	}
 	if plan.NextRunAt != nil && now.Before(*plan.NextRunAt) {
 		return false
