@@ -182,6 +182,10 @@ type ListRestoreItemsResponse struct {
 type RestoreItemUpdate struct {
 	Status       string `json:"status"` // running | complete | failed
 	ErrorMessage string `json:"error_message,omitempty"`
+	// Warming: cold storage (Glacier/Archive). Status segue "running" enquanto aquece.
+	WarmingState string `json:"warming_state,omitempty"` // requested | in_progress
+	WarmingTier  string `json:"warming_tier,omitempty"`
+	WarmingETA   string `json:"warming_eta,omitempty"` // RFC3339
 }
 
 // RestoreItemUpdateResponse retorna o estado agregado do job após o update.

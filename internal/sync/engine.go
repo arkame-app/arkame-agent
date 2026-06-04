@@ -13,9 +13,15 @@ import (
 	"time"
 
 	"github.com/arkame-app/agent/internal/api"
+	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
+
+// MultipartThresholdBytes — arquivos >= 100 MB sobem via s3manager.Uploader
+// (multipart paralelo), simétrico ao download no restore. Abaixo disso,
+// PutObject simples basta.
+const MultipartThresholdBytes = 100 * 1024 * 1024
 
 // EngineOptions configura uma execução de sync.
 type EngineOptions struct {
@@ -119,20 +125,40 @@ func processFile(ctx context.Context, o EngineOptions, fi FileInfo) (*api.FileEn
 		return nil, false, err
 	}
 	body := NewThrottledReader(f, o.MaxMbps)
+	meta := map[string]string{"sha256": hash}
 
-	putOut, err := o.S3.PutObject(ctx, &s3.PutObjectInput{
-		Bucket:   &o.Bucket,
-		Key:      &key,
-		Body:     body,
-		Metadata: map[string]string{"sha256": hash},
-	})
-	if err != nil {
-		return nil, false, fmt.Errorf("put %s: %w", key, err)
-	}
-
-	versionID := ""
-	if putOut.VersionId != nil {
-		versionID = *putOut.VersionId
+	var versionID string
+	if fi.Size >= MultipartThresholdBytes {
+		// Multipart paralelo para arquivos grandes (simétrico ao download).
+		up := manager.NewUploader(o.S3, func(u *manager.Uploader) {
+			u.Concurrency = 4
+			u.PartSize = 16 * 1024 * 1024 // 16 MiB
+		})
+		upOut, err := up.Upload(ctx, &s3.PutObjectInput{
+			Bucket:   &o.Bucket,
+			Key:      &key,
+			Body:     body,
+			Metadata: meta,
+		})
+		if err != nil {
+			return nil, false, fmt.Errorf("multipart put %s: %w", key, err)
+		}
+		if upOut.VersionID != nil {
+			versionID = *upOut.VersionID
+		}
+	} else {
+		putOut, err := o.S3.PutObject(ctx, &s3.PutObjectInput{
+			Bucket:   &o.Bucket,
+			Key:      &key,
+			Body:     body,
+			Metadata: meta,
+		})
+		if err != nil {
+			return nil, false, fmt.Errorf("put %s: %w", key, err)
+		}
+		if putOut.VersionId != nil {
+			versionID = *putOut.VersionId
+		}
 	}
 
 	return &api.FileEntry{

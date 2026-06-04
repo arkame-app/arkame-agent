@@ -327,12 +327,15 @@ func restoreLoop(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 					"class", warmReq.StorageClass, "tier", warmReq.Tier)
 				update.Status = "running"
 				update.ErrorMessage = "warming-requested"
+				update.WarmingState = "requested"
+				update.WarmingTier = warmReq.Tier
 			case errors.As(err, &warmInProg):
 				slog.Info("warming in progress, aguardando",
 					"item_id", item.ItemID, "key", item.SourceKey,
 					"class", warmInProg.StorageClass)
 				update.Status = "running"
 				update.ErrorMessage = "warming-in-progress"
+				update.WarmingState = "in_progress"
 			default:
 				update.Status = "failed"
 				update.ErrorMessage = err.Error()
