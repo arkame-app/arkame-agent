@@ -204,17 +204,28 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 		ExcludeGlobs: plan.ExcludeGlobs,
 		MaxMbps:      plan.Throttle.MaxMbps,
 	})
-	if syncErr != nil && (result == nil || result.Stats.FilesUploaded == 0) {
-		// Falha total — marca session como failed
+	// Falha total: ou o walker abortou sem nada enviado, ou TODOS os arquivos
+	// falharam no upload (nenhum enviado, nenhum dedup) — não pode virar "complete".
+	totalFailure := (result == nil) ||
+		(syncErr != nil && result.Stats.FilesUploaded == 0) ||
+		(result.FilesFailed > 0 && len(result.VersionMap) == 0)
+	if totalFailure {
+		msg := "todos os arquivos falharam no upload"
+		if syncErr != nil {
+			msg = syncErr.Error()
+		}
 		failBody := struct {
 			ErrorCode    string `json:"error_code"`
 			ErrorMessage string `json:"error_message"`
 		}{
 			ErrorCode:    "sync_failed",
-			ErrorMessage: syncErr.Error(),
+			ErrorMessage: msg,
 		}
 		_ = c.POST(ctx, "/api/agents/"+cfg.AgentID+"/sessions/"+startResp.SessionID+"/fail", failBody, nil)
-		return syncErr
+		if syncErr != nil {
+			return syncErr
+		}
+		return fmt.Errorf("backup falhou: %s", msg)
 	}
 
 	// Mapeia FileEntry pro JSON que o painel espera
@@ -242,8 +253,10 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 		})
 	}
 
+	// Parcial se o walker reportou erro OU se algum arquivo falhou no upload
+	// (mas pelo menos um foi enviado/dedup, senão teria caído em totalFailure).
 	completeStatus := "complete"
-	if syncErr != nil {
+	if syncErr != nil || result.FilesFailed > 0 {
 		completeStatus = "partial"
 	}
 	completeBody := struct {

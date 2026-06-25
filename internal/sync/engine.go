@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -13,7 +14,6 @@ import (
 	"time"
 
 	"github.com/arkame-app/agent/internal/api"
-	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
@@ -36,8 +36,9 @@ type EngineOptions struct {
 
 // Result é o retorno do Run — montado no formato que o painel espera em SessionComplete.
 type Result struct {
-	Stats      api.SessionStats
-	VersionMap []api.FileEntry
+	Stats       api.SessionStats
+	VersionMap  []api.FileEntry
+	FilesFailed int // arquivos que falharam no upload (pulados); usado p/ decidir partial/failed
 }
 
 // Run executa o sync de um plano.
@@ -68,6 +69,7 @@ func Run(ctx context.Context, o EngineOptions) (*Result, error) {
 			slog.Warn("arquivo falhou, pulando",
 				"path", fi.RelativePath,
 				"err", err)
+			result.FilesFailed++
 			continue
 		}
 		result.Stats.FilesTotal++
@@ -124,34 +126,25 @@ func processFile(ctx context.Context, o EngineOptions, fi FileInfo) (*api.FileEn
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		return nil, false, err
 	}
-	body := NewThrottledReader(f, o.MaxMbps)
 	meta := map[string]string{"sha256": hash}
 
 	var versionID string
 	if fi.Size >= MultipartThresholdBytes {
-		// Multipart paralelo para arquivos grandes (simétrico ao download).
-		up := manager.NewUploader(o.S3, func(u *manager.Uploader) {
-			u.Concurrency = 4
-			u.PartSize = 16 * 1024 * 1024 // 16 MiB
-		})
-		upOut, err := up.Upload(ctx, &s3.PutObjectInput{
-			Bucket:   &o.Bucket,
-			Key:      &key,
-			Body:     body,
-			Metadata: meta,
-		})
+		// Multipart manual: ContentLength explícito + corpo seekable por parte,
+		// sem ChecksumAlgorithm — evita o Content-Encoding aws-chunked que o
+		// s3/manager emite e que provedores S3-compat (OCI) não suportam (501).
+		versionID, err = uploadMultipart(ctx, o.S3, o.Bucket, key, f, meta, o.MaxMbps)
 		if err != nil {
 			return nil, false, fmt.Errorf("multipart put %s: %w", key, err)
 		}
-		if upOut.VersionID != nil {
-			versionID = *upOut.VersionID
-		}
 	} else {
+		size := fi.Size
 		putOut, err := o.S3.PutObject(ctx, &s3.PutObjectInput{
-			Bucket:   &o.Bucket,
-			Key:      &key,
-			Body:     body,
-			Metadata: meta,
+			Bucket:        &o.Bucket,
+			Key:           &key,
+			Body:          NewThrottledReader(f, o.MaxMbps),
+			Metadata:      meta,
+			ContentLength: &size, // S3-compat (OCI) exige Content-Length; sem isso o SDK manda chunked → 411
 		})
 		if err != nil {
 			return nil, false, fmt.Errorf("put %s: %w", key, err)
@@ -168,6 +161,82 @@ func processFile(ctx context.Context, o EngineOptions, fi FileInfo) (*api.FileEn
 		SHA256:     hash,
 		ModifiedAt: time.Unix(0, fi.ModTime),
 	}, false, nil
+}
+
+// uploadMultipart sobe um arquivo grande em partes (sequenciais) via multipart
+// manual. Cada UploadPart usa um corpo seekable (bytes.Reader, opcionalmente
+// throttled) + ContentLength explícito e SEM ChecksumAlgorithm, evitando o
+// Content-Encoding aws-chunked que o s3/manager emite — não suportado por
+// provedores S3-compat como a OCI (501 NotImplemented). Em qualquer falha,
+// aborta o multipart pra não deixar partes órfãs no bucket.
+func uploadMultipart(ctx context.Context, s3c *s3.Client, bucket, key string, f *os.File, meta map[string]string, maxMbps int) (string, error) {
+	const partSize = 16 * 1024 * 1024 // 16 MiB
+
+	create, err := s3c.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
+		Bucket:   &bucket,
+		Key:      &key,
+		Metadata: meta,
+	})
+	if err != nil {
+		return "", fmt.Errorf("create multipart: %w", err)
+	}
+	uploadID := create.UploadId
+
+	abort := func() {
+		_, _ = s3c.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
+			Bucket: &bucket, Key: &key, UploadId: uploadID,
+		})
+	}
+
+	var parts []s3types.CompletedPart
+	buf := make([]byte, partSize)
+	for partNum := int32(1); ; partNum++ {
+		n, rerr := io.ReadFull(f, buf)
+		if n > 0 {
+			pn := partNum
+			cl := int64(n)
+			out, uerr := s3c.UploadPart(ctx, &s3.UploadPartInput{
+				Bucket:        &bucket,
+				Key:           &key,
+				UploadId:      uploadID,
+				PartNumber:    &pn,
+				ContentLength: &cl,
+				Body:          NewThrottledReader(bytes.NewReader(buf[:n]), maxMbps),
+			})
+			if uerr != nil {
+				abort()
+				return "", fmt.Errorf("upload parte %d: %w", partNum, uerr)
+			}
+			parts = append(parts, s3types.CompletedPart{ETag: out.ETag, PartNumber: &pn})
+		}
+		if rerr == io.EOF || rerr == io.ErrUnexpectedEOF {
+			break
+		}
+		if rerr != nil {
+			abort()
+			return "", fmt.Errorf("lendo parte %d: %w", partNum, rerr)
+		}
+	}
+
+	if len(parts) == 0 {
+		abort()
+		return "", fmt.Errorf("nenhuma parte para enviar")
+	}
+
+	comp, err := s3c.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
+		Bucket:          &bucket,
+		Key:             &key,
+		UploadId:        uploadID,
+		MultipartUpload: &s3types.CompletedMultipartUpload{Parts: parts},
+	})
+	if err != nil {
+		abort()
+		return "", fmt.Errorf("complete multipart: %w", err)
+	}
+	if comp.VersionId != nil {
+		return *comp.VersionId, nil
+	}
+	return "", nil
 }
 
 // checkDedup retorna (entry, true) se o objeto já existe no bucket com o

@@ -3,6 +3,7 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"io"
 
 	"golang.org/x/time/rate"
@@ -36,4 +37,14 @@ func (tr *ThrottledReader) Read(p []byte) (int, error) {
 		_ = tr.limiter.WaitN(context.Background(), n)
 	}
 	return n, err
+}
+
+// Seek delega ao reader subjacente quando ele é seekável (ex.: *os.File).
+// Expor io.ReadSeeker permite ao AWS SDK descobrir o tamanho do corpo,
+// enviar Content-Length (S3-compat como OCI exige) e reusar o corpo em retries.
+func (tr *ThrottledReader) Seek(offset int64, whence int) (int64, error) {
+	if s, ok := tr.r.(io.Seeker); ok {
+		return s.Seek(offset, whence)
+	}
+	return 0, errors.New("reader subjacente não suporta seek")
 }
