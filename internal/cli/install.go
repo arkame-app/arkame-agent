@@ -56,8 +56,9 @@ agent_id existente, preservando histórico e path no bucket.`,
 			}
 
 			result, err := enrollment.Run(ctx, cfg, enrollment.Options{
-				Hostname: hostName,
-				OS:       runtime.GOOS + "-" + runtime.GOARCH,
+				Hostname:      hostName,
+				OS:            runtime.GOOS + "-" + runtime.GOARCH,
+				InstallMethod: "binary",
 			})
 			if err != nil {
 				return fmt.Errorf("enrollment: %w", err)

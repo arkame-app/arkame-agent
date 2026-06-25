@@ -29,6 +29,7 @@ type Config struct {
 	// Auth — bearer JWT recebido do painel após approval
 	TokenPath      string // /etc/arkame/token.jwt — JWT bearer (0600)
 	PrivateKeyPath string // /etc/arkame/key.pem  — Ed25519 private key (0600), preservada p/ futura rotação
+	AgentIDPath    string // /etc/arkame/agent.id — agent_id persistido após enrollment (configurável p/ rootless)
 
 	// Filesystem
 	HostRoot string // raiz da máquina; em container Docker vira /host (read-only)
@@ -97,6 +98,7 @@ func Load(envFile string, o Overrides) (*Config, error) {
 		Fingerprint:          get("AGENT_FINGERPRINT"),
 		TokenPath:            firstNonEmpty(get("TOKEN_PATH"), "/etc/arkame/token.jwt"),
 		PrivateKeyPath:       firstNonEmpty(get("PRIVATE_KEY_PATH"), "/etc/arkame/key.pem"),
+		AgentIDPath:          firstNonEmpty(get("AGENT_ID_PATH"), "/etc/arkame/agent.id"),
 		HostRoot:             firstNonEmpty(o.HostRoot, get("HOST_ROOT"), "/"),
 		StorageAccessKey:     get("STORAGE_ACCESS_KEY"),
 		StorageSecretKey:     get("STORAGE_SECRET_KEY"),
@@ -108,13 +110,18 @@ func Load(envFile string, o Overrides) (*Config, error) {
 		PollIntervalSec:      60,
 	}
 
-	// Token só é preenchido depois que o enrollment for aprovado.
-	// Se o arquivo não existe, zeramos para sinalizar "ainda não aprovado".
-	if _, err := os.Stat(cfg.TokenPath); os.IsNotExist(err) {
-		cfg.TokenPath = ""
-	}
-
 	return cfg, nil
+}
+
+// TokenExists informa se o JWT bearer já foi persistido (enrollment aprovado).
+// Substitui o antigo "zerar TokenPath" — assim o caminho configurado (env-file)
+// é preservado para o PersistToken escrever no lugar certo em instalações rootless.
+func (c *Config) TokenExists() bool {
+	if c.TokenPath == "" {
+		return false
+	}
+	_, err := os.Stat(c.TokenPath)
+	return err == nil
 }
 
 // LoadToken lê o JWT bearer do disco (TokenPath). Retorna "" se não existe ou vazio.

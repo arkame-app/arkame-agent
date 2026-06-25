@@ -26,7 +26,7 @@ func newStatusCmd() *cobra.Command {
 			fmt.Println("Storage:      ", cfg.StorageID)
 			if cfg.EnrollmentToken != "" {
 				fmt.Println("Enrollment:   PENDENTE — aguardando aprovação no painel")
-			} else if cfg.TokenPath != "" {
+			} else if cfg.TokenExists() {
 				fmt.Println("Enrollment:   APROVADO (bearer token presente)")
 			} else {
 				fmt.Println("Enrollment:   NÃO INICIADO — rode 'arkame-agent install'")

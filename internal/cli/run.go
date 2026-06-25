@@ -35,7 +35,7 @@ func newRunCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("carregando config: %w", err)
 			}
-			if cfg.TokenPath == "" {
+			if !cfg.TokenExists() {
 				return fmt.Errorf("agent ainda não foi aprovado — rode 'arkame-agent install' primeiro")
 			}
 

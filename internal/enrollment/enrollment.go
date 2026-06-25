@@ -170,12 +170,21 @@ func WaitForApproval(ctx context.Context, cfg *config.Config, waitURL string) (*
 }
 
 func persistAgentID(cfg *config.Config, id string) error {
-	_ = cfg
-	return os.WriteFile("/etc/arkame/agent.id", []byte(id), 0o644)
+	path := cfg.AgentIDPath
+	if path == "" {
+		path = "/etc/arkame/agent.id"
+	}
+	if err := os.MkdirAll(parentDir(path), 0o755); err != nil {
+		return fmt.Errorf("criando diretório do agent.id: %w", err)
+	}
+	return os.WriteFile(path, []byte(id), 0o644)
 }
 
 // PersistToken salva o JWT bearer no TokenPath com permissão 0600.
 // O caller decide quando invocar (geralmente após WaitForApproval bem-sucedido).
+//
+// O TokenPath vem resolvido do config (env-file/env ou default), preservado
+// mesmo quando o arquivo ainda não existe — honrando instalações rootless.
 func PersistToken(cfg *config.Config, token string) error {
 	if cfg.TokenPath == "" {
 		cfg.TokenPath = "/etc/arkame/token.jwt"
