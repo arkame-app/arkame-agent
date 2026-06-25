@@ -2,7 +2,7 @@
 
 Agent Go do SaaS [Arkame](https://arkame.app) — roda no servidor do cliente, lê arquivos e envia para o bucket BYOS, reportando status ao painel.
 
-**Status:** scaffold estrutural. Compila e tem todas as peças arquiteturais posicionadas, mas o sync engine e as integrações com o painel ainda precisam de implementação real (ver seção "O que falta").
+**Status:** funcional. Enrollment (Ed25519 + bearer JWT), daemon com 4 loops (heartbeat, probe, plans/backup, restore), sync engine (walker + hash + dedup HeadObject + multipart upload), restore com escrita atômica + verify, e warming de cold storage estão implementados. Build limpo (`go vet ./...`). Resta hardening (mTLS, self-update, snapshots, observabilidade) — ver "O que falta".
 
 ## Arquitetura
 
@@ -22,6 +22,8 @@ Agent Go do SaaS [Arkame](https://arkame.app) — roda no servidor do cliente, l
 ```
 
 **Princípio:** dados NUNCA passam pelo painel Arkame. O agent fala direto com o bucket do cliente (credenciais via env-file local) e reporta apenas metadata (filenames, paths, sizes, hashes, version_ids) ao painel para indexação.
+
+> **Auth atual:** o agent autentica no painel via **bearer JWT** (obtido no enrollment Ed25519), não mTLS. O diagrama acima reflete o alvo de longo prazo — mTLS é hardening de fase 2 e não quebra o contrato atual.
 
 ## Estrutura do código
 
@@ -132,18 +134,18 @@ Lidas do env-file ou das env vars do processo (CLI tem precedência).
 
 ## O que falta (TODOs)
 
-Scaffold atual cobre a arquitetura e os pontos de extensão. Falta implementar:
+Núcleo funcional entregue. Itens concluídos e pendências de hardening:
 
-- [ ] `enrollment.WaitForApproval` — long-poll real que baixa cert + CA
-- [ ] `daemon.executePlan` — orquestrar SessionStart → sync → SessionComplete
-- [ ] `sync.engine` — dedup via HeadObject + multipart para arquivos grandes (>100 MB)
-- [ ] `daemon.probeLoop` — cabear com `storage.Probe` (atualmente stub)
-- [ ] `service.launchd` — implementação macOS (plist + launchctl)
-- [ ] `service.windows` — implementação Windows Service (`x/sys/windows/svc`)
+- [x] `enrollment.WaitForApproval` — long-poll real (bearer JWT via `wait-token`)
+- [x] `daemon.executePlan` — SessionStart → sync → SessionComplete (com `version_map`)
+- [x] `sync.engine` — dedup via HeadObject + multipart upload para arquivos grandes
+- [x] `daemon.probeLoop` — cabeado com `storage.Probe` (versioning/object-lock/lifecycle)
+- [x] `service.launchd` / `service.systemd` / `service.windows`
+- [x] Restore (Plan kind=restore — executor com escrita atômica + SHA-256 verify + warming)
 - [ ] Self-update (agente baixa nova versão quando painel sinaliza)
-- [ ] Restore (é um Plan de kind=restore — walker inverso: baixa do bucket, escreve local)
-- [ ] Snapshot orquestrado (LVM / VSS / btrfs) opcional por plano — DECIDIDO fora do escopo (PLAN.md), pode voltar como plugin
-- [ ] Testes: unit (scheduler já é testável sem mocks), integration com MinIO local
+- [ ] mTLS hardening (fase 2) — substituir bearer JWT mantendo o contrato atual
+- [ ] Snapshot orquestrado (LVM / VSS / btrfs) — fora do escopo atual (PLAN.md), pode voltar como plugin
+- [ ] Testes: integration com MinIO local (scheduler já tem unit)
 - [ ] Observabilidade: métricas Prometheus + traces OTEL (endpoint opcional)
 - [ ] `.goreleaser.yaml` para GitHub Releases automatizado
 

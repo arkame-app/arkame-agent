@@ -1,8 +1,17 @@
 # Arkame Agent — Status
 
-**Status:** Sprints 5 (enrollment + bearer auth), 6 (sync engine + probe reporter), Tier 1 C (restore execution) e Tier 1 follow-ups (warming + dedup + multipart download) **concluídos**. Build limpo (`go vet ./...`).
+**Status:** Sprints 5 (enrollment + bearer auth), 6 (sync engine + probe reporter), Tier 1 C (restore execution) e Tier 1 follow-ups (warming + dedup + multipart download) **concluídos**. Build limpo (`go vet ./...`). **Validado E2E contra storage real (2026-06-24)** — ver abaixo.
 
 > Trabalho ativo principal está no painel (`~/hugo-projects/arkame/`). Para o status global do produto, ver `~/hugo-projects/arkame/STATUS.md`.
+
+## ✅ Validação end-to-end real (2026-06-24)
+
+Binário Linux rodando local contra o painel em produção (`save.arkame.app`) + buckets reais: enroll → aprovação → backup → bucket → restore, em **OCI** (S3-compat) e **AWS S3**. 4 arquivos (incl. 120 MB p/ multipart), todos os SHA256 conferidos no bucket e no restore. **7 bugs corrigidos** (só apareciam contra storage de verdade):
+- `cli/install.go` — enroll não enviava `install_method` → painel `400 missing required fields`.
+- `config/config.go` + `enrollment.go` — `agent.id`/`token.jwt` gravavam em `/etc/arkame` hardcoded; agora honram `AGENT_ID_PATH`/`TOKEN_PATH` (config não zera mais `TokenPath`; novo método `TokenExists()`). Destrava modo rootless/Docker.
+- `storage/s3.go` — checksums de integridade do SDK (CRC32 aws-chunked) quebram S3-compat; `RequestChecksumCalculation=WhenRequired` (config + Options) quando há endpoint custom.
+- `sync/engine.go` + `sync/throttle.go` — PutObject sem `Content-Length` → 411 (fix: ContentLength + `ThrottledReader` agora é `io.ReadSeeker`); multipart via `s3/manager` emitia aws-chunked → 501 na OCI (fix: **multipart manual** com parte seekable + ContentLength, sem ChecksumAlgorithm).
+- `daemon/daemon.go` + `sync/engine.go` — **bug grave de correção**: backup onde TODOS os arquivos falhavam era reportado como `complete`/0 arquivos; agora rastreia `FilesFailed` → `failed`/`partial`.
 
 ## O que está pronto
 
@@ -14,7 +23,7 @@
   - Loop probe 1h: `storage.Probe` → POST `/probe` (versioning, object_lock, lifecycle)
   - Loop plans 60s: GET `/plans` → `scheduler.ShouldRun` → `executePlan` (backup)
   - Loop restore 60s: GET `/restore-items` → PATCH running → `restore.Run` → PATCH complete/failed (Tier 1 C)
-- **`executePlan` (backup)**: POST `/sessions/start` → `sync.Run` (walker + hash + dedup HeadObject + S3 PutObject + version_map) → POST `/sessions/{sid}/complete` com version_map inline; em falha total POST `/sessions/{sid}/fail`
+- **`executePlan` (backup)**: POST `/sessions/start` → `sync.Run` (walker + hash + dedup HeadObject + PutObject/multipart + version_map) → POST `/sessions/{sid}/complete` com version_map inline; em falha total POST `/sessions/{sid}/fail`
 - **Dedup file-level**: antes de PutObject, faz HeadObject e compara `sha256` no metadata. Hit retorna FileEntry com VersionId existente sem subir bytes; stats `FilesUploaded` não conta dedup hits
 - **`restore.Run` (restore)**: `internal/restore/executor.go` — escrita atômica (tmp + rename) com SHA-256 verify → conflict resolution `suffix-version`/`overwrite`/`skip`; respeita `HOST_ROOT`
 - **Multipart download**: arquivos >= 100 MB usam `s3manager.Downloader` (4 workers, parts 16 MiB); hash é calculado relendo o tmp file
@@ -29,7 +38,6 @@ Repo privado em [`arkame-app/arkame-agent`](https://github.com/arkame-app/arkame
 
 - **Self-update** do binário em produção (fase posterior)
 - **mTLS hardening** (fase 2) — substituir bearer JWT por mTLS com CA do painel, sem quebrar o contrato atual
-- **Multipart upload** pra arquivos grandes no backup (sync engine usa `PutObject` simples)
 - **VSS no Windows** pra snapshots consistentes (Linux LVM também no roadmap)
 - **Persistir warming_state em restore_items**: PATCH atual só atualiza `status`. Adicionar endpoint dedicado pra warming_state/warming_tier/warming_requested_at quando relevante.
 
