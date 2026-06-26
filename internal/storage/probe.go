@@ -73,7 +73,34 @@ func Probe(ctx context.Context, client *s3.Client, bucket, storageID string) api
 		}
 	}
 
+	// Ocupação real: soma o tamanho de todos os objetos (ListObjectsV2 paginado).
+	// Não fatal se falhar — o resto do probe ainda é útil.
+	if used, count, err := measureUsage(ctx, client, bucket); err == nil {
+		report.UsedBytes = used
+		report.ObjectCount = count
+	}
+
 	return report
+}
+
+// measureUsage pagina ListObjectsV2 somando Size de cada objeto (versão corrente).
+// Para buckets muito grandes isto pode ser caro; o probe roda só 1×/h ou on-demand.
+func measureUsage(ctx context.Context, client *s3.Client, bucket string) (int64, int64, error) {
+	var totalBytes, count int64
+	p := s3.NewListObjectsV2Paginator(client, &s3.ListObjectsV2Input{Bucket: &bucket})
+	for p.HasMorePages() {
+		page, err := p.NextPage(ctx)
+		if err != nil {
+			return totalBytes, count, err
+		}
+		for _, obj := range page.Contents {
+			if obj.Size != nil {
+				totalBytes += *obj.Size
+			}
+			count++
+		}
+	}
+	return totalBytes, count, nil
 }
 
 // IsBenignProbeError identifica erros S3 que indicam "config ausente" em vez de erro real.

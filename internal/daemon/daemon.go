@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -90,11 +91,14 @@ func heartbeatLoop(ctx context.Context, c *api.Client, cfg *config.Config) {
 	}
 }
 
-// probeLoop chama Probe periodicamente e reporta ao painel.
-// Probe 1× por hora é suficiente — bucket config raramente muda.
+// probeLoop chama Probe periodicamente (1×/h) e também atende solicitações
+// on-demand ("Testar conexão" no painel) via poll a cada 30s do endpoint
+// /probe-request — assim o usuário não espera até 1h pra ver o resultado.
 func probeLoop(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config.Config) {
-	ticker := time.NewTicker(1 * time.Hour)
-	defer ticker.Stop()
+	periodic := time.NewTicker(1 * time.Hour)
+	defer periodic.Stop()
+	onDemand := time.NewTicker(30 * time.Second)
+	defer onDemand.Stop()
 
 	run := func() {
 		if cfg.StorageBucket == "" || cfg.StorageID == "" {
@@ -102,23 +106,51 @@ func probeLoop(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config.C
 		}
 		report := storage.Probe(ctx, s3c, cfg.StorageBucket, cfg.StorageID)
 		body := struct {
-			StorageID  string         `json:"storage_id"`
-			Versioning string         `json:"versioning"`
-			ObjectLock *api.ObjectLock `json:"object_lock,omitempty"`
-			Lifecycle  []api.Lifecycle `json:"lifecycle,omitempty"`
-			Error      string         `json:"error,omitempty"`
+			StorageID   string          `json:"storage_id"`
+			Versioning  string          `json:"versioning"`
+			ObjectLock  *api.ObjectLock `json:"object_lock,omitempty"`
+			Lifecycle   []api.Lifecycle `json:"lifecycle,omitempty"`
+			UsedBytes   int64           `json:"used_bytes"`
+			ObjectCount int64           `json:"object_count"`
+			Error       string          `json:"error,omitempty"`
 		}{
-			StorageID:  report.StorageID,
-			Versioning: report.Versioning,
-			ObjectLock: report.ObjectLock,
-			Lifecycle:  report.Lifecycle,
-			Error:      report.Error,
+			StorageID:   report.StorageID,
+			Versioning:  report.Versioning,
+			ObjectLock:  report.ObjectLock,
+			Lifecycle:   report.Lifecycle,
+			UsedBytes:   report.UsedBytes,
+			ObjectCount: report.ObjectCount,
+			Error:       report.Error,
 		}
 		if err := c.POST(ctx, "/api/agents/"+cfg.AgentID+"/probe", body, nil); err != nil {
 			slog.Warn("probe POST falhou", "err", err)
 			return
 		}
-		slog.Info("probe reportado", "versioning", report.Versioning, "lifecycle_rules", len(report.Lifecycle))
+		slog.Info("probe reportado",
+			"versioning", report.Versioning,
+			"lifecycle_rules", len(report.Lifecycle),
+			"used_bytes", report.UsedBytes,
+			"objects", report.ObjectCount)
+	}
+
+	// Verifica se há probe on-demand pendente para o storage deste agent.
+	checkOnDemand := func() bool {
+		if cfg.StorageID == "" {
+			return false
+		}
+		var resp struct {
+			StorageIDs []string `json:"storage_ids"`
+		}
+		if err := c.GET(ctx, "/api/agents/"+cfg.AgentID+"/probe-request", &resp); err != nil {
+			slog.Debug("poll probe-request falhou", "err", err)
+			return false
+		}
+		for _, id := range resp.StorageIDs {
+			if id == cfg.StorageID {
+				return true
+			}
+		}
+		return false
 	}
 
 	run()
@@ -126,8 +158,13 @@ func probeLoop(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config.C
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-periodic.C:
 			run()
+		case <-onDemand.C:
+			if checkOnDemand() {
+				slog.Info("probe on-demand solicitado pelo painel")
+				run()
+			}
 		}
 	}
 }
@@ -352,6 +389,10 @@ func restoreLoop(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 			default:
 				update.Status = "failed"
 				update.ErrorMessage = err.Error()
+				// Objeto sumiu do bucket → sinaliza ao painel pra reconciliar o índice.
+				if isObjectGone(err) {
+					update.ErrorCode = "not_found"
+				}
 				slog.Error("restore item falhou",
 					"item_id", item.ItemID, "key", item.SourceKey, "err", err)
 			}
@@ -382,4 +423,23 @@ func restoreLoop(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 			run()
 		}
 	}
+}
+
+// isObjectGone identifica erros S3 de objeto/versão inexistente — sinal pro
+// painel reconciliar o índice (marcar a versão como indisponível).
+func isObjectGone(err error) bool {
+	if err == nil {
+		return false
+	}
+	var ae interface{ ErrorCode() string }
+	if errors.As(err, &ae) {
+		switch ae.ErrorCode() {
+		case "NoSuchKey", "NoSuchVersion", "NotFound":
+			return true
+		}
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "NoSuchKey") ||
+		strings.Contains(msg, "NoSuchVersion") ||
+		strings.Contains(msg, "status code: 404")
 }

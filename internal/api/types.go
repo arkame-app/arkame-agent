@@ -138,6 +138,8 @@ type ProbeReport struct {
 	Versioning   string     `json:"versioning"` // "Enabled" | "Suspended" | "Off"
 	ObjectLock   *ObjectLock `json:"object_lock,omitempty"`
 	Lifecycle    []Lifecycle `json:"lifecycle,omitempty"`
+	UsedBytes    int64      `json:"used_bytes"`    // somatório dos objetos do bucket (ocupação real)
+	ObjectCount  int64      `json:"object_count"`  // nº de objetos somados
 	ProbedAt     time.Time  `json:"probed_at"`
 	Error        string     `json:"error,omitempty"`
 }
@@ -182,6 +184,9 @@ type ListRestoreItemsResponse struct {
 type RestoreItemUpdate struct {
 	Status       string `json:"status"` // running | complete | failed
 	ErrorMessage string `json:"error_message,omitempty"`
+	// ErrorCode estruturado; "not_found" sinaliza ao painel que o objeto sumiu do
+	// bucket — o índice é reconciliado (versão marcada como indisponível).
+	ErrorCode    string `json:"error_code,omitempty"`
 	// Warming: cold storage (Glacier/Archive). Status segue "running" enquanto aquece.
 	WarmingState string `json:"warming_state,omitempty"` // requested | in_progress
 	WarmingTier  string `json:"warming_tier,omitempty"`

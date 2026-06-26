@@ -4,6 +4,13 @@
 
 > Trabalho ativo principal está no painel (`~/hugo-projects/arkame/`). Para o status global do produto, ver `~/hugo-projects/arkame/STATUS.md`.
 
+## 🔧 Probe estendido + on-demand + reconcile (2026-06-25)
+
+Acompanha as 13 melhorias de UX do painel. **Compila + `go vet` limpos** (Docker `golang:1.24-alpine`); validação E2E contra storage real pendente (próxima janela com o agente ativo).
+- **Tamanho usado** (`storage/probe.go`): `measureUsage` pagina `ListObjectsV2` somando `Size` → `used_bytes`/`object_count` no `ProbeReport` (`api/types.go`). Não-fatal se falhar.
+- **Probe on-demand** (`daemon/daemon.go`): `probeLoop` ganhou um segundo ticker (30s) que faz `GET /api/agents/{id}/probe-request`; se o `STORAGE_ID` do agente está na lista de probes solicitados pela UI ("Testar conexão"), roda o probe na hora. O POST `/probe` agora inclui `used_bytes`/`object_count`.
+- **Reconcile reativo** (`daemon/daemon.go`): no restore, `isObjectGone(err)` detecta `NoSuchKey`/`NoSuchVersion`/404 e seta `error_code=not_found` no PATCH do restore-item — o painel marca a versão `unavailable_since` no índice (`session_files`).
+
 ## ✅ Validação end-to-end real (2026-06-24)
 
 Binário Linux rodando local contra o painel em produção (`save.arkame.app`) + buckets reais: enroll → aprovação → backup → bucket → restore, em **OCI** (S3-compat) e **AWS S3**. 4 arquivos (incl. 120 MB p/ multipart), todos os SHA256 conferidos no bucket e no restore. **7 bugs corrigidos** (só apareciam contra storage de verdade):
