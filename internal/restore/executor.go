@@ -77,16 +77,19 @@ func Run(ctx context.Context, opts Options, item api.RestoreItem) error {
 	if !strings.HasPrefix(item.DestPath, "/") {
 		return fmt.Errorf("dest_path deve ser absoluto: %q", item.DestPath)
 	}
-	if strings.ContainsAny(item.DestFilename, "/\\") || item.DestFilename == "" {
-		return fmt.Errorf("dest_filename inválido: %q", item.DestFilename)
+	// dest_filename pode conter subdiretórios relativos (restore de pasta/snapshot
+	// preserva a estrutura), mas nunca path absoluto, "..", ou backslash.
+	subDir, baseName, err := splitDestFilename(item.DestFilename)
+	if err != nil {
+		return err
 	}
 
-	rootedDir := filepath.Join(opts.HostRoot, item.DestPath)
+	rootedDir := filepath.Join(opts.HostRoot, item.DestPath, filepath.FromSlash(subDir))
 	if err := os.MkdirAll(rootedDir, 0o755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", rootedDir, err)
 	}
 
-	finalName, err := resolveConflict(rootedDir, item.DestFilename, item.SourceVersionID, item.ConflictStrategy)
+	finalName, err := resolveConflict(rootedDir, baseName, item.SourceVersionID, item.ConflictStrategy)
 	if err != nil {
 		return err
 	}
@@ -278,6 +281,24 @@ func handleColdStorage(
 
 // aws32 retorna ponteiro pra int32 (helper, equivalente ao aws.Int32 do SDK).
 func aws32(n int32) *int32 { return &n }
+
+// splitDestFilename valida e separa o dest_filename em subdiretório relativo
+// (POSIX, pode ser vazio) e nome-base. Rejeita path absoluto, backslash, "..",
+// e segmentos vazios — o destino final fica sempre contido em dest_path.
+func splitDestFilename(destFilename string) (subDir, baseName string, err error) {
+	if destFilename == "" || strings.Contains(destFilename, "\\") || strings.HasPrefix(destFilename, "/") {
+		return "", "", fmt.Errorf("dest_filename inválido: %q", destFilename)
+	}
+	segments := strings.Split(destFilename, "/")
+	for _, seg := range segments {
+		if seg == "" || seg == "." || seg == ".." {
+			return "", "", fmt.Errorf("dest_filename inválido: %q", destFilename)
+		}
+	}
+	baseName = segments[len(segments)-1]
+	subDir = strings.Join(segments[:len(segments)-1], "/")
+	return subDir, baseName, nil
+}
 
 // resolveConflict decide o nome final a usar dado o arquivo de destino.
 // Retorna nome vazio se a estratégia for "skip" e o arquivo já existir.
