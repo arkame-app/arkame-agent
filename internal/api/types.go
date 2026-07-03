@@ -202,3 +202,28 @@ type RestoreItemUpdateResponse struct {
 	ItemsFailed int    `json:"items_failed"`
 	ItemsTotal  int    `json:"items_total"`
 }
+
+// FsRequest é uma requisição de listagem de diretório vinda do painel
+// (explorador de pastas do wizard de plano).
+type FsRequest struct {
+	ID   string `json:"id"`
+	Path string `json:"path"`
+}
+
+// FsRequestsResponse é a resposta de GET /api/agents/<id>/fs-requests (long-poll).
+type FsRequestsResponse struct {
+	Requests []FsRequest `json:"requests"`
+}
+
+// FsEntry é um item de diretório reportado ao painel.
+type FsEntry struct {
+	Name string `json:"name"`
+	Dir  bool   `json:"dir"`
+	Size int64  `json:"size"`
+}
+
+// FsListingReport é o body de POST /api/agents/<id>/fs-requests/<reqId>.
+type FsListingReport struct {
+	Entries []FsEntry `json:"entries,omitempty"`
+	Error   string    `json:"error,omitempty"`
+}

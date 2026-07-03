@@ -18,6 +18,7 @@ import (
 
 	"github.com/arkame-app/agent/internal/api"
 	"github.com/arkame-app/agent/internal/config"
+	"github.com/arkame-app/agent/internal/fsbrowse"
 	"github.com/arkame-app/agent/internal/restore"
 	"github.com/arkame-app/agent/internal/scheduler"
 	"github.com/arkame-app/agent/internal/storage"
@@ -50,11 +51,12 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(4)
+	wg.Add(5)
 	go func() { defer wg.Done(); heartbeatLoop(ctx, client, cfg) }()
 	go func() { defer wg.Done(); probeLoop(ctx, client, s3Client, cfg) }()
 	go func() { defer wg.Done(); planLoop(ctx, client, s3Client, cfg) }()
 	go func() { defer wg.Done(); restoreLoop(ctx, client, s3Client, cfg) }()
+	go func() { defer wg.Done(); fsBrowseLoop(ctx, client, cfg) }()
 
 	<-ctx.Done()
 	slog.Info("ctx cancelado, aguardando loops encerrarem...")
@@ -207,10 +209,10 @@ func planLoop(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config.Co
 }
 
 // executePlan implementa o ciclo backup completo:
-//   1. POST /sessions/start → recebe sessionId
-//   2. syncengine.Run percorre paths, hash + upload S3 streamed
-//   3. POST /sessions/[sid]/complete com version_map inline
-//   4. Em erro de upload: POST /sessions/[sid]/fail
+//  1. POST /sessions/start → recebe sessionId
+//  2. syncengine.Run percorre paths, hash + upload S3 streamed
+//  3. POST /sessions/[sid]/complete com version_map inline
+//  4. Em erro de upload: POST /sessions/[sid]/fail
 func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config.Config, plan api.Plan) error {
 	startReq := struct {
 		PlanID            string   `json:"plan_id"`
@@ -297,9 +299,9 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 		completeStatus = "partial"
 	}
 	completeBody := struct {
-		Status     string             `json:"status"`
-		Stats      api.SessionStats   `json:"stats"`
-		VersionMap []entry            `json:"version_map"`
+		Status     string           `json:"status"`
+		Stats      api.SessionStats `json:"stats"`
+		VersionMap []entry          `json:"version_map"`
 	}{
 		Status:     completeStatus,
 		Stats:      result.Stats,
@@ -325,10 +327,10 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 }
 
 // restoreLoop puxa restore_items pendentes e executa cada um:
-//   1. GET /restore-items → lista pendentes (queued/running)
-//   2. Para cada item: PATCH status=running
-//   3. restore.Run → GetObject + write + sha256 verify
-//   4. PATCH status=complete (ou failed com error_message)
+//  1. GET /restore-items → lista pendentes (queued/running)
+//  2. Para cada item: PATCH status=running
+//  3. restore.Run → GetObject + write + sha256 verify
+//  4. PATCH status=complete (ou failed com error_message)
 //
 // Items running de execuções anteriores são reprocessados (recovery após crash).
 // A idempotência da escrita vem do conflict_strategy=suffix-version.
@@ -442,4 +444,48 @@ func isObjectGone(err error) bool {
 	return strings.Contains(msg, "NoSuchKey") ||
 		strings.Contains(msg, "NoSuchVersion") ||
 		strings.Contains(msg, "status code: 404")
+}
+
+// fsBrowseLoop atende o explorador de pastas do wizard de plano no painel:
+// long-poll em GET /fs-requests (o servidor segura a conexão até ~25s; 204 =
+// nada pendente) e responde cada requisição com a listagem do diretório.
+// Latência percebida pelo usuário: ~1-3s por nível expandido.
+func fsBrowseLoop(ctx context.Context, c *api.Client, cfg *config.Config) {
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		var resp api.FsRequestsResponse
+		err := c.GET(ctx, "/api/agents/"+cfg.AgentID+"/fs-requests", &resp)
+		if errors.Is(err, api.ErrNotReady) {
+			continue // 204: reabre o long-poll
+		}
+		if err != nil {
+			slog.Debug("poll fs-requests falhou", "err", err)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(10 * time.Second): // backoff em erro persistente
+			}
+			continue
+		}
+
+		for _, req := range resp.Requests {
+			report := api.FsListingReport{}
+			entries, lerr := fsbrowse.ListDir(req.Path)
+			if lerr != nil {
+				report.Error = lerr.Error()
+			} else {
+				report.Entries = make([]api.FsEntry, len(entries))
+				for i, e := range entries {
+					report.Entries[i] = api.FsEntry{Name: e.Name, Dir: e.Dir, Size: e.Size}
+				}
+			}
+			if perr := c.POST(ctx, "/api/agents/"+cfg.AgentID+"/fs-requests/"+req.ID, report, nil); perr != nil {
+				slog.Warn("report de fs listing falhou", "req", req.ID, "err", perr)
+			} else {
+				slog.Debug("fs listing reportado", "path", req.Path, "entries", len(report.Entries))
+			}
+		}
+	}
 }
