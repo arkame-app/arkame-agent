@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"runtime"
 	"strings"
+	"slices"
 	"sync"
 	"time"
 
@@ -353,6 +354,25 @@ func restoreLoop(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 		for _, item := range resp.Items {
 			if ctx.Err() != nil {
 				return
+			}
+			// Este processo só tem credenciais para o bucket configurado. Item de
+			// outro bucket falha rápido com erro claro (em vez de um 403 confuso) —
+			// se houver outro processo do agent com as credenciais certas, ele já
+			// terá filtrado o item dele por aqui também.
+			if cfg.StorageBucket != "" && item.Bucket != cfg.StorageBucket {
+				if slices.Contains(cfg.SiblingBuckets, item.Bucket) {
+					continue // outro processo deste agent atende esse bucket
+				}
+				fail := api.RestoreItemUpdate{
+					Status:       "failed",
+					ErrorCode:    "wrong_bucket",
+					ErrorMessage: fmt.Sprintf("agent sem credenciais para o bucket %q (este processo atende %q)", item.Bucket, cfg.StorageBucket),
+				}
+				if err := c.PATCH(ctx, "/api/agents/"+cfg.AgentID+"/restore-items/"+item.ItemID, fail, nil); err != nil {
+					slog.Warn("PATCH wrong_bucket falhou", "item_id", item.ItemID, "err", err)
+				}
+				slog.Warn("restore item de bucket não atendido", "item_id", item.ItemID, "bucket", item.Bucket)
+				continue
 			}
 			// Marca running antes de tentar
 			markRunning := api.RestoreItemUpdate{Status: "running"}

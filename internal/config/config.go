@@ -41,6 +41,11 @@ type Config struct {
 	StorageRegion    string
 	StorageBucket    string // nome do bucket (informativo; path autoritativo vem do painel no plan)
 	StorageID        string // ULID do registro no painel
+	// Buckets atendidos por OUTROS processos deste mesmo agent no host (um
+	// processo por conjunto de credenciais). Itens de restore desses buckets
+	// são pulados em silêncio (o irmão pega); de buckets desconhecidos, falham
+	// rápido com erro claro. CSV em SIBLING_BUCKETS.
+	SiblingBuckets []string
 
 	// Misc
 	HeartbeatIntervalSec int
@@ -106,6 +111,7 @@ func Load(envFile string, o Overrides) (*Config, error) {
 		StorageRegion:        firstNonEmpty(get("STORAGE_REGION"), "us-east-1"),
 		StorageBucket:        get("STORAGE_BUCKET"),
 		StorageID:            get("STORAGE_ID"),
+		SiblingBuckets:       splitCSV(get("SIBLING_BUCKETS")),
 		HeartbeatIntervalSec: 60,
 		PollIntervalSec:      60,
 	}
@@ -146,4 +152,18 @@ func firstNonEmpty(vv ...string) string {
 		}
 	}
 	return ""
+}
+
+// splitCSV divide uma lista separada por vírgulas, ignorando vazios e espaços.
+func splitCSV(v string) []string {
+	if v == "" {
+		return nil
+	}
+	var out []string
+	for _, part := range strings.Split(v, ",") {
+		if p := strings.TrimSpace(part); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
