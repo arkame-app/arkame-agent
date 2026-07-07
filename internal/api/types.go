@@ -22,11 +22,11 @@ type EnrollRequest struct {
 // humana antes de emitir cert. Este response só confirma que o painel recebeu
 // o enrollment e está aguardando.
 type EnrollResponse struct {
-	AgentID        string    `json:"agent_id"`
-	Status         string    `json:"status"` // "pending" | "approved" | "rejected"
-	EnrollmentID   string    `json:"enrollment_id"`
-	WaitURL        string    `json:"wait_url"` // long-poll URL para aguardar approval
-	ExpiresAt      time.Time `json:"expires_at"`
+	AgentID      string    `json:"agent_id"`
+	Status       string    `json:"status"` // "pending" | "approved" | "rejected"
+	EnrollmentID string    `json:"enrollment_id"`
+	WaitURL      string    `json:"wait_url"` // long-poll URL para aguardar approval
+	ExpiresAt    time.Time `json:"expires_at"`
 }
 
 // TokenResponse é retornado quando o agent faz long-poll na WaitURL e a approval chega.
@@ -44,17 +44,17 @@ type TokenResponse struct {
 
 // Plan é a descrição de um plano de backup ou restore enviada ao agent.
 type Plan struct {
-	ID           string      `json:"id"`
-	Kind         string      `json:"kind"` // "backup" | "restore"
-	Status       string      `json:"status"`
-	SourcePaths  []string    `json:"source_paths,omitempty"`
-	ExcludeGlobs []string    `json:"exclude_globs,omitempty"`
-	DestPath     string      `json:"dest_path,omitempty"`
-	StorageRef   StorageRef  `json:"storage"`
-	Schedule     Schedule    `json:"schedule"`
-	Windows      []Window    `json:"windows,omitempty"`
-	Throttle     Throttle    `json:"throttle,omitempty"`
-	NextRunAt    *time.Time  `json:"next_run_at,omitempty"`
+	ID           string     `json:"id"`
+	Kind         string     `json:"kind"` // "backup" | "restore"
+	Status       string     `json:"status"`
+	SourcePaths  []string   `json:"source_paths,omitempty"`
+	ExcludeGlobs []string   `json:"exclude_globs,omitempty"`
+	DestPath     string     `json:"dest_path,omitempty"`
+	StorageRef   StorageRef `json:"storage"`
+	Schedule     Schedule   `json:"schedule"`
+	Windows      []Window   `json:"windows,omitempty"`
+	Throttle     Throttle   `json:"throttle,omitempty"`
+	NextRunAt    *time.Time `json:"next_run_at,omitempty"`
 }
 
 type StorageRef struct {
@@ -71,10 +71,10 @@ type Schedule struct {
 }
 
 type Window struct {
-	Days    []string `json:"days"`    // ["mon","tue","wed","thu","fri"]
-	Start   string   `json:"start"`   // "22:00"
-	End     string   `json:"end"`     // "06:00"
-	AllDay  bool     `json:"all_day,omitempty"`
+	Days   []string `json:"days"`  // ["mon","tue","wed","thu","fri"]
+	Start  string   `json:"start"` // "22:00"
+	End    string   `json:"end"`   // "06:00"
+	AllDay bool     `json:"all_day,omitempty"`
 }
 
 type Throttle struct {
@@ -89,6 +89,10 @@ type HeartbeatRequest struct {
 	AgentVersion string    `json:"agent_version"`
 	OS           string    `json:"os"`
 	ReportedAt   time.Time `json:"reported_at"`
+	// ServiceName/ServiceScope: como o agent está sendo executado, para o painel
+	// mostrar o comando exato de reinício quando ele cair. Vazio se rodando à mão.
+	ServiceName  string `json:"service_name,omitempty"`
+	ServiceScope string `json:"service_scope,omitempty"`
 }
 
 // --- Session / Manifest ---
@@ -105,14 +109,14 @@ type SessionStart struct {
 // escrito no bucket. O agent também POSTa o conteúdo inline aqui
 // para que o painel possa indexar no Postgres sem ler o bucket.
 type SessionComplete struct {
-	SessionID     string          `json:"session_id"`
-	Status        string          `json:"status"` // complete | partial | failed
-	Stats         SessionStats    `json:"stats"`
-	ManifestKey   string          `json:"manifest_key"`
-	VersionMapKey string          `json:"version_map_key"`
-	VersionMap    []FileEntry     `json:"version_map"` // inline — permite indexação sem acesso ao bucket
-	ErrorCode     string          `json:"error_code,omitempty"`
-	ErrorMessage  string          `json:"error_message,omitempty"`
+	SessionID     string       `json:"session_id"`
+	Status        string       `json:"status"` // complete | partial | failed
+	Stats         SessionStats `json:"stats"`
+	ManifestKey   string       `json:"manifest_key"`
+	VersionMapKey string       `json:"version_map_key"`
+	VersionMap    []FileEntry  `json:"version_map"` // inline — permite indexação sem acesso ao bucket
+	ErrorCode     string       `json:"error_code,omitempty"`
+	ErrorMessage  string       `json:"error_message,omitempty"`
 }
 
 type SessionStats struct {
@@ -134,14 +138,14 @@ type FileEntry struct {
 // --- Storage probe (discovered config) ---
 
 type ProbeReport struct {
-	StorageID    string     `json:"storage_id"`
-	Versioning   string     `json:"versioning"` // "Enabled" | "Suspended" | "Off"
-	ObjectLock   *ObjectLock `json:"object_lock,omitempty"`
-	Lifecycle    []Lifecycle `json:"lifecycle,omitempty"`
-	UsedBytes    int64      `json:"used_bytes"`    // somatório dos objetos do bucket (ocupação real)
-	ObjectCount  int64      `json:"object_count"`  // nº de objetos somados
-	ProbedAt     time.Time  `json:"probed_at"`
-	Error        string     `json:"error,omitempty"`
+	StorageID   string      `json:"storage_id"`
+	Versioning  string      `json:"versioning"` // "Enabled" | "Suspended" | "Off"
+	ObjectLock  *ObjectLock `json:"object_lock,omitempty"`
+	Lifecycle   []Lifecycle `json:"lifecycle,omitempty"`
+	UsedBytes   int64       `json:"used_bytes"`   // somatório dos objetos do bucket (ocupação real)
+	ObjectCount int64       `json:"object_count"` // nº de objetos somados
+	ProbedAt    time.Time   `json:"probed_at"`
+	Error       string      `json:"error,omitempty"`
 }
 
 type ObjectLock struct {
@@ -151,9 +155,9 @@ type ObjectLock struct {
 }
 
 type Lifecycle struct {
-	Prefix          string   `json:"prefix,omitempty"`
-	Transitions     []string `json:"transitions,omitempty"`
-	ExpirationDays  int      `json:"expiration_days,omitempty"`
+	Prefix         string   `json:"prefix,omitempty"`
+	Transitions    []string `json:"transitions,omitempty"`
+	ExpirationDays int      `json:"expiration_days,omitempty"`
 }
 
 // --- Restore ---
@@ -186,7 +190,7 @@ type RestoreItemUpdate struct {
 	ErrorMessage string `json:"error_message,omitempty"`
 	// ErrorCode estruturado; "not_found" sinaliza ao painel que o objeto sumiu do
 	// bucket — o índice é reconciliado (versão marcada como indisponível).
-	ErrorCode    string `json:"error_code,omitempty"`
+	ErrorCode string `json:"error_code,omitempty"`
 	// Warming: cold storage (Glacier/Archive). Status segue "running" enquanto aquece.
 	WarmingState string `json:"warming_state,omitempty"` // requested | in_progress
 	WarmingTier  string `json:"warming_tier,omitempty"`

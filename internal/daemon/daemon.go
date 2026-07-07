@@ -12,8 +12,8 @@ import (
 	"fmt"
 	"log/slog"
 	"runtime"
-	"strings"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,6 +22,7 @@ import (
 	"github.com/arkame-app/agent/internal/fsbrowse"
 	"github.com/arkame-app/agent/internal/restore"
 	"github.com/arkame-app/agent/internal/scheduler"
+	"github.com/arkame-app/agent/internal/service"
 	"github.com/arkame-app/agent/internal/storage"
 	syncengine "github.com/arkame-app/agent/internal/sync"
 	"github.com/arkame-app/agent/pkg/version"
@@ -69,12 +70,18 @@ func heartbeatLoop(ctx context.Context, c *api.Client, cfg *config.Config) {
 	ticker := time.NewTicker(time.Duration(cfg.HeartbeatIntervalSec) * time.Second)
 	defer ticker.Stop()
 
+	// Detecta o serviço uma vez (não muda em runtime) para o painel poder
+	// mostrar o comando exato de reinício quando o agent cair.
+	svc := service.Detect()
+
 	send := func() {
 		hb := api.HeartbeatRequest{
 			AgentID:      cfg.AgentID,
 			AgentVersion: version.Version,
 			OS:           runtime.GOOS + "-" + runtime.GOARCH,
 			ReportedAt:   time.Now().UTC(),
+			ServiceName:  svc.Name,
+			ServiceScope: svc.Scope,
 		}
 		if err := c.POST(ctx, "/api/agents/"+cfg.AgentID+"/heartbeat", hb, nil); err != nil {
 			slog.Warn("heartbeat falhou", "err", err)

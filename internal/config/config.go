@@ -1,7 +1,7 @@
 // Package config carrega configuração do agent a partir de:
-//   1. Env-file (formato KEY=VALUE, um por linha)
-//   2. Variáveis de ambiente do processo
-//   3. Overrides de CLI (--flag)
+//  1. Env-file (formato KEY=VALUE, um por linha)
+//  2. Variáveis de ambiente do processo
+//  3. Overrides de CLI (--flag)
 //
 // Precedência: CLI > env do processo > env-file > defaults.
 //

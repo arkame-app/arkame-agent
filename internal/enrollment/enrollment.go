@@ -1,13 +1,13 @@
 // Package enrollment implementa o fluxo de registro do agent no painel.
 //
 // Passos:
-//   1. Gera keypair Ed25519 local
-//   2. Calcula fingerprint (SHA-256 hex do pubkey)
-//   3. POST /api/agents/enroll com enrollment_token + pubkey + hostname
-//   4. Persiste private key em /etc/arkame/key.pem (0600)
-//   5. Imprime fingerprint para o usuário comparar visualmente no painel
-//   6. Long-poll em WaitURL até painel aprovar e emitir um JWT bearer
-//   7. Salva token em /etc/arkame/token.jwt (0600)
+//  1. Gera keypair Ed25519 local
+//  2. Calcula fingerprint (SHA-256 hex do pubkey)
+//  3. POST /api/agents/enroll com enrollment_token + pubkey + hostname
+//  4. Persiste private key em /etc/arkame/key.pem (0600)
+//  5. Imprime fingerprint para o usuário comparar visualmente no painel
+//  6. Long-poll em WaitURL até painel aprovar e emitir um JWT bearer
+//  7. Salva token em /etc/arkame/token.jwt (0600)
 //
 // Para re-enrollment (trocar servidor físico mantendo agent_id), o fluxo
 // é o mesmo — o painel identifica pelo enrollment_token se é first-time

@@ -91,12 +91,12 @@ func Run(ctx context.Context, o EngineOptions) (*Result, error) {
 // processFile sobe um arquivo individual.
 //
 // Fluxo:
-//   1. Calcula SHA-256 do arquivo local
-//   2. HeadObject no bucket — se já existe com mesmo sha256 metadata, é dedup
-//      (mesmo hash = mesmo conteúdo, S3 já tem). Retorna FileEntry com o
-//      VersionId existente — o painel registra como se fosse novo upload (a
-//      version aparece no version_map atual mas referencia o objeto antigo).
-//   3. Senão, PutObject novo com sha256 no metadata.
+//  1. Calcula SHA-256 do arquivo local
+//  2. HeadObject no bucket — se já existe com mesmo sha256 metadata, é dedup
+//     (mesmo hash = mesmo conteúdo, S3 já tem). Retorna FileEntry com o
+//     VersionId existente — o painel registra como se fosse novo upload (a
+//     version aparece no version_map atual mas referencia o objeto antigo).
+//  3. Senão, PutObject novo com sha256 no metadata.
 //
 // TODO: trocar PutObject por Multipart para arquivos > 100 MB.
 func processFile(ctx context.Context, o EngineOptions, fi FileInfo) (*api.FileEntry, bool, error) {
