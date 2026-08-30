@@ -1,0 +1,145 @@
+# GoReleaser — publica os binários do agent, os checksums e a imagem de container.
+#
+# O install.sh (get.arkame.app) depende dos nomes gerados aqui: mudar
+# `name_template` dos archives quebra a instalação de quem já roda o script.
+version: 2
+
+project_name: arkame-agent
+
+# A saída NÃO vai para dist/: nesta máquina esse diretório guarda o binário que
+# os serviços locais executam, e `--clean` o apagaria no meio de um release.
+dist: build/release
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: arkame-agent
+    main: ./cmd/arkame-agent
+    binary: arkame-agent
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/arkame-app/agent/pkg/version.Version={{ .Version }}
+      - -X github.com/arkame-app/agent/pkg/version.Commit={{ .ShortCommit }}
+      - -X github.com/arkame-app/agent/pkg/version.BuildDate={{ .Date }}
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: default
+    ids: [arkame-agent]
+    # Nomes minúsculos e previsíveis: o install.sh monta a URL a partir de
+    # `uname -s` e `uname -m` normalizados, sem tabela de tradução.
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - README.md
+      - LICENSE*
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+# Assinatura keyless via OIDC do GitHub Actions: sem chave privada para guardar
+# ou vazar. Assinamos o checksums.txt, que por sua vez cobre todos os archives.
+signs:
+  - cmd: cosign
+    certificate: "${artifact}.pem"
+    args:
+      - sign-blob
+      - "--output-certificate=${certificate}"
+      - "--output-signature=${signature}"
+      - "${artifact}"
+      - "--yes"
+    artifacts: checksum
+    output: true
+
+dockers:
+  - id: amd64
+    ids: [arkame-agent]
+    goos: linux
+    goarch: amd64
+    image_templates:
+      - "ghcr.io/arkame-app/arkame-agent:{{ .Version }}-amd64"
+      - "ghcr.io/arkame-app/arkame-agent:latest-amd64"
+    dockerfile: Dockerfile.release
+    use: buildx
+    build_flag_templates:
+      - "--platform=linux/amd64"
+      - "--label=org.opencontainers.image.title={{ .ProjectName }}"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.source=https://github.com/arkame-app/arkame-agent"
+      - "--label=org.opencontainers.image.licenses=Apache-2.0"
+
+  - id: arm64
+    ids: [arkame-agent]
+    goos: linux
+    goarch: arm64
+    image_templates:
+      - "ghcr.io/arkame-app/arkame-agent:{{ .Version }}-arm64"
+      - "ghcr.io/arkame-app/arkame-agent:latest-arm64"
+    dockerfile: Dockerfile.release
+    use: buildx
+    build_flag_templates:
+      - "--platform=linux/arm64"
+      - "--label=org.opencontainers.image.title={{ .ProjectName }}"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.source=https://github.com/arkame-app/arkame-agent"
+      - "--label=org.opencontainers.image.licenses=Apache-2.0"
+
+docker_manifests:
+  - name_template: "ghcr.io/arkame-app/arkame-agent:{{ .Version }}"
+    image_templates:
+      - "ghcr.io/arkame-app/arkame-agent:{{ .Version }}-amd64"
+      - "ghcr.io/arkame-app/arkame-agent:{{ .Version }}-arm64"
+  - name_template: "ghcr.io/arkame-app/arkame-agent:latest"
+    image_templates:
+      - "ghcr.io/arkame-app/arkame-agent:latest-amd64"
+      - "ghcr.io/arkame-app/arkame-agent:latest-arm64"
+
+release:
+  github:
+    owner: arkame-app
+    name: arkame-agent
+  header: |
+    ## Agent Arkame {{ .Version }}
+
+    Instalação em uma linha (Linux e macOS):
+
+    ```sh
+    curl -fsSL https://get.arkame.app/install.sh | sh
+    ```
+
+    Ou baixe o binário abaixo. Confira a integridade com `checksums.txt` — a
+    assinatura keyless está em `checksums.txt.sig` e `checksums.txt.pem`.
+  footer: |
+    **Verificando a assinatura:**
+
+    ```sh
+    cosign verify-blob checksums.txt \
+      --signature checksums.txt.sig \
+      --certificate checksums.txt.pem \
+      --certificate-identity-regexp 'https://github.com/arkame-app/arkame-agent/.*' \
+      --certificate-oidc-issuer https://token.actions.githubusercontent.com
+    ```
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - Merge pull request

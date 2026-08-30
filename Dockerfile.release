@@ -1,0 +1,13 @@
+# Imagem publicada pelo GoReleaser — o binário já vem compilado no contexto de
+# build, então aqui não há etapa de compilação (ver Dockerfile para o build
+# a partir do fonte).
+FROM gcr.io/distroless/static-debian12:nonroot
+
+COPY arkame-agent /usr/local/bin/arkame-agent
+
+# Monte a raiz do servidor em /host (somente leitura) e o env-file em /etc/arkame.
+VOLUME ["/host", "/etc/arkame"]
+
+USER nonroot:nonroot
+ENTRYPOINT ["/usr/local/bin/arkame-agent"]
+CMD ["run", "--host-root", "/host", "--config", "/etc/arkame/agent.env"]

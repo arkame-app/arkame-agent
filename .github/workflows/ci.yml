@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build e testes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: Formatação
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "Arquivos fora do gofmt:"; echo "$unformatted"; exit 1
+          fi
+
+      - name: Testes
+        run: go test -race ./...
+
+      # O agent roda em três sistemas e o código de serviço é específico de
+      # cada um — compilar só no Linux esconderia justamente essa parte.
+      - name: Cross-compile
+        run: |
+          for target in "linux amd64" "linux arm64" "darwin amd64" "darwin arm64" "windows amd64" "windows arm64"; do
+            set -- $target
+            echo "→ $1/$2"
+            GOOS=$1 GOARCH=$2 CGO_ENABLED=0 go build -o /dev/null ./...
+          done
+
+      - name: Verifica o install.sh
+        run: |
+          sudo apt-get update && sudo apt-get install -y shellcheck
+          shellcheck install.sh

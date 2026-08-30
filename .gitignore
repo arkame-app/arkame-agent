@@ -17,3 +17,9 @@ coverage.out
 
 # Logs
 *.log
+
+# Saída do GoReleaser
+build/
+
+# Binário operacional local (não versionado)
+dist/

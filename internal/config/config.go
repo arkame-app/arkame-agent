@@ -20,6 +20,11 @@ import (
 
 // Config é o conjunto completo de variáveis conhecidas pelo agent.
 type Config struct {
+	// ConfigPath é o env-file de onde esta config veio (ex.:
+	// /etc/arkame/agent.env). Guardado porque o serviço do SO precisa apontar
+	// para ele no EnvironmentFile — sem isso a unit sobe sem credenciais.
+	ConfigPath string
+
 	// Identidade & painel
 	AgentID         string // setado após enrollment bem-sucedido (persisted em /etc/arkame/agent.id)
 	PanelURL        string // https://save.arkame.app (ou subdomínio de partner whitelabel)
@@ -97,6 +102,7 @@ func Load(envFile string, o Overrides) (*Config, error) {
 	}
 
 	cfg := &Config{
+		ConfigPath:           envFile,
 		AgentID:              get("AGENT_ID"),
 		PanelURL:             firstNonEmpty(o.PanelURL, get("PANEL_URL"), "https://save.arkame.app"),
 		EnrollmentToken:      firstNonEmpty(o.EnrollmentToken, get("ENROLLMENT_TOKEN")),

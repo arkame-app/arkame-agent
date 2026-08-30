@@ -19,6 +19,8 @@ func newInstallCmd() *cobra.Command {
 		enrollmentToken string
 		panelURL        string
 		installService  bool
+		serviceName     string
+		serviceScope    string
 		hostName        string
 		waitApproval    bool
 	)
@@ -33,6 +35,10 @@ func newInstallCmd() *cobra.Command {
   4. (default) Faz long-poll aguardando aprovação e recebe um JWT bearer
   5. Salva o JWT em /etc/arkame/token.jwt (0600)
   6. Opcionalmente instala como serviço do SO (--install-service, default: true)
+
+Um host pode rodar mais de um agent — um por conjunto de credenciais de
+storage. Nesse caso dê um nome a cada um com --service-name (arkame-agent-aws,
+arkame-agent-oci, ...) e aponte --config para o env-file correspondente.
 
 Em re-enrollment (trocar servidor físico / reinstalar), o token novo é
 gerado no painel clicando "Reinstalar" em /agents/:id — ele é amarrado ao
@@ -87,10 +93,30 @@ agent_id existente, preservando histórico e path no bucket.`,
 			}
 
 			if installService {
-				if err := service.Install(ctx, cfg); err != nil {
+				inst, err := service.Install(ctx, cfg, service.Options{
+					Name:  serviceName,
+					Scope: service.Scope(serviceScope),
+					Start: true,
+				})
+				if err != nil {
 					return fmt.Errorf("instalando serviço do SO: %w", err)
 				}
-				slog.Info("serviço instalado e iniciado", "os", runtime.GOOS)
+				slog.Info("serviço instalado e iniciado",
+					"os", runtime.GOOS, "name", inst.Name, "scope", string(inst.Scope))
+
+				// O operador precisa sair daqui sabendo o comando exato de
+				// reinício — caçar o nome do serviço depois já custou caro.
+				fmt.Fprintln(os.Stderr, "")
+				fmt.Fprintln(os.Stderr, "  ✓ Serviço instalado:", inst.Name, "("+string(inst.Scope)+")")
+				fmt.Fprintln(os.Stderr, "    arquivo:  ", inst.UnitPath)
+				fmt.Fprintln(os.Stderr, "    reiniciar:", inst.StartCmd)
+				fmt.Fprintln(os.Stderr, "    status:   ", inst.StatusCmd)
+				fmt.Fprintln(os.Stderr, "    logs:     ", inst.LogsCmd)
+				if inst.LingerNote != "" {
+					fmt.Fprintln(os.Stderr, "")
+					fmt.Fprintln(os.Stderr, "  ⚠", inst.LingerNote)
+				}
+				fmt.Fprintln(os.Stderr, "")
 			}
 			return nil
 		},
@@ -100,6 +126,8 @@ agent_id existente, preservando histórico e path no bucket.`,
 	cmd.Flags().StringVar(&enrollmentToken, "token", "", "enrollment_token gerado no painel (ex: atk_...)")
 	cmd.Flags().StringVar(&panelURL, "panel-url", "https://save.arkame.app", "URL base do painel Arkame")
 	cmd.Flags().BoolVar(&installService, "install-service", true, "instalar como serviço systemd/launchd/Windows Service (set false para só enrollar)")
+	cmd.Flags().StringVar(&serviceName, "service-name", service.DefaultName, "nome do serviço — use um por credencial de storage no mesmo host (ex.: arkame-agent-aws)")
+	cmd.Flags().StringVar(&serviceScope, "service-scope", "", "system (todo o host, exige root) ou user (só o seu usuário, sem sudo). Padrão: system se root, senão user")
 	cmd.Flags().StringVar(&hostName, "hostname", "", "hostname reportado (default: hostname do sistema)")
 	cmd.Flags().BoolVar(&waitApproval, "wait", true, "aguardar aprovação humana (long-poll). --wait=false retorna logo após enrollment")
 
