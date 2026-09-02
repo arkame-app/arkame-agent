@@ -231,3 +231,53 @@ type FsListingReport struct {
 	Entries []FsEntry `json:"entries,omitempty"`
 	Error   string    `json:"error,omitempty"`
 }
+
+// --- Retenção: expurgo de versões (painel autoriza, agent executa) ---
+
+// PurgePlanVersion é uma versão que o painel autorizou apagar.
+type PurgePlanVersion struct {
+	Key       string `json:"key"`
+	VersionID string `json:"version_id"`
+	Size      int64  `json:"size"`
+	Reason    string `json:"reason"` // thinning | hard_delete
+}
+
+// PurgePlanResponse é a resposta de GET /api/agents/{id}/purge-plan.
+// RunID vazio significa "nada a fazer agora" — o caso comum.
+type PurgePlanResponse struct {
+	RunID      string             `json:"run_id"`
+	StorageID  string             `json:"storage_id"`
+	Bucket     string             `json:"bucket"`
+	PrefixRoot string             `json:"prefix_root"`
+	Truncated  bool               `json:"truncated"`
+	Versions   []PurgePlanVersion `json:"versions"`
+}
+
+// PurgeDeleted identifica uma versão que saiu do bucket.
+type PurgeDeleted struct {
+	Key       string `json:"key"`
+	VersionID string `json:"version_id"`
+}
+
+// PurgeFailure identifica uma versão que não saiu, e por quê.
+type PurgeFailure struct {
+	Key       string `json:"key"`
+	VersionID string `json:"version_id"`
+	Error     string `json:"error"`
+}
+
+// PurgeResult é o corpo de POST /api/agents/{id}/purge-result.
+type PurgeResult struct {
+	RunID   string         `json:"run_id"`
+	Deleted []PurgeDeleted `json:"deleted"`
+	Failed  []PurgeFailure `json:"failed,omitempty"`
+}
+
+// PurgeResultResponse é a confirmação do painel — o que ele aceitou dar baixa.
+type PurgeResultResponse struct {
+	VersionsDeleted    int   `json:"versions_deleted"`
+	BytesFreed         int64 `json:"bytes_freed"`
+	CatalogRowsRemoved int   `json:"catalog_rows_removed"`
+	Failed             int   `json:"failed"`
+	Rejected           int   `json:"rejected"`
+}

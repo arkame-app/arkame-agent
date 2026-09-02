@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"runtime"
 	"slices"
 	"strings"
@@ -20,6 +21,7 @@ import (
 	"github.com/arkame-app/agent/internal/api"
 	"github.com/arkame-app/agent/internal/config"
 	"github.com/arkame-app/agent/internal/fsbrowse"
+	"github.com/arkame-app/agent/internal/purge"
 	"github.com/arkame-app/agent/internal/restore"
 	"github.com/arkame-app/agent/internal/scheduler"
 	"github.com/arkame-app/agent/internal/service"
@@ -53,12 +55,13 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(5)
+	wg.Add(6)
 	go func() { defer wg.Done(); heartbeatLoop(ctx, client, cfg) }()
 	go func() { defer wg.Done(); probeLoop(ctx, client, s3Client, cfg) }()
 	go func() { defer wg.Done(); planLoop(ctx, client, s3Client, cfg) }()
 	go func() { defer wg.Done(); restoreLoop(ctx, client, s3Client, cfg) }()
 	go func() { defer wg.Done(); fsBrowseLoop(ctx, client, cfg) }()
+	go func() { defer wg.Done(); purgeLoop(ctx, client, s3Client, cfg) }()
 
 	<-ctx.Done()
 	slog.Info("ctx cancelado, aguardando loops encerrarem...")
@@ -513,6 +516,92 @@ func fsBrowseLoop(ctx context.Context, c *api.Client, cfg *config.Config) {
 			} else {
 				slog.Debug("fs listing reportado", "path", req.Path, "entries", len(report.Entries))
 			}
+		}
+	}
+}
+
+// purgeLoop aplica a retenção: pergunta ao painel se há versões a apagar no
+// bucket e apaga.
+//
+// A pergunta é barata e quase sempre volta vazia — o painel emite no máximo
+// uma rodada por dia por storage. Por isso o intervalo é de uma hora e não de
+// um minuto: retenção é trabalho de fundo, e um servidor que ficou desligado
+// alguns dias recupera o atraso na primeira pergunta que fizer.
+//
+// Este é o único loop do agent que destrói dado. Ele não decide nada: só
+// executa o que o painel autorizou, e recusa o que estiver fora do prefixo do
+// storage ou sem VersionId (ver internal/purge).
+func purgeLoop(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config.Config) {
+	ticker := time.NewTicker(1 * time.Hour)
+	defer ticker.Stop()
+
+	run := func() {
+		if cfg.StorageID == "" || cfg.StorageBucket == "" {
+			return
+		}
+
+		var plano api.PurgePlanResponse
+		path := "/api/agents/" + cfg.AgentID + "/purge-plan?storage_id=" + url.QueryEscape(cfg.StorageID)
+		if err := c.GET(ctx, path, &plano); err != nil {
+			slog.Debug("poll purge-plan falhou", "err", err)
+			return
+		}
+		if plano.RunID == "" || len(plano.Versions) == 0 {
+			return
+		}
+		if plano.Bucket != "" && plano.Bucket != cfg.StorageBucket {
+			// O plano é de um bucket que este processo não atende. Silêncio: se
+			// houver outro processo do agent com as credenciais certas, ele pega.
+			slog.Debug("plano de expurgo de outro bucket", "plano", plano.Bucket, "meu", cfg.StorageBucket)
+			return
+		}
+
+		slog.Info("expurgo de retenção autorizado pelo painel",
+			"run_id", plano.RunID, "versoes", len(plano.Versions), "truncado", plano.Truncated)
+
+		versoes := make([]purge.Version, len(plano.Versions))
+		for i, v := range plano.Versions {
+			versoes[i] = purge.Version{Key: v.Key, VersionID: v.VersionID, Size: v.Size, Reason: v.Reason}
+		}
+
+		apagadas, falhas := purge.Run(ctx, purge.Options{
+			S3:         s3c,
+			Bucket:     cfg.StorageBucket,
+			PrefixRoot: plano.PrefixRoot,
+		}, versoes)
+
+		relato := api.PurgeResult{RunID: plano.RunID}
+		for _, v := range apagadas {
+			relato.Deleted = append(relato.Deleted, api.PurgeDeleted{Key: v.Key, VersionID: v.VersionID})
+		}
+		for _, f := range falhas {
+			relato.Failed = append(relato.Failed, api.PurgeFailure{Key: f.Key, VersionID: f.VersionID, Error: f.Error})
+		}
+
+		var resposta api.PurgeResultResponse
+		if err := c.POST(ctx, "/api/agents/"+cfg.AgentID+"/purge-result", relato, &resposta); err != nil {
+			// O relato se perdeu. As versões já saíram do bucket, mas o catálogo
+			// segue dizendo que existem. A rodada expira em algumas horas e a
+			// próxima recalcula — as versões já apagadas simplesmente não
+			// aparecerão mais no bucket, e o relato seguinte corrige o catálogo.
+			slog.Warn("relato de expurgo falhou; catálogo será corrigido na próxima rodada", "err", err)
+			return
+		}
+
+		slog.Info("expurgo concluído",
+			"versoes_apagadas", resposta.VersionsDeleted,
+			"bytes_liberados", resposta.BytesFreed,
+			"falhas", resposta.Failed,
+			"recusadas_pelo_painel", resposta.Rejected)
+	}
+
+	run()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			run()
 		}
 	}
 }
