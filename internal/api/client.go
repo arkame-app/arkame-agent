@@ -3,10 +3,13 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 )
 
@@ -77,6 +80,26 @@ func (c *Client) GET(ctx context.Context, path string, out any) error {
 		return err
 	}
 	c.setHeaders(req)
+	return c.do(req, out)
+}
+
+// GETSigned faz um GET provando a posse da chave Ed25519 do agent.
+//
+// Existe para o `wait-token`, que entrega a credencial e por isso não pode
+// exigir a credencial. A prova é a assinatura de um material com carimbo de
+// tempo; o painel confere com a chave pública que recebeu no enrollment.
+func (c *Client) GETSigned(ctx context.Context, path string, priv ed25519.PrivateKey, agentID string, out any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
+	if err != nil {
+		return err
+	}
+	ts := strconv.FormatInt(time.Now().UnixMilli(), 10)
+	material := fmt.Sprintf("arkame-wait-token:%s:%s", agentID, ts)
+	sig := ed25519.Sign(priv, []byte(material))
+
+	c.setHeaders(req)
+	req.Header.Set("X-Arkame-Timestamp", ts)
+	req.Header.Set("X-Arkame-Signature", base64.StdEncoding.EncodeToString(sig))
 	return c.do(req, out)
 }
 

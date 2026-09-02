@@ -25,6 +25,7 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/arkame-app/agent/internal/api"
@@ -122,11 +123,22 @@ func Run(ctx context.Context, cfg *config.Config, o Options) (*Result, error) {
 // O backend mantém a conexão aberta até ~30s — se ainda pending, responde 204
 // e o agent reabre. Se rejected/archived, responde 410 e o agent aborta.
 func WaitForApproval(ctx context.Context, cfg *config.Config, waitURL string) (*api.TokenResponse, error) {
-	// waitURL pode ser absoluto ou relativo ao painel
-	base := cfg.PanelURL
-	u, err := url.Parse(waitURL)
+	// A chave que provamos possuir é a mesma gerada no enrollment. Sem ela não
+	// há como buscar o token: a rota deixou de aceitar quem só conhece o
+	// agent_id.
+	kp, err := crypto.LoadPrivate(cfg.PrivateKeyPath)
+	if err != nil {
+		return nil, fmt.Errorf("lendo chave privada em %s: %w", cfg.PrivateKeyPath, err)
+	}
+	agentID, err := readAgentID(cfg)
 	if err != nil {
 		return nil, err
+	}
+	// waitURL pode ser absoluto ou relativo ao painel
+	base := cfg.PanelURL
+	u, parseErr := url.Parse(waitURL)
+	if parseErr != nil {
+		return nil, parseErr
 	}
 	if u.IsAbs() {
 		base = u.Scheme + "://" + u.Host
@@ -142,7 +154,7 @@ func WaitForApproval(ctx context.Context, cfg *config.Config, waitURL string) (*
 
 	for {
 		var tok api.TokenResponse
-		err := client.GET(ctx, u.Path, &tok)
+		err := client.GETSigned(ctx, u.Path, kp.Private, agentID, &tok)
 		switch {
 		case err == nil:
 			if tok.AgentToken != "" {
@@ -205,4 +217,22 @@ func parentDir(p string) string {
 		}
 	}
 	return "."
+}
+
+// readAgentID lê o agent.id gravado no enrollment. É o identificador que vai
+// no material assinado, e precisa ser exatamente o que o painel conhece.
+func readAgentID(cfg *config.Config) (string, error) {
+	path := cfg.AgentIDPath
+	if path == "" {
+		path = "/etc/arkame/agent.id"
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("lendo agent.id em %s: %w", path, err)
+	}
+	id := strings.TrimSpace(string(raw))
+	if id == "" {
+		return "", fmt.Errorf("agent.id vazio em %s", path)
+	}
+	return id, nil
 }
