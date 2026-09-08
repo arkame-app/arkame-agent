@@ -21,6 +21,7 @@ import (
 	"github.com/arkame-app/agent/internal/api"
 	"github.com/arkame-app/agent/internal/config"
 	"github.com/arkame-app/agent/internal/fsbrowse"
+	"github.com/arkame-app/agent/internal/hooks"
 	"github.com/arkame-app/agent/internal/purge"
 	"github.com/arkame-app/agent/internal/restore"
 	"github.com/arkame-app/agent/internal/scheduler"
@@ -245,6 +246,32 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 	}
 	slog.Info("session iniciada", "session_id", startResp.SessionID)
 
+	// Comando de antes. Falha aqui aborta o backup, e é deliberado: seguir
+	// adiante salvaria o dump da véspera achando que salvou o de hoje — pior
+	// que não salvar, porque ninguém procura o que parece estar lá.
+	prazo := time.Duration(plan.HookTimeoutSeconds) * time.Second
+	var saidaDosHooks strings.Builder
+	if r, err := hooks.Run(ctx, plan.PreHook, prazo); err != nil {
+		slog.Error("comando de antes falhou; backup abortado",
+			"plan_id", plan.ID, "exit_code", r.ExitCode, "timed_out", r.TimedOut)
+		msg := fmt.Sprintf("comando de antes do backup falhou: %v", err)
+		failBody := struct {
+			ErrorCode    string `json:"error_code"`
+			ErrorMessage string `json:"error_message"`
+			HookOutput   string `json:"hook_output,omitempty"`
+		}{
+			ErrorCode:    "pre_hook_failed",
+			ErrorMessage: msg,
+			HookOutput:   r.Output,
+		}
+		_ = c.POST(ctx, "/api/agents/"+cfg.AgentID+"/sessions/"+startResp.SessionID+"/fail", failBody, nil)
+		return fmt.Errorf("%s", msg)
+	} else if r.Ran {
+		slog.Info("comando de antes concluído", "plan_id", plan.ID, "duracao", r.Duration)
+		saidaDosHooks.WriteString("$ antes do backup\n")
+		saidaDosHooks.WriteString(r.Output)
+	}
+
 	result, syncErr := syncengine.Run(ctx, syncengine.EngineOptions{
 		S3:           s3c,
 		Bucket:       plan.StorageRef.Bucket,
@@ -254,6 +281,20 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 		ExcludeGlobs: plan.ExcludeGlobs,
 		MaxMbps:      plan.Throttle.MaxMbps,
 	})
+	// Comando de depois: roda com sucesso OU com falha, porque é ele que limpa
+	// o dump temporário — deixar o arquivo para trás encheria o disco do
+	// cliente justamente nos dias em que o backup deu errado.
+	if r, err := hooks.Run(ctx, plan.PostHook, prazo); err != nil {
+		// Falha aqui não invalida o backup: os arquivos já subiram. Fica
+		// registrado para quem for investigar o disco cheio depois.
+		slog.Warn("comando de depois falhou", "plan_id", plan.ID, "err", err)
+		saidaDosHooks.WriteString("\n$ depois do backup (falhou)\n")
+		saidaDosHooks.WriteString(r.Output)
+	} else if r.Ran {
+		saidaDosHooks.WriteString("\n$ depois do backup\n")
+		saidaDosHooks.WriteString(r.Output)
+	}
+
 	// Falha total: ou o walker abortou sem nada enviado, ou TODOS os arquivos
 	// falharam no upload (nenhum enviado, nenhum dedup) — não pode virar "complete".
 	totalFailure := (result == nil) ||

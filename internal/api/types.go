@@ -55,6 +55,15 @@ type Plan struct {
 	Windows      []Window   `json:"windows,omitempty"`
 	Throttle     Throttle   `json:"throttle,omitempty"`
 	NextRunAt    *time.Time `json:"next_run_at,omitempty"`
+
+	// Comandos que o plano roda no servidor antes e depois do backup.
+	//
+	// Existem pelo caso que a vitrine promete: `pg_dump` antes de copiar.
+	// Backup do arquivo de um banco aberto é backup de algo que não restaura.
+	PreHook  string `json:"pre_hook,omitempty"`
+	PostHook string `json:"post_hook,omitempty"`
+	// Prazo de cada comando, em segundos. Zero usa o padrão do executor.
+	HookTimeoutSeconds int `json:"hook_timeout_seconds,omitempty"`
 }
 
 type StorageRef struct {
