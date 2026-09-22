@@ -80,3 +80,36 @@ func TestPrevisaoSerializa(t *testing.T) {
 		t.Errorf("previsão deveria sair em UTC, saiu %q", s)
 	}
 }
+
+// A exceção do Intelligent-Tiering: para as camadas de arquivo dele a AWS recusa
+// `Days` e `GlacierJobParameters`. Regra de contrato de terceiro que não podemos
+// medir (90 dias para um objeto chegar lá) — então ao menos fica travada aqui.
+func TestPedidoDeRestauracao(t *testing.T) {
+	comum := pedidoDeRestauracao("GLACIER", s3types.TierStandard)
+	if comum.Days == nil || *comum.Days != 7 {
+		t.Errorf("Glacier: Days = %v, queria 7 (a OCI só aceita de 1 a 10)", comum.Days)
+	}
+	if comum.GlacierJobParameters == nil || comum.GlacierJobParameters.Tier != s3types.TierStandard {
+		t.Error("Glacier: faltou GlacierJobParameters com o tier")
+	}
+
+	deep := pedidoDeRestauracao("DEEP_ARCHIVE", s3types.TierStandard)
+	if deep.Days == nil || deep.GlacierJobParameters == nil {
+		t.Error("Deep Archive deveria mandar os mesmos parâmetros do Glacier")
+	}
+
+	it := pedidoDeRestauracao("INTELLIGENT_TIERING", s3types.TierStandard)
+	if it.Days != nil {
+		t.Errorf("Intelligent-Tiering: Days deveria ir ausente, foi %v", *it.Days)
+	}
+	if it.GlacierJobParameters != nil {
+		t.Error("Intelligent-Tiering: GlacierJobParameters deveria ir ausente")
+	}
+
+	// Classe vazia é o caso da OCI, cujo HeadObject não informa a classe. Ela
+	// exige Days, então o pedido comum é o certo.
+	oci := pedidoDeRestauracao("", s3types.TierStandard)
+	if oci.Days == nil || *oci.Days < 1 || *oci.Days > 10 {
+		t.Errorf("classe vazia (OCI): Days = %v, precisa estar entre 1 e 10", oci.Days)
+	}
+}

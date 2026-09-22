@@ -210,6 +210,38 @@ func downloadMultipart(ctx context.Context, s3c *s3.Client, item api.RestoreItem
 	return downloadResult{bytes: n, sha256: hex.EncodeToString(h.Sum(nil))}, nil
 }
 
+// pedidoDeRestauracao monta o corpo do RestoreObject para a classe em questão.
+//
+// Vive separado para ter teste: a exceção do Intelligent-Tiering é uma regra de
+// contrato de terceiro, e regra que o teste não consegue reprovar é regra sem
+// teste.
+//
+// `Days: 7` é quanto a cópia quente fica disponível. Sete porque é folga para
+// uma restauração grande terminar e porque **a OCI só aceita de 1 a 10** —
+// medido contra o endpoint dela em 22/09, que devolve
+// `InvalidArgument: Days parameter range is between 1 and 10`. A AWS aceita bem
+// mais; sete serve aos dois.
+//
+// Intelligent-Tiering é a exceção: para as camadas de arquivo dele a AWS recusa
+// `Days` e `GlacierJobParameters` — o pedido vai vazio e ela decide o tier.
+//
+// ⚠️ Essa exceção **não foi medida**. Um objeto só chega à camada de arquivo do
+// Intelligent-Tiering depois de 90 dias sem acesso, e não há como forçar; em
+// 22/09 confirmei apenas que, num objeto **não** arquivado, os dois formatos são
+// recusados igualmente (`Restore is not allowed for the object's current storage
+// class`), o que não distingue um do outro. Isto segue o contrato publicado pela
+// AWS, que é melhor do que mandar parâmetros que ela documenta como inválidos —
+// mas só um objeto de verdade arquivado fecha a questão.
+func pedidoDeRestauracao(storageClass string, tier s3types.Tier) *s3types.RestoreRequest {
+	if strings.Contains(storageClass, "INTELLIGENT_TIERING") {
+		return &s3types.RestoreRequest{}
+	}
+	return &s3types.RestoreRequest{
+		Days:                 aws32(7),
+		GlacierJobParameters: &s3types.GlacierJobParameters{Tier: tier},
+	}
+}
+
 // handleColdStorage é chamado quando GetObject retorna InvalidObjectState
 // (objeto em GLACIER ou DEEP_ARCHIVE). Verifica via HeadObject se já há restore
 // em andamento; se não, dispara RestoreObject.
@@ -246,17 +278,12 @@ func handleColdStorage(
 		}
 	}
 
-	// Sem restore em andamento → dispara
+	// Sem restore em andamento → dispara.
 	tier := s3types.TierStandard
 	restoreIn := &s3.RestoreObjectInput{
-		Bucket: &item.Bucket,
-		Key:    &item.SourceKey,
-		RestoreRequest: &s3types.RestoreRequest{
-			Days: aws32(7),
-			GlacierJobParameters: &s3types.GlacierJobParameters{
-				Tier: tier,
-			},
-		},
+		Bucket:         &item.Bucket,
+		Key:            &item.SourceKey,
+		RestoreRequest: pedidoDeRestauracao(storageClass, tier),
 	}
 	if item.SourceVersionID != "" {
 		restoreIn.VersionId = &item.SourceVersionID
@@ -396,6 +423,10 @@ func previsaoDeAquecimento(classe string, tier s3types.Tier) time.Time {
 		if strings.Contains(classe, "DEEP_ARCHIVE") {
 			return agora.Add(12 * time.Hour)
 		}
+		// Classe vazia cai aqui, e é o caso da OCI: o HeadObject dela não
+		// informa a classe de armazenamento. O arquivo da OCI sai em cerca de
+		// uma hora, então as cinco prometidas são folga — que é o lado certo
+		// para errar.
 		return agora.Add(5 * time.Hour)
 	}
 }
