@@ -28,6 +28,9 @@ const MultipartThresholdBytes = 100 * 1024 * 1024
 // já disparou um RestoreObject pra trazê-lo. O caller deve marcar warming_state
 // e tentar de novo numa próxima rodada do loop.
 type ErrWarmingRequested struct {
+	// PrevistoEm é quando o objeto deve estar disponível, pelo contrato da AWS
+	// para a combinação classe × tier. É teto, não média: melhor prometer menos.
+	PrevistoEm   time.Time
 	StorageClass string
 	Tier         string
 	Bucket       string
@@ -259,9 +262,21 @@ func handleColdStorage(
 		restoreIn.VersionId = &item.SourceVersionID
 	}
 	if _, rerr := s3c.RestoreObject(ctx, restoreIn); rerr != nil {
-		// RestoreAlreadyInProgress → warming já tá rolando, ok
-		var raip *s3types.ObjectAlreadyInActiveTierError
-		if errors.As(rerr, &raip) {
+		// Dois erros diferentes significam "não precisa fazer nada, espere":
+		//
+		//   RestoreAlreadyInProgress   já há uma restauração em andamento
+		//   ObjectAlreadyInActiveTier  o objeto já está quente
+		//
+		// A primeira versão só tratava o segundo — e ainda dizia no comentário
+		// que estava tratando o primeiro. O SDK **não tem tipo** para
+		// RestoreAlreadyInProgress (não existe em s3/types/errors.go), então
+		// `errors.As` nunca casava e o item caía no `default` do chamador, que
+		// o marca como **falhado**. Basta a janela entre o nosso RestoreObject e
+		// o cabeçalho `x-amz-restore` aparecer no HeadObject para uma espera
+		// legítima virar falha.
+		//
+		// Casa por código, como `isObjectGone` já faz neste repositório.
+		if jaEstaResolvendo(rerr) {
 			return &ErrWarmingInProgress{
 				StorageClass: storageClass,
 				Bucket:       item.Bucket,
@@ -272,6 +287,7 @@ func handleColdStorage(
 	}
 
 	return &ErrWarmingRequested{
+		PrevistoEm:   previsaoDeAquecimento(storageClass, tier),
 		StorageClass: storageClass,
 		Tier:         string(tier),
 		Bucket:       item.Bucket,
@@ -339,5 +355,47 @@ func resolveConflict(dir, filename, versionID, strategy string) (string, error) 
 		}
 	default:
 		return "", fmt.Errorf("conflict_strategy desconhecida: %q", strategy)
+	}
+}
+
+// jaEstaResolvendo diz se o erro do RestoreObject significa "espere", e não
+// "falhou". Casa pelo código do erro porque o SDK não expõe tipo para
+// RestoreAlreadyInProgress.
+func jaEstaResolvendo(err error) bool {
+	var ae interface{ ErrorCode() string }
+	if errors.As(err, &ae) {
+		switch ae.ErrorCode() {
+		case "RestoreAlreadyInProgress", "ObjectAlreadyInActiveTierError":
+			return true
+		}
+	}
+	// Rede de segurança: provedor compatível com S3 pode devolver o código só
+	// no corpo, sem o tipo que o SDK reconhece.
+	msg := err.Error()
+	return strings.Contains(msg, "RestoreAlreadyInProgress") ||
+		strings.Contains(msg, "ObjectAlreadyInActiveTier")
+}
+
+// previsaoDeAquecimento devolve o teto publicado pela AWS para a combinação
+// classe × tier. Teto e não média de propósito: quem está restaurando backup
+// prefere que a conta feche antes do prometido.
+//
+// Sem isto o cliente via um floco de neve e nenhum horizonte — no momento em
+// que ele está mais nervoso, "vai demorar, não sei quanto" é a pior resposta.
+func previsaoDeAquecimento(classe string, tier s3types.Tier) time.Time {
+	agora := time.Now().UTC()
+	switch tier {
+	case s3types.TierExpedited:
+		return agora.Add(5 * time.Minute)
+	case s3types.TierBulk:
+		if strings.Contains(classe, "DEEP_ARCHIVE") {
+			return agora.Add(48 * time.Hour)
+		}
+		return agora.Add(12 * time.Hour)
+	default: // Standard
+		if strings.Contains(classe, "DEEP_ARCHIVE") {
+			return agora.Add(12 * time.Hour)
+		}
+		return agora.Add(5 * time.Hour)
 	}
 }

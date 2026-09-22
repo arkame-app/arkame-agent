@@ -386,9 +386,54 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 //
 // Items running de execuções anteriores são reprocessados (recovery após crash).
 // A idempotência da escrita vem do conflict_strategy=suffix-version.
+// Recuo entre conferências de um item que está aquecendo.
+//
+// O laço acorda a cada PollIntervalSec (60 s por padrão), o que é certo para
+// item que está transferindo e absurdo para item que está em Deep Archive: doze
+// horas de espera davam 720 conferências, cada uma com um GetObject, um
+// HeadObject e dois PATCH no painel. Com cem arquivos frios são ~144 mil
+// chamadas à S3 e outras tantas escritas no nosso banco, para descobrir 719
+// vezes a mesma coisa.
+//
+// Dobra a cada conferência até o teto. No pior caso o cliente espera quinze
+// minutos a mais numa restauração de doze horas — e nós fazemos 48 conferências
+// em vez de 720.
+const (
+	recuoInicial = 1 * time.Minute
+	recuoMaximo  = 15 * time.Minute
+)
+
+// esperaDeAquecimento guarda quando voltar a olhar um item frio e de quanto é o
+// recuo atual dele.
+type esperaDeAquecimento struct {
+	proxima time.Time
+	recuo   time.Duration
+}
+
+// agendarRecuo marca a próxima conferência do item, dobrando o intervalo até o
+// teto. Ver o comentário das constantes acima.
+func agendarRecuo(m map[string]*esperaDeAquecimento, id string) {
+	e, ok := m[id]
+	if !ok {
+		e = &esperaDeAquecimento{recuo: recuoInicial}
+		m[id] = e
+	} else if e.recuo < recuoMaximo {
+		e.recuo *= 2
+		if e.recuo > recuoMaximo {
+			e.recuo = recuoMaximo
+		}
+	}
+	e.proxima = time.Now().Add(e.recuo)
+}
+
 func restoreLoop(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config.Config) {
 	ticker := time.NewTicker(time.Duration(cfg.PollIntervalSec) * time.Second)
 	defer ticker.Stop()
+
+	// Quando voltar a olhar cada item que está aquecendo. Em memória de
+	// propósito: reiniciar o agente confere uma vez a mais, que é barato e é o
+	// comportamento certo depois de uma queda.
+	aquecendo := map[string]*esperaDeAquecimento{}
 
 	run := func() {
 		var resp api.ListRestoreItemsResponse
@@ -405,6 +450,10 @@ func restoreLoop(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 		for _, item := range resp.Items {
 			if ctx.Err() != nil {
 				return
+			}
+			// Ainda no recuo: nem chega a falar com a S3 nem com o painel.
+			if e, ok := aquecendo[item.ItemID]; ok && time.Now().Before(e.proxima) {
+				continue
 			}
 			// Este processo só tem credenciais para o bucket configurado. Item de
 			// outro bucket falha rápido com erro claro (em vez de um 403 confuso) —
@@ -439,6 +488,7 @@ func restoreLoop(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 			var warmInProg *restore.ErrWarmingInProgress
 			switch {
 			case err == nil:
+				delete(aquecendo, item.ItemID)
 				update.Status = "complete"
 				slog.Info("restore item OK",
 					"item_id", item.ItemID, "key", item.SourceKey,
@@ -452,6 +502,8 @@ func restoreLoop(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 				update.ErrorMessage = "warming-requested"
 				update.WarmingState = "requested"
 				update.WarmingTier = warmReq.Tier
+				update.WarmingETA = warmReq.PrevistoEm.Format(time.RFC3339)
+				agendarRecuo(aquecendo, item.ItemID)
 			case errors.As(err, &warmInProg):
 				slog.Info("warming in progress, aguardando",
 					"item_id", item.ItemID, "key", item.SourceKey,
@@ -459,7 +511,9 @@ func restoreLoop(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 				update.Status = "running"
 				update.ErrorMessage = "warming-in-progress"
 				update.WarmingState = "in_progress"
+				agendarRecuo(aquecendo, item.ItemID)
 			default:
+				delete(aquecendo, item.ItemID)
 				update.Status = "failed"
 				update.ErrorMessage = err.Error()
 				// Objeto sumiu do bucket → sinaliza ao painel pra reconciliar o índice.
