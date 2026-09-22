@@ -10,7 +10,56 @@ permissions:
   id-token: write   # OIDC para a assinatura keyless do cosign
 
 jobs:
+  # A tag sozinha não basta para publicar.
+  #
+  # Até 22/09 a release saía direto do goreleaser: empurrar a tag empacotava e
+  # assinava, sem rodar um teste. Foi assim que a v0.1.0 ficou 22 dias no ar sem
+  # concluir enrolamento, enquanto a CI do `main` estava vermelha desde 08/09 —
+  # o sinal existia e nada o ligava ao que ia para o cliente.
+  #
+  # Agora ele só roda depois disto passar. É de propósito uma cópia do `ci.yml`,
+  # e não um `workflow_call`: a release precisa provar o **commit da tag**, que
+  # nem sempre é o que a CI do `main` viu.
+  testes:
+    name: Prova antes de publicar
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: Formatação
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "Arquivos fora do gofmt:"; echo "$unformatted"; exit 1
+          fi
+
+      - name: Testes
+        run: go test -race ./...
+
+      # O agent roda em três sistemas e o código de serviço é específico de
+      # cada um — publicar sem compilar os seis alvos é publicar no escuro.
+      - name: Cross-compile
+        run: |
+          for target in "linux amd64" "linux arm64" "darwin amd64" "darwin arm64" "windows amd64" "windows arm64"; do
+            set -- $target
+            echo "→ $1/$2"
+            GOOS=$1 GOARCH=$2 CGO_ENABLED=0 go build -o /dev/null ./...
+          done
+
+      - name: Verifica o install.sh
+        run: |
+          sudo apt-get update && sudo apt-get install -y shellcheck
+          shellcheck install.sh
+
   goreleaser:
+    needs: testes
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
