@@ -40,7 +40,23 @@ jobs:
             echo "Arquivos fora do gofmt:"; echo "$unformatted"; exit 1
           fi
 
+      # MinIO para os testes que tocam bucket de verdade (a purga, que apaga
+      # dados do cliente). O `services:` do Actions não aceita o comando que a
+      # imagem precisa, então sobe num passo.
+      - name: MinIO
+        run: |
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=arkametest -e MINIO_ROOT_PASSWORD=arkametest123 \
+            quay.io/minio/minio server /data
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:9000/minio/health/live && exit 0
+            sleep 1
+          done
+          echo "MinIO não subiu"; docker logs minio; exit 1
+
       - name: Testes
+        env:
+          ARKAME_TEST_S3_ENDPOINT: http://127.0.0.1:9000
         run: go test -race ./...
 
       # O agent roda em três sistemas e o código de serviço é específico de

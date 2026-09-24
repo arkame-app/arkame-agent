@@ -30,6 +30,21 @@ func clienteDeTeste(t *testing.T) (*s3.Client, string) {
 	t.Helper()
 	endpoint := os.Getenv("ARKAME_TEST_S3_ENDPOINT")
 	if endpoint == "" {
+		// Na CI, faltar o bucket é falha, não pulo.
+		//
+		// Até 23/09 estes testes pulavam na CI — que nunca teve MinIO —, e o
+		// `ok internal/purge` verde era um visto sobre cinco testes pulados:
+		// justamente os que garantem que a purga apaga só a versão autorizada,
+		// recusa chave fora do prefixo e recusa item sem VersionId. É o código
+		// que apaga dados do bucket do cliente. Pular em silêncio foi o que
+		// deixou isso passar despercebido; se um dia alguém tirar o MinIO do
+		// workflow, a CI tem de ficar vermelha, não verde.
+		//
+		// O GitHub Actions define CI=true sozinho. Na máquina de quem desenvolve
+		// continua pulando, para não exigir MinIO de quem só quer rodar o resto.
+		if os.Getenv("CI") == "true" {
+			t.Fatal("na CI estes testes exigem ARKAME_TEST_S3_ENDPOINT — o MinIO sumiu do workflow?")
+		}
 		t.Skip("ARKAME_TEST_S3_ENDPOINT não definido")
 	}
 
