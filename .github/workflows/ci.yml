@@ -47,3 +47,58 @@ jobs:
         run: |
           sudo apt-get update && sudo apt-get install -y shellcheck
           shellcheck install.sh
+
+  # O `main` vermelho vira issue — e o verde a fecha.
+  #
+  # A CI ficou vermelha de 08/09 a 22/09 sem ninguém ver, e escondia um defeito
+  # real: o prazo dos comandos antes/depois do backup matava só o shell, e um
+  # hook pendurado prendia o agendamento inteiro do servidor. A notificação
+  # padrão do GitHub existia; ninguém a lia.
+  #
+  # Uma issue aberta é um sinal que fica: aparece no repositório, dispara aviso
+  # para quem segue as issues, e continua lá até alguém resolver. Uma só por
+  # vez — falhas seguidas viram comentários na mesma, para não soterrar a lista.
+  # Quando o `main` volta ao verde, este mesmo workflow fecha a issue: o estado
+  # dela é o estado do `main`, e não um alarme que alguém esqueceu de desligar.
+  avisa-vermelho:
+    name: Abre issue quando o main falha
+    needs: build
+    if: failure() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          EXECUCAO: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          COMMIT: ${{ github.sha }}
+          AUTOR: ${{ github.event.head_commit.author.name }}
+          MENSAGEM: ${{ github.event.head_commit.message }}
+        run: |
+          gh label create ci-vermelha --color B60205 --description "O main está vermelho" 2>/dev/null || true
+          corpo=$(printf 'A CI falhou no `main`.\n\n- **Execução:** %s\n- **Commit:** `%s` — %s\n- **Mensagem:** %s\n\nEsta issue fecha sozinha quando o `main` voltar ao verde.' \
+            "$EXECUCAO" "${COMMIT:0:7}" "$AUTOR" "$(printf '%s' "$MENSAGEM" | head -1)")
+          aberta=$(gh issue list --label ci-vermelha --state open --json number --jq '.[0].number')
+          if [ -n "$aberta" ]; then
+            gh issue comment "$aberta" --body "$corpo"
+          else
+            gh issue create --label ci-vermelha --title "CI vermelha no main" --body "$corpo"
+          fi
+
+  fecha-quando-verde:
+    name: Fecha a issue quando o main volta ao verde
+    needs: build
+    if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          for n in $(gh issue list --label ci-vermelha --state open --json number --jq '.[].number'); do
+            gh issue close "$n" --comment "O \`main\` voltou ao verde em \`${COMMIT:0:7}\`."
+          done
