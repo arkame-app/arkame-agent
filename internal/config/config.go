@@ -15,6 +15,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -118,8 +119,8 @@ func Load(envFile string, o Overrides) (*Config, error) {
 		StorageBucket:        get("STORAGE_BUCKET"),
 		StorageID:            get("STORAGE_ID"),
 		SiblingBuckets:       splitCSV(get("SIBLING_BUCKETS")),
-		HeartbeatIntervalSec: 60,
-		PollIntervalSec:      60,
+		HeartbeatIntervalSec: segundosOu(get("HEARTBEAT_INTERVAL_SEC"), 60),
+		PollIntervalSec:      segundosOu(get("POLL_INTERVAL_SEC"), 60),
 	}
 
 	return cfg, nil
@@ -172,4 +173,22 @@ func splitCSV(v string) []string {
 		}
 	}
 	return out
+}
+
+// segundosOu lê um intervalo em segundos, ou devolve o padrão.
+//
+// Os intervalos eram fixos em 60 s. Para o cliente é o certo, e continua sendo
+// o padrão. Mas o teste do laço inteiro (agente → bucket → restauração) passava
+// quatro minutos só esperando o agente perceber o plano e depois a restauração,
+// e quem investiga um problema em campo não tinha como encurtar o ciclo.
+//
+// Valor inválido, zero ou negativo cai no padrão em vez de virar erro: um
+// intervalo de zero faria o `time.NewTicker` entrar em pânico, e um agente que
+// não sobe por causa de uma variável de ajuste é pior que um agente lento.
+func segundosOu(v string, padrao int) int {
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil || n <= 0 {
+		return padrao
+	}
+	return n
 }
