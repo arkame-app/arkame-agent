@@ -14,7 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
-// Estes testes rodam contra um S3 de verdade (MinIO), porque o que precisa
+// Estes testes rodam contra um S3 de verdade (RustFS), porque o que precisa
 // ser provado aqui não é a lógica em Go: é que a chamada apaga a versão certa
 // e deixa as outras em pé. Um mock do S3 confirmaria apenas que escrevemos o
 // que achamos que escrevemos.
@@ -22,8 +22,10 @@ import (
 // Sem ARKAME_TEST_S3_ENDPOINT os testes que precisam do bucket são pulados; a
 // validação local (que é o que impede perda de dados) roda sempre.
 //
-//	podman run -d --rm -p 19000:9000 -e MINIO_ROOT_USER=arkametest \
-//	  -e MINIO_ROOT_PASSWORD=arkametest123 quay.io/minio/minio server /data
+//	podman run -d --rm -p 19000:9000 -e RUSTFS_ACCESS_KEY=arkametest \
+//	  -e RUSTFS_SECRET_KEY=arkametest123 docker.io/rustfs/rustfs:1.0.0
+//
+// Era o MinIO, até as imagens dele deixarem de ser baixáveis sem conta (24/09).
 //	ARKAME_TEST_S3_ENDPOINT=http://127.0.0.1:19000 go test ./internal/purge/...
 
 func clienteDeTeste(t *testing.T) (*s3.Client, string) {
@@ -32,18 +34,18 @@ func clienteDeTeste(t *testing.T) (*s3.Client, string) {
 	if endpoint == "" {
 		// Na CI, faltar o bucket é falha, não pulo.
 		//
-		// Até 23/09 estes testes pulavam na CI — que nunca teve MinIO —, e o
+		// Até 23/09 estes testes pulavam na CI — que nunca teve bucket —, e o
 		// `ok internal/purge` verde era um visto sobre cinco testes pulados:
 		// justamente os que garantem que a purga apaga só a versão autorizada,
 		// recusa chave fora do prefixo e recusa item sem VersionId. É o código
 		// que apaga dados do bucket do cliente. Pular em silêncio foi o que
-		// deixou isso passar despercebido; se um dia alguém tirar o MinIO do
+		// deixou isso passar despercebido; se um dia alguém tirar o S3 local do
 		// workflow, a CI tem de ficar vermelha, não verde.
 		//
 		// O GitHub Actions define CI=true sozinho. Na máquina de quem desenvolve
-		// continua pulando, para não exigir MinIO de quem só quer rodar o resto.
+		// continua pulando, para não exigir S3 local de quem só quer rodar o resto.
 		if os.Getenv("CI") == "true" {
-			t.Fatal("na CI estes testes exigem ARKAME_TEST_S3_ENDPOINT — o MinIO sumiu do workflow?")
+			t.Fatal("na CI estes testes exigem ARKAME_TEST_S3_ENDPOINT — o S3 local sumiu do workflow?")
 		}
 		t.Skip("ARKAME_TEST_S3_ENDPOINT não definido")
 	}

@@ -30,19 +30,26 @@ jobs:
             echo "Arquivos fora do gofmt:"; echo "$unformatted"; exit 1
           fi
 
-      # MinIO para os testes que tocam bucket de verdade (a purga, que apaga
-      # dados do cliente). O `services:` do Actions não aceita o comando que a
-      # imagem precisa, então sobe num passo.
-      - name: MinIO
+      # Um S3 de verdade para os testes que tocam bucket — a purga, que apaga
+      # dados do cliente.
+      #
+      # Era o MinIO. Em 24/09 as imagens dele deixaram de ser baixáveis sem
+      # conta — 401 no quay.io e no Docker Hub, em qualquer tag —, e a CI
+      # ficou vermelha por isso (foi a issue #1 que acusou). O RustFS é
+      # compatível, faz versionamento de verdade (conferido: versões
+      # distintas, leitura e remoção por versionId) e passa os seis testes.
+      # Versão fixa, para uma mudança do lado de lá não mudar o teste sem
+      # ninguém ver.
+      - name: S3 local (RustFS)
         run: |
-          docker run -d --name minio -p 9000:9000 \
-            -e MINIO_ROOT_USER=arkametest -e MINIO_ROOT_PASSWORD=arkametest123 \
-            quay.io/minio/minio server /data
+          docker run -d --name s3 -p 9000:9000 \
+            -e RUSTFS_ACCESS_KEY=arkametest -e RUSTFS_SECRET_KEY=arkametest123 \
+            docker.io/rustfs/rustfs:1.0.0
           for i in $(seq 1 30); do
-            curl -sf http://127.0.0.1:9000/minio/health/live && exit 0
+            curl -sf http://127.0.0.1:9000/health >/dev/null && exit 0
             sleep 1
           done
-          echo "MinIO não subiu"; docker logs minio; exit 1
+          echo "S3 local não subiu"; docker logs s3; exit 1
 
       - name: Testes
         env:
