@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"runtime"
 	"strings"
 
 	"github.com/arkame-app/agent/internal/config"
@@ -23,62 +22,54 @@ import (
 //     instalação), pede a chave no terminal, testa e grava.
 //   - Com chave: testa; recusada, pede de novo (havendo terminal) ou para com
 //     a causa.
-func garantirCredencial(ctx context.Context, cfg *config.Config, caminho string) error {
+//
+// Devolve se o arquivo mudou, para o chamador reler só nesse caso.
+func garantirCredencial(ctx context.Context, cfg *config.Config, caminho string) (bool, error) {
 	semChave := cfg.StorageAccessKey == "" || cfg.StorageSecretKey == ""
 
 	if !semChave {
 		err := storage.Check(ctx, cfg)
 		if err == nil {
 			fmt.Fprintln(os.Stderr, "  ✓ O bucket", cfg.StorageBucket, "aceitou a chave de", caminho)
-			return nil
+			return false, nil
 		}
 		t, terr := terminal.Open()
 		if terr != nil {
-			return fmt.Errorf("%s (%v). Corrija a chave em %s, ou rode `arkame-agent set-storage-keys` num terminal", storage.Causa(err), err, caminho)
+			return false, fmt.Errorf("%s (%v). Corrija a chave em %s, ou rode `arkame-agent set-storage-keys` num terminal", storage.Causa(err), err, caminho)
 		}
 		defer t.Close()
 		fmt.Fprintf(os.Stderr, "\n  ✗ A chave de %s não funciona: %s.\n", caminho, storage.Causa(err))
-		ak, sk, err := setup.PerguntarETestar(ctx, t, cfg, os.Stderr)
+		ak, sk, err := setup.PerguntarETestar(ctx, t, cfg)
 		if err != nil {
-			return err
+			return false, err
 		}
-		return setup.TrocarChaves(caminho, ak, sk)
+		return true, setup.TrocarChaves(caminho, ak, sk)
 	}
 
 	if cfg.EnrollmentToken == "" {
-		return fmt.Errorf("sem chave do bucket em %s", caminho)
+		return false, fmt.Errorf("sem chave do bucket em %s", caminho)
 	}
 	t, err := terminal.Open()
 	if err != nil {
-		return fmt.Errorf("sem chave do bucket em %s e sem terminal para perguntar: rode o comando num terminal interativo (no Docker, com -it)", caminho)
+		return false, fmt.Errorf("sem chave do bucket em %s e sem terminal para perguntar: rode o comando num terminal interativo (no Docker, com -it)", caminho)
 	}
 	defer t.Close()
 
 	p, err := setup.BuscarNoPainel(ctx, cfg.PanelURL, cfg.EnrollmentToken)
 	if err != nil {
-		return err
-	}
-	base := *cfg
-	base.StorageBucket = p.Armazenamento.Bucket
-	base.StorageEndpoint = ""
-	if p.Armazenamento.Endpoint != nil {
-		base.StorageEndpoint = *p.Armazenamento.Endpoint
-	}
-	base.StorageRegion = "us-east-1"
-	if p.Armazenamento.Region != nil && *p.Armazenamento.Region != "" {
-		base.StorageRegion = *p.Armazenamento.Region
+		return false, err
 	}
 	fmt.Fprintf(os.Stderr, "\n  Servidor:       %s\n  Armazenamento:  %s (%s)\n", p.DisplayName, p.Armazenamento.DisplayName, p.Armazenamento.Bucket)
 
-	ak, sk, err := setup.PerguntarETestar(ctx, t, &base, os.Stderr)
+	ak, sk, err := setup.PerguntarETestar(ctx, t, setup.NaConfig(p, cfg))
 	if err != nil {
-		return err
+		return false, err
 	}
 	if err := setup.Gravar(caminho, setup.Linhas(p, cfg.PanelURL), ak, sk); err != nil {
-		return err
+		return false, err
 	}
 	fmt.Fprintln(os.Stderr, "  ✓ Gravado em", caminho)
-	return nil
+	return true, nil
 }
 
 func newCheckStorageCmd() *cobra.Command {
@@ -104,10 +95,11 @@ func newCheckStorageCmd() *cobra.Command {
 
 func newSetStorageKeysCmd() *cobra.Command {
 	var (
-		configFile  string
-		reiniciar   bool
-		pausar      bool
-		serviceName string
+		configFile   string
+		reiniciar    bool
+		pausar       bool
+		serviceName  string
+		serviceScope string
 	)
 	cmd := &cobra.Command{
 		Use:   "set-storage-keys",
@@ -142,7 +134,7 @@ chave nova (o comando aparece no fim).`,
 				return err
 			}
 			defer t.Close()
-			ak, sk, err := setup.PerguntarETestar(cmd.Context(), t, cfg, os.Stderr)
+			ak, sk, err := setup.PerguntarETestar(cmd.Context(), t, cfg)
 			if err != nil {
 				return err
 			}
@@ -150,12 +142,15 @@ chave nova (o comando aparece no fim).`,
 				return err
 			}
 			fmt.Fprintln(os.Stderr, "  ✓ Gravado em", configFile)
+			escopo := service.Scope(serviceScope)
 			if !reiniciar {
-				fmt.Fprintln(os.Stderr, "  Reinicie o serviço para usar a chave nova:", comandoDeReinicio(serviceName))
+				fmt.Fprintln(os.Stderr, "  Reinicie o serviço para usar a chave nova:", service.RestartCommand(serviceName, escopo))
 				return nil
 			}
-			if err := reiniciarServico(cmd.Context(), serviceName); err != nil {
-				return fmt.Errorf("a chave foi gravada, mas o serviço não reiniciou (%v): rode %s", err, comandoDeReinicio(serviceName))
+			a := service.RestartArgs(serviceName, escopo)
+			if out, err := exec.CommandContext(cmd.Context(), a[0], a[1:]...).CombinedOutput(); err != nil {
+				return fmt.Errorf("a chave foi gravada, mas o serviço não reiniciou (%v: %s): rode %s",
+					err, strings.TrimSpace(string(out)), service.RestartCommand(serviceName, escopo))
 			}
 			fmt.Fprintln(os.Stderr, "  ✓ Serviço reiniciado com a chave nova.")
 			return nil
@@ -164,36 +159,7 @@ chave nova (o comando aparece no fim).`,
 	cmd.Flags().StringVar(&configFile, "config", "/etc/arkame/agent.env", "arquivo de configuração")
 	cmd.Flags().BoolVar(&reiniciar, "restart", false, "reiniciar o serviço depois de gravar")
 	cmd.Flags().StringVar(&serviceName, "service-name", service.DefaultName, "nome do serviço a reiniciar")
+	cmd.Flags().StringVar(&serviceScope, "service-scope", "", "system ou user, como na instalação. Padrão: system se root, senão user")
 	cmd.Flags().BoolVar(&pausar, "pause", false, "esperar um Enter antes de sair (janela aberta pelo painel)")
 	return cmd
-}
-
-// argumentosDeReinicio do serviço, por sistema — o mesmo que `service install`
-// mostra no fim.
-func argumentosDeReinicio(nome string) []string {
-	switch runtime.GOOS {
-	case "windows":
-		return []string{"powershell", "-NoProfile", "-Command", "Restart-Service " + nome}
-	case "darwin":
-		return []string{"launchctl", "kickstart", "-k", "system/" + service.LaunchdLabel(nome)}
-	default:
-		return []string{"systemctl", "restart", nome}
-	}
-}
-
-func comandoDeReinicio(nome string) string {
-	a := argumentosDeReinicio(nome)
-	if runtime.GOOS == "windows" {
-		return a[len(a)-1]
-	}
-	return "sudo " + strings.Join(a, " ")
-}
-
-func reiniciarServico(ctx context.Context, nome string) error {
-	a := argumentosDeReinicio(nome)
-	out, err := exec.CommandContext(ctx, a[0], a[1:]...).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
-	}
-	return nil
 }

@@ -13,7 +13,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -53,7 +52,8 @@ func BuscarNoPainel(ctx context.Context, panelURL, codigo string) (*DoPainel, er
 	}
 	var r DoPainel
 	if err := c.POST(ctx, "/api/agents/install-config", map[string]string{"token": codigo}, &r); err != nil {
-		if strings.Contains(err.Error(), "HTTP 404") || strings.Contains(err.Error(), "HTTP 410") {
+		var h *api.HTTPError
+		if errors.Is(err, api.ErrGone) || (errors.As(err, &h) && h.Status == 404) {
 			return nil, ErrCodigoInvalido
 		}
 		return nil, fmt.Errorf("consultando o painel em %s: %w", panelURL, err)
@@ -64,12 +64,16 @@ func BuscarNoPainel(ctx context.Context, panelURL, codigo string) (*DoPainel, er
 	return &r, nil
 }
 
-// Linhas monta o arquivo de configuração, sem as chaves.
+// Linhas monta o arquivo de configuração, sem as chaves. O que o painel não
+// disse (região, endereço) fica fora, e o agente usa o padrão.
 func Linhas(p *DoPainel, panelURL string) []string {
+	if p.PanelURL != "" {
+		panelURL = p.PanelURL
+	}
 	a := p.Armazenamento
 	l := []string{
 		"AGENT_ID=" + p.AgentID,
-		"PANEL_URL=" + firstNonEmpty(p.PanelURL, panelURL),
+		"PANEL_URL=" + panelURL,
 		"STORAGE_ID=" + a.ID,
 		"STORAGE_BUCKET=" + a.Bucket,
 	}
@@ -82,13 +86,31 @@ func Linhas(p *DoPainel, panelURL string) []string {
 	return l
 }
 
+// NaConfig devolve a configuração com o bucket que o painel indicou, pelos
+// mesmos padrões de `config.Load` — é o que o teste da chave usa antes de o
+// arquivo existir.
+func NaConfig(p *DoPainel, cfg *config.Config) *config.Config {
+	c := *cfg
+	a := p.Armazenamento
+	c.StorageID, c.StorageBucket, c.StorageEndpoint = a.ID, a.Bucket, ""
+	if a.Endpoint != nil {
+		c.StorageEndpoint = *a.Endpoint
+	}
+	c.StorageRegion = config.DefaultRegion
+	if a.Region != nil && *a.Region != "" {
+		c.StorageRegion = *a.Region
+	}
+	return &c
+}
+
 // MaxTentativas antes de desistir: quem errou cinco vezes precisa conferir a
 // chave no provedor, não digitar de novo.
 const MaxTentativas = 5
 
 // PerguntarETestar pede a chave e a senha até o bucket aceitar. Devolve as
 // duas quando o teste passa.
-func PerguntarETestar(ctx context.Context, t *terminal.Terminal, base *config.Config, out io.Writer) (string, string, error) {
+func PerguntarETestar(ctx context.Context, t *terminal.Terminal, base *config.Config) (string, string, error) {
+	out := t.Saida()
 	fmt.Fprintf(out, "\n  Credencial do bucket %s (fica só nesta máquina; o painel não a recebe)\n\n", base.StorageBucket)
 	for tentativa := 1; tentativa <= MaxTentativas; tentativa++ {
 		ak, err := t.Pergunta("Chave de acesso (access key)")
@@ -171,13 +193,4 @@ func resumo(err error) string {
 		s = s[:240] + "…"
 	}
 	return s
-}
-
-func firstNonEmpty(vv ...string) string {
-	for _, v := range vv {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
 }

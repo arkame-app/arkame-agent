@@ -15,7 +15,13 @@ type arkameService struct {
 	run func(context.Context) error
 }
 
-func (s *arkameService) Execute(_ []string, r <-chan svc.ChangeRequest, changes chan<- svc.Status) (bool, uint32) {
+func (s *arkameService) Execute(args []string, r <-chan svc.ChangeRequest, changes chan<- svc.Status) (bool, uint32) {
+	// O SCM entrega o nome real do serviço em args[0]: é o que Detect()
+	// reporta ao painel, para o comando de reinício acertar o serviço mesmo
+	// com --service-name.
+	if len(args) > 0 && args[0] != "" {
+		nomeDoServicoWindows.Store(args[0])
+	}
 	const accepted = svc.AcceptStop | svc.AcceptShutdown
 
 	changes <- svc.Status{State: svc.StartPending}

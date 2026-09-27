@@ -70,10 +70,14 @@ func installPlatform(_ context.Context, cfg *config.Config, opts Options) (*Inst
 		Name:      opts.Name,
 		Scope:     ScopeSystem,
 		UnitPath:  strings.Join([]string{`HKLM\SYSTEM\CurrentControlSet\Services`, opts.Name}, `\`),
-		StartCmd:  fmt.Sprintf("Restart-Service %s", opts.Name),
+		StartCmd:  RestartCommand(opts.Name, ScopeSystem),
 		StatusCmd: fmt.Sprintf("Get-Service %s", opts.Name),
 		LogsCmd:   fmt.Sprintf(`Get-EventLog -LogName Application -Source %s -Newest 50`, opts.Name),
 	}, nil
+}
+
+func restartArgs(name string, _ Scope) []string {
+	return []string{"powershell", "-NoProfile", "-Command", "Restart-Service " + name}
 }
 
 func uninstallPlatform(_ context.Context, opts Options) error {

@@ -71,6 +71,33 @@ func LaunchdLabel(name string) string {
 	return "app.arkame." + trimmed
 }
 
+// RestartArgs é o comando que reinicia o serviço, já com o escopo certo:
+// `systemctl --user` para o serviço do usuário, `gui/<uid>` no launchd do
+// usuário. Fonte única do reinício: `install` mostra, `set-storage-keys
+// --restart` executa. Escopo vazio = o padrão desta plataforma.
+func RestartArgs(name string, scope Scope) []string {
+	if name == "" {
+		name = DefaultName
+	}
+	if scope == "" {
+		scope = defaultScope()
+	}
+	return restartArgs(name, scope)
+}
+
+// RestartCommand é o RestartArgs para mostrar ao operador (com sudo quando o
+// serviço é do sistema, fora do Windows).
+func RestartCommand(name string, scope Scope) string {
+	if scope == "" {
+		scope = defaultScope()
+	}
+	cmd := strings.Join(RestartArgs(name, scope), " ")
+	if scope == ScopeSystem && !strings.HasPrefix(cmd, "powershell") {
+		return "sudo " + cmd
+	}
+	return strings.TrimPrefix(cmd, "powershell -NoProfile -Command ")
+}
+
 // Install registra o agent como serviço do SO.
 func Install(ctx context.Context, cfg *config.Config, opts Options) (*Installed, error) {
 	if opts.Name == "" {

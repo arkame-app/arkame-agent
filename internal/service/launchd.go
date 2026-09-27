@@ -54,10 +54,8 @@ func defaultScope() Scope {
 	return ScopeUser
 }
 
-func label(name string) string { return LaunchdLabel(name) }
-
 func installPlatform(ctx context.Context, cfg *config.Config, opts Options) (*Installed, error) {
-	lbl := label(opts.Name)
+	lbl := LaunchdLabel(opts.Name)
 
 	var plistPath, logPath string
 	switch opts.Scope {
@@ -114,10 +112,14 @@ func installPlatform(ctx context.Context, cfg *config.Config, opts Options) (*In
 		Name:      lbl,
 		Scope:     opts.Scope,
 		UnitPath:  plistPath,
-		StartCmd:  fmt.Sprintf("launchctl kickstart -k %s", target),
+		StartCmd:  RestartCommand(opts.Name, opts.Scope),
 		StatusCmd: fmt.Sprintf("launchctl print %s", target),
 		LogsCmd:   fmt.Sprintf("tail -f %s", logPath),
 	}, nil
+}
+
+func restartArgs(name string, scope Scope) []string {
+	return []string{"launchctl", "kickstart", "-k", serviceTarget(scope, LaunchdLabel(name))}
 }
 
 // serviceTarget é o alvo de um job específico (system/<label> ou gui/<uid>/<label>).
@@ -145,7 +147,7 @@ func xmlEscape(s string) string {
 }
 
 func uninstallPlatform(ctx context.Context, opts Options) error {
-	lbl := label(opts.Name)
+	lbl := LaunchdLabel(opts.Name)
 
 	var plistPath string
 	switch opts.Scope {

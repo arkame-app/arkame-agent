@@ -47,12 +47,19 @@ agent_id existente, preservando histórico e path no bucket.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 
-			cfg, err := config.Load(configFile, config.Overrides{
-				EnrollmentToken: enrollmentToken,
-				PanelURL:        panelURL,
-			})
+			carregar := func() (*config.Config, error) {
+				c, err := config.Load(configFile, config.Overrides{
+					EnrollmentToken: enrollmentToken,
+					PanelURL:        panelURL,
+				})
+				if err != nil {
+					return nil, fmt.Errorf("carregando config: %w", err)
+				}
+				return c, nil
+			}
+			cfg, err := carregar()
 			if err != nil {
-				return fmt.Errorf("carregando config: %w", err)
+				return err
 			}
 
 			if cfg.EnrollmentToken == "" {
@@ -65,14 +72,14 @@ agent_id existente, preservando histórico e path no bucket.`,
 			// A chave do bucket, testada, antes de registrar: servidor
 			// registrado com chave errada falharia no primeiro backup, calado.
 			if checkStorage {
-				if err := garantirCredencial(ctx, cfg, configFile); err != nil {
+				mudou, err := garantirCredencial(ctx, cfg, configFile)
+				if err != nil {
 					return err
 				}
-				if cfg, err = config.Load(configFile, config.Overrides{
-					EnrollmentToken: enrollmentToken,
-					PanelURL:        panelURL,
-				}); err != nil {
-					return fmt.Errorf("carregando config: %w", err)
+				if mudou {
+					if cfg, err = carregar(); err != nil {
+						return err
+					}
 				}
 			}
 

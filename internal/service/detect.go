@@ -4,7 +4,11 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"sync/atomic"
 )
+
+// nomeDoServicoWindows é preenchido pelo Execute do serviço no Windows.
+var nomeDoServicoWindows atomic.Value
 
 // Detected descreve como este processo do agent está sendo executado, para o
 // painel poder mostrar ao usuário o comando EXATO de reinício quando o agent
@@ -32,10 +36,13 @@ func Detect() Detected {
 		}
 		return Detected{}
 	case "windows":
-		// O nome que `install` dá ao serviço. Era "ArkameAgent", que nunca
-		// existiu: o painel mostrava `Restart-Service ArkameAgent`, e o comando
-		// falhava.
-		return Detected{Name: DefaultName, Scope: "windows"}
+		// O nome que o SCM entregou ao iniciar o serviço. Era a constante
+		// "ArkameAgent", que nunca existiu: o painel mostrava
+		// `Restart-Service ArkameAgent`, e o comando falhava.
+		if n, ok := nomeDoServicoWindows.Load().(string); ok && n != "" {
+			return Detected{Name: n, Scope: "windows"}
+		}
+		return Detected{}
 	default:
 		return Detected{}
 	}

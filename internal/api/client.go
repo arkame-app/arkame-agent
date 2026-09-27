@@ -125,6 +125,15 @@ func (c *Client) setHeaders(req *http.Request) {
 	}
 }
 
+// HTTPError é a resposta 4xx/5xx do painel, para o chamador decidir pelo
+// status (errors.As) e não pelo texto da mensagem.
+type HTTPError struct {
+	Status int
+	Body   string
+}
+
+func (e *HTTPError) Error() string { return fmt.Sprintf("HTTP %d: %s", e.Status, e.Body) }
+
 // ErrNotReady é retornado pelo GET quando o servidor responde 204 (long-poll sem evento).
 var ErrNotReady = fmt.Errorf("not ready (204)")
 
@@ -146,7 +155,7 @@ func (c *Client) do(req *http.Request, out any) error {
 	}
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+		return &HTTPError{Status: resp.StatusCode, Body: string(body)}
 	}
 
 	if out == nil {

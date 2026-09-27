@@ -150,7 +150,7 @@ func installSystemd(ctx context.Context, cfg *config.Config, opts Options) (*Ins
 	}
 
 	if opts.Scope == ScopeUser {
-		inst.StartCmd = fmt.Sprintf("systemctl --user restart %s", opts.Name)
+		inst.StartCmd = RestartCommand(opts.Name, opts.Scope)
 		inst.StatusCmd = fmt.Sprintf("systemctl --user status %s", opts.Name)
 		inst.LogsCmd = fmt.Sprintf("journalctl --user -u %s -f", opts.Name)
 		// Sem lingering, o serviço do usuário morre no logout e não voltaria
@@ -162,12 +162,19 @@ func installSystemd(ctx context.Context, cfg *config.Config, opts Options) (*Ins
 				err, currentUsername())
 		}
 	} else {
-		inst.StartCmd = fmt.Sprintf("sudo systemctl restart %s", opts.Name)
+		inst.StartCmd = RestartCommand(opts.Name, opts.Scope)
 		inst.StatusCmd = fmt.Sprintf("sudo systemctl status %s", opts.Name)
 		inst.LogsCmd = fmt.Sprintf("sudo journalctl -u %s -f", opts.Name)
 	}
 
 	return inst, nil
+}
+
+func restartArgs(name string, scope Scope) []string {
+	if scope == ScopeUser {
+		return []string{"systemctl", "--user", "restart", name}
+	}
+	return []string{"systemctl", "restart", name}
 }
 
 // writablePaths lista os diretórios que a unit de sistema precisa liberar para

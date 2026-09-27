@@ -34,6 +34,9 @@ func Open() (*Terminal, error) {
 	return &Terminal{in: f, out: os.Stderr, r: bufio.NewReader(f)}, nil
 }
 
+// Saida é onde as perguntas e os avisos aparecem.
+func (t *Terminal) Saida() io.Writer { return t.out }
+
 // Close libera o terminal.
 func (t *Terminal) Close() error { return t.in.Close() }
 

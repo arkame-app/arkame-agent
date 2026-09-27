@@ -19,6 +19,9 @@ import (
 	"strings"
 )
 
+// DefaultRegion é a região quando o armazenamento não informa uma.
+const DefaultRegion = "us-east-1"
+
 // Config é o conjunto completo de variáveis conhecidas pelo agent.
 type Config struct {
 	// ConfigPath é o env-file de onde esta config veio (ex.:
@@ -115,7 +118,7 @@ func Load(envFile string, o Overrides) (*Config, error) {
 		StorageAccessKey:     get("STORAGE_ACCESS_KEY"),
 		StorageSecretKey:     get("STORAGE_SECRET_KEY"),
 		StorageEndpoint:      get("STORAGE_ENDPOINT"),
-		StorageRegion:        firstNonEmpty(get("STORAGE_REGION"), "us-east-1"),
+		StorageRegion:        firstNonEmpty(get("STORAGE_REGION"), DefaultRegion),
 		StorageBucket:        get("STORAGE_BUCKET"),
 		StorageID:            get("STORAGE_ID"),
 		SiblingBuckets:       splitCSV(get("SIBLING_BUCKETS")),
