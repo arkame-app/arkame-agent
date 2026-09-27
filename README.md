@@ -118,19 +118,20 @@ systemctl status arkame-agent
 arkame-agent run --config /etc/arkame/agent.env
 ```
 
-### Docker
+### Docker — também um comando
+
+O registro roda num container com terminal (`-it`): pergunta e testa a chave,
+registra e espera a aprovação, gravando tudo em `/etc/arkame`. Só se ele terminar
+bem o container antigo sai e o serviço sobe (`--restart always`), lendo o mesmo
+lugar. `label=disable`: com SELinux (RHEL, Rocky, Fedora) o container não
+gravava em `/etc/arkame` nem lia o host; sem SELinux, não faz nada.
 
 ```bash
-# Registro: pergunta a chave (por isso -it), testa e espera a aprovação
-sudo docker run --rm -it --user 0 --hostname "$(hostname)" \
-  -v /etc/arkame:/etc/arkame \
-  ghcr.io/arkame-app/arkame-agent:latest \
-  install --token=atk_... --install-service=false
-
-# Serviço
-sudo docker run -d --name arkame-agent --restart always --user 0 --hostname "$(hostname)" \
-  -v /:/host:ro -v /etc/arkame:/etc/arkame \
-  ghcr.io/arkame-app/arkame-agent:latest
+sudo docker run --rm -it --user 0 --security-opt label=disable --hostname "$(hostname)" -v /etc/arkame:/etc/arkame \
+  ghcr.io/arkame-app/arkame-agent:latest install --token=atk_... --panel-url=https://save.arkame.app --install-service=false \
+&& { sudo docker rm -f arkame-agent >/dev/null 2>&1; \
+  sudo docker run -d --name arkame-agent --restart always --user 0 --security-opt label=disable --hostname "$(hostname)" \
+  -v /:/host:ro -v /etc/arkame:/etc/arkame ghcr.io/arkame-app/arkame-agent:latest; }
 ```
 
 ## Variáveis de ambiente
