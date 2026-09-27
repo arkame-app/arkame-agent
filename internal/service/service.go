@@ -63,7 +63,13 @@ type Installed struct {
 // LaunchdLabel converte o nome do serviço no identificador reverse-DNS que o
 // launchd espera: arkame-agent-aws → app.arkame.agent-aws. Fora de build tag
 // porque a CLI também monta o comando de reinício.
+//
+// Aceita também o próprio label: é o que o agente no macOS reporta ao painel,
+// e o comando de reinício do painel o devolve em --service-name.
 func LaunchdLabel(name string) string {
+	if strings.HasPrefix(name, "app.arkame.") {
+		return name
+	}
 	trimmed := strings.TrimPrefix(name, "arkame-")
 	if trimmed == "" {
 		trimmed = "agent"

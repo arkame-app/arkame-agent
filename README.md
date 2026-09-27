@@ -94,7 +94,7 @@ o teste.
 ### Trocar a chave do bucket
 
 ```bash
-sudo arkame-agent set-storage-keys --restart   # pergunta, testa, grava e reinicia
+sudo /usr/local/bin/arkame-agent set-storage-keys --restart   # pergunta, testa, grava e reinicia
 arkame-agent check-storage                      # só testa a chave do arquivo
 ```
 

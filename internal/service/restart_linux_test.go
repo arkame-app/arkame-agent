@@ -23,3 +23,17 @@ func TestRestartArgsSegueOEscopo(t *testing.T) {
 		t.Fatalf("comando do usuário, sem sudo: %q", got)
 	}
 }
+
+// O agente no macOS reporta o label do launchd como nome; o painel o devolve
+// em --service-name, e o reinício não pode prefixá-lo de novo.
+func TestLaunchdLabelAceitaOProprioLabel(t *testing.T) {
+	for nome, label := range map[string]string{
+		"arkame-agent":     "app.arkame.agent",
+		"arkame-agent-aws": "app.arkame.agent-aws",
+		"app.arkame.agent": "app.arkame.agent",
+	} {
+		if got := LaunchdLabel(nome); got != label {
+			t.Errorf("LaunchdLabel(%q) = %q, esperado %q", nome, got, label)
+		}
+	}
+}

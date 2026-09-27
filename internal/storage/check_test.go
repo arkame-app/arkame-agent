@@ -6,6 +6,22 @@ import (
 	"testing"
 )
 
+// Só a chave se corrige digitando outra chave: o instalador pergunta de novo
+// nesse caso, e para com a causa nos outros.
+func TestClasse(t *testing.T) {
+	casos := map[string]string{
+		"StatusCode: 403, api error InvalidAccessKeyId": "chave",
+		"api error PermanentRedirect":                   "bucket",
+		"dial tcp 1.2.3.4:443: i/o timeout":             "rede",
+		"algo novo":                                     "outra",
+	}
+	for msg, classe := range casos {
+		if c := Classe(errors.New(msg)); c != classe {
+			t.Errorf("Classe(%q) = %q, esperado %q", msg, c, classe)
+		}
+	}
+}
+
 func TestCausa(t *testing.T) {
 	casos := map[string]string{
 		"operation error S3: GetBucketVersioning, https response error StatusCode: 403, api error InvalidAccessKeyId": "recusou a chave",

@@ -212,6 +212,10 @@ try {
     Write-Host ""
     Write-Ok "Pronto. O painel mostra o servidor e o teste do bucket."
     Wait-ToClose
+} catch {
+    # Download que falha, zip corrompido: a janela elevada não pode fechar
+    # antes de a pessoa ler o motivo.
+    Stop-WithError $_.Exception.Message
 } finally {
     Remove-Item -Path $tmp -Recurse -Force -ErrorAction SilentlyContinue
 }

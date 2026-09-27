@@ -34,14 +34,10 @@ func Check(ctx context.Context, cfg *config.Config) error {
 	return nil
 }
 
-// Causa traduz o erro do SDK no que a pessoa corrige, e onde. A mensagem
-// crua do provedor continua disponível para o suporte.
-//
-// As mesmas classes que o painel usa na trilha (`causaDaFalha`).
-func Causa(err error) string {
-	if err == nil {
-		return ""
-	}
+// Classe da falha: "chave" (a pessoa corrige digitando de novo), "bucket"
+// (corrige o cadastro no painel), "rede" (corrige a máquina) ou "outra". As
+// mesmas classes que o painel usa na trilha (`causaDaFalha`).
+func Classe(err error) string {
 	var ae interface{ ErrorCode() string }
 	codigo := ""
 	if errors.As(err, &ae) {
@@ -50,10 +46,28 @@ func Causa(err error) string {
 	msg := codigo + " " + err.Error()
 	switch {
 	case contem(msg, "InvalidAccessKeyId", "SignatureDoesNotMatch", "AccessDenied", "Forbidden", "StatusCode: 401", "StatusCode: 403", "InvalidToken", "Unauthorized", "não configurados"):
-		return "o bucket recusou a chave: confira a chave de acesso e a senha (e se a chave tem permissão neste bucket)"
+		return "chave"
 	case contem(msg, "NoSuchBucket", "StatusCode: 404", "PermanentRedirect", "AuthorizationHeaderMalformed", "IllegalLocationConstraint"):
-		return "o bucket não foi encontrado com o nome, a região ou o endereço cadastrados: corrija o cadastro do armazenamento no painel"
+		return "bucket"
 	case contem(msg, "connection refused", "no such host", "dial tcp", "i/o timeout", "deadline exceeded", "certificate", "tls:"):
+		return "rede"
+	default:
+		return "outra"
+	}
+}
+
+// Causa traduz o erro do SDK no que a pessoa corrige, e onde. A mensagem
+// crua do provedor continua disponível para o suporte.
+func Causa(err error) string {
+	if err == nil {
+		return ""
+	}
+	switch Classe(err) {
+	case "chave":
+		return "o bucket recusou a chave: confira a chave de acesso e a senha (e se a chave tem permissão neste bucket)"
+	case "bucket":
+		return "o bucket não foi encontrado com o nome, a região ou o endereço cadastrados: corrija o cadastro do armazenamento no painel"
+	case "rede":
 		return "não foi possível chegar ao bucket pela rede: confira o acesso desta máquina à internet, proxy ou firewall"
 	default:
 		return "o bucket respondeu com um erro inesperado"

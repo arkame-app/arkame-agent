@@ -13,11 +13,11 @@ import (
 	"testing"
 )
 
-func TestGravarETrocarChaves(t *testing.T) {
+func TestGravar(t *testing.T) {
 	caminho := filepath.Join(t.TempDir(), "arkame", "agent.env")
 	regiao := "sa-saopaulo-1"
 	p := &DoPainel{AgentID: "a1", Armazenamento: &Armazenamento{ID: "s1", Bucket: "b", Region: &regiao}}
-	if err := Gravar(caminho, Linhas(p, "https://painel"), "AK1", "SK1"); err != nil {
+	if err := Gravar(caminho, append(Linhas(p, "https://painel"), Chaves("AK1", "SK1")...)); err != nil {
 		t.Fatal(err)
 	}
 	b, _ := os.ReadFile(caminho)
@@ -35,7 +35,7 @@ func TestGravarETrocarChaves(t *testing.T) {
 	if err := os.WriteFile(caminho, append(b, []byte("SIBLING_BUCKETS=x\n")...), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := TrocarChaves(caminho, "AK2", "SK2"); err != nil {
+	if err := Gravar(caminho, Chaves("AK2", "SK2")); err != nil {
 		t.Fatal(err)
 	}
 	b, _ = os.ReadFile(caminho)
@@ -50,6 +50,40 @@ func TestGravarETrocarChaves(t *testing.T) {
 	}
 	if _, err := os.Stat(caminho + ".novo"); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("arquivo temporário ficou para trás")
+	}
+}
+
+// Arquivo que já existia sem a chave (escrito à mão, com linhas próprias):
+// gravar a configuração da instalação não apaga o que era dele.
+func TestGravarPreservaOQueJaEstava(t *testing.T) {
+	caminho := filepath.Join(t.TempDir(), "agent.env")
+	if err := os.WriteFile(caminho, []byte("SIBLING_BUCKETS=outro\nHTTPS_PROXY=http://proxy:3128\nSTORAGE_BUCKET=velho\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Gravar(caminho, []string{"STORAGE_BUCKET=novo", "STORAGE_ACCESS_KEY=AK"}); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(caminho)
+	want := "SIBLING_BUCKETS=outro\nHTTPS_PROXY=http://proxy:3128\nSTORAGE_BUCKET=novo\nSTORAGE_ACCESS_KEY=AK\n"
+	if string(b) != want {
+		t.Fatalf("arquivo:\n%s\nesperado:\n%s", b, want)
+	}
+}
+
+func TestPodeGravar(t *testing.T) {
+	if err := PodeGravar(filepath.Join(t.TempDir(), "sub", "agent.env")); err != nil {
+		t.Fatalf("diretório próprio deveria poder: %v", err)
+	}
+	if os.Getuid() == 0 {
+		t.Skip("root escreve em qualquer lugar")
+	}
+	somenteLeitura := t.TempDir()
+	if err := os.Chmod(somenteLeitura, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(somenteLeitura, 0o700)
+	if err := PodeGravar(filepath.Join(somenteLeitura, "agent.env")); err == nil || !strings.Contains(err.Error(), "sudo") {
+		t.Fatalf("sem permissão deveria avisar antes de perguntar a chave, deu %v", err)
 	}
 }
 
@@ -77,7 +111,9 @@ func TestBuscarNoPainel(t *testing.T) {
 	if p.Armazenamento.Bucket != "b" || p.Armazenamento.Region != nil || *p.Armazenamento.Endpoint != "https://e" {
 		t.Fatalf("resposta mal lida: %+v", p.Armazenamento)
 	}
-	if l := Linhas(p, "https://outro"); l[1] != "PANEL_URL=https://p" || l[len(l)-1] != "STORAGE_ENDPOINT=https://e" {
+	// O painel gravado é o que a instalação usou (--panel-url), não o que o
+	// painel diz de si: o serviço só lê o arquivo.
+	if l := Linhas(p, "https://outro"); l[1] != "PANEL_URL=https://outro" || l[len(l)-1] != "STORAGE_ENDPOINT=https://e" {
 		t.Fatalf("linhas: %v", l)
 	}
 	if _, err := BuscarNoPainel(context.Background(), srv.URL, "atk_velho"); !errors.Is(err, ErrCodigoInvalido) {

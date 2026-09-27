@@ -34,8 +34,9 @@ func garantirCredencial(ctx context.Context, cfg *config.Config, caminho string)
 			return false, nil
 		}
 		t, terr := terminal.Open()
-		if terr != nil {
-			return false, fmt.Errorf("%s (%v). Corrija a chave em %s, ou rode `arkame-agent set-storage-keys` num terminal", storage.Causa(err), err, caminho)
+		if terr != nil || storage.Classe(err) != "chave" {
+			// Sem terminal, ou problema que outra chave não resolve.
+			return false, fmt.Errorf("%s (%v). Arquivo: %s", storage.Causa(err), err, caminho)
 		}
 		defer t.Close()
 		fmt.Fprintf(os.Stderr, "\n  ✗ A chave de %s não funciona: %s.\n", caminho, storage.Causa(err))
@@ -43,11 +44,14 @@ func garantirCredencial(ctx context.Context, cfg *config.Config, caminho string)
 		if err != nil {
 			return false, err
 		}
-		return true, setup.TrocarChaves(caminho, ak, sk)
+		return true, setup.Gravar(caminho, setup.Chaves(ak, sk))
 	}
 
 	if cfg.EnrollmentToken == "" {
 		return false, fmt.Errorf("sem chave do bucket em %s", caminho)
+	}
+	if err := setup.PodeGravar(caminho); err != nil {
+		return false, err
 	}
 	t, err := terminal.Open()
 	if err != nil {
@@ -65,7 +69,7 @@ func garantirCredencial(ctx context.Context, cfg *config.Config, caminho string)
 	if err != nil {
 		return false, err
 	}
-	if err := setup.Gravar(caminho, setup.Linhas(p, cfg.PanelURL), ak, sk); err != nil {
+	if err := setup.Gravar(caminho, append(setup.Linhas(p, cfg.PanelURL), setup.Chaves(ak, sk)...)); err != nil {
 		return false, err
 	}
 	fmt.Fprintln(os.Stderr, "  ✓ Gravado em", caminho)
@@ -138,7 +142,7 @@ chave nova (o comando aparece no fim).`,
 			if err != nil {
 				return err
 			}
-			if err := setup.TrocarChaves(configFile, ak, sk); err != nil {
+			if err := setup.Gravar(configFile, setup.Chaves(ak, sk)); err != nil {
 				return err
 			}
 			fmt.Fprintln(os.Stderr, "  ✓ Gravado em", configFile)

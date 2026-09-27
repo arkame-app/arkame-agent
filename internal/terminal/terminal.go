@@ -12,7 +12,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 )
 
 // ErrSemTerminal indica que não há quem responda: serviço, CI, container sem -it.
@@ -56,7 +58,23 @@ func (t *Terminal) Segredo(rotulo string) (string, error) {
 		fmt.Fprint(t.out, "(o texto vai aparecer) ")
 		return t.linha()
 	}
+	// Ctrl+C no meio da senha: sem isto, o processo morria com o eco
+	// desligado e o shell de quem instalava ficava sem mostrar o que digita.
+	sinal := make(chan os.Signal, 1)
+	fim := make(chan struct{})
+	signal.Notify(sinal, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		select {
+		case <-sinal:
+			restaurar()
+			fmt.Fprintln(t.out)
+			os.Exit(130)
+		case <-fim:
+		}
+	}()
 	v, err := t.linha()
+	signal.Stop(sinal)
+	close(fim)
 	restaurar()
 	fmt.Fprintln(t.out)
 	return v, err

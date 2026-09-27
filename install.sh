@@ -224,7 +224,8 @@ main() {
     printf '\n'
     info "Próximo passo — registre este servidor no painel:"
     printf '\n'
-    info "  ${BOLD}sudo arkame-agent install --token=SEU_CODIGO${RESET}"
+    # Caminho completo: o sudo do RHEL/Fedora não procura em /usr/local/bin.
+    info "  ${BOLD}sudo $BIN_DIR/arkame-agent install --token=SEU_CODIGO${RESET}"
     printf '\n'
     info "O código aparece em $PANEL_URL/agents/new."
     printf '\n'

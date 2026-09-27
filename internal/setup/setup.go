@@ -37,7 +37,6 @@ type Armazenamento struct {
 type DoPainel struct {
 	AgentID       string         `json:"agent_id"`
 	DisplayName   string         `json:"display_name"`
-	PanelURL      string         `json:"panel_url"`
 	Armazenamento *Armazenamento `json:"storage"`
 }
 
@@ -65,11 +64,10 @@ func BuscarNoPainel(ctx context.Context, panelURL, codigo string) (*DoPainel, er
 }
 
 // Linhas monta o arquivo de configuração, sem as chaves. O que o painel não
-// disse (região, endereço) fica fora, e o agente usa o padrão.
+// disse (região, endereço) fica fora, e o agente usa o padrão. O painel é o
+// que a instalação usou (--panel-url): o serviço lê só este arquivo, e o
+// endereço que o painel conhece de si pode não ser o que esta máquina alcança.
 func Linhas(p *DoPainel, panelURL string) []string {
-	if p.PanelURL != "" {
-		panelURL = p.PanelURL
-	}
 	a := p.Armazenamento
 	l := []string{
 		"AGENT_ID=" + p.AgentID,
@@ -108,7 +106,8 @@ func NaConfig(p *DoPainel, cfg *config.Config) *config.Config {
 const MaxTentativas = 5
 
 // PerguntarETestar pede a chave e a senha até o bucket aceitar. Devolve as
-// duas quando o teste passa.
+// duas quando o teste passa. Só pergunta de novo quando o problema é a chave:
+// rede, nome do bucket ou região não se corrigem digitando outra chave.
 func PerguntarETestar(ctx context.Context, t *terminal.Terminal, base *config.Config) (string, string, error) {
 	out := t.Saida()
 	fmt.Fprintf(out, "\n  Credencial do bucket %s (fica só nesta máquina; o painel não a recebe)\n\n", base.StorageBucket)
@@ -130,6 +129,9 @@ func PerguntarETestar(ctx context.Context, t *terminal.Terminal, base *config.Co
 		fmt.Fprintln(out, "  Testando no bucket…")
 		if err := storage.Check(ctx, &c); err != nil {
 			fmt.Fprintf(out, "  ✗ %s.\n    (%s)\n\n", storage.Causa(err), resumo(err))
+			if storage.Classe(err) != "chave" {
+				return "", "", fmt.Errorf("%s", storage.Causa(err))
+			}
 			if tentativa < MaxTentativas {
 				fmt.Fprintln(out, "  Digite de novo:")
 			}
@@ -141,16 +143,30 @@ func PerguntarETestar(ctx context.Context, t *terminal.Terminal, base *config.Co
 	return "", "", fmt.Errorf("o bucket recusou a chave %d vezes: confira a chave no provedor e rode o comando de novo", MaxTentativas)
 }
 
-// Gravar escreve o arquivo com as linhas e as chaves, legível só pelo
-// administrador (0600; no Windows, Administradores e SYSTEM).
-func Gravar(caminho string, linhas []string, ak, sk string) error {
+// Gravar escreve as linhas no arquivo, legível só pelo administrador (0600;
+// no Windows, Administradores e SYSTEM). O que o arquivo já tinha e não é
+// uma destas chaves fica — SIBLING_BUCKETS, caminhos próprios, proxy.
+func Gravar(caminho string, linhas []string) error {
 	if err := os.MkdirAll(filepath.Dir(caminho), 0o700); err != nil {
 		return fmt.Errorf("criando %s: %w", filepath.Dir(caminho), err)
 	}
-	conteudo := strings.Join(append(append([]string{}, linhas...),
-		"STORAGE_ACCESS_KEY="+ak,
-		"STORAGE_SECRET_KEY="+sk,
-	), "\n") + "\n"
+	novas := map[string]bool{}
+	for _, l := range linhas {
+		k, _, _ := strings.Cut(l, "=")
+		novas[k] = true
+	}
+	var mantidas []string
+	if b, err := os.ReadFile(caminho); err == nil {
+		for _, l := range strings.Split(strings.ReplaceAll(string(b), "\r\n", "\n"), "\n") {
+			k, _, _ := strings.Cut(strings.TrimSpace(l), "=")
+			if strings.TrimSpace(l) != "" && !novas[k] {
+				mantidas = append(mantidas, l)
+			}
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("lendo %s: %w", caminho, err)
+	}
+	conteudo := strings.Join(append(mantidas, linhas...), "\n") + "\n"
 	tmp := caminho + ".novo"
 	if err := os.WriteFile(tmp, []byte(conteudo), 0o600); err != nil {
 		return fmt.Errorf("gravando %s: %w", caminho, err)
@@ -166,21 +182,25 @@ func Gravar(caminho string, linhas []string, ak, sk string) error {
 	return nil
 }
 
-// TrocarChaves regrava só as duas chaves, preservando o resto do arquivo.
-func TrocarChaves(caminho, ak, sk string) error {
-	b, err := os.ReadFile(caminho)
+// Chaves são as duas linhas da credencial.
+func Chaves(ak, sk string) []string {
+	return []string{"STORAGE_ACCESS_KEY=" + ak, "STORAGE_SECRET_KEY=" + sk}
+}
+
+// PodeGravar confere, antes de perguntar qualquer coisa, que o arquivo pode
+// ser escrito: sem isso, quem instala sem sudo digitava a chave, via o teste
+// passar e só então esbarrava na permissão.
+func PodeGravar(caminho string) error {
+	dir := filepath.Dir(caminho)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("sem permissão para gravar em %s: rode com sudo (ou como administrador), ou aponte --config para um caminho seu", dir)
+	}
+	f, err := os.CreateTemp(dir, ".arkame-teste-*")
 	if err != nil {
-		return fmt.Errorf("lendo %s: %w", caminho, err)
+		return fmt.Errorf("sem permissão para gravar em %s: rode com sudo (ou como administrador), ou aponte --config para um caminho seu", dir)
 	}
-	var linhas []string
-	for _, l := range strings.Split(strings.ReplaceAll(string(b), "\r\n", "\n"), "\n") {
-		k, _, _ := strings.Cut(strings.TrimSpace(l), "=")
-		if l == "" || k == "STORAGE_ACCESS_KEY" || k == "STORAGE_SECRET_KEY" {
-			continue
-		}
-		linhas = append(linhas, l)
-	}
-	return Gravar(caminho, linhas, ak, sk)
+	f.Close()
+	return os.Remove(f.Name())
 }
 
 // resumo encurta a mensagem do SDK: a primeira linha basta ao suporte.
