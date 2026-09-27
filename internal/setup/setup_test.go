@@ -96,6 +96,8 @@ func TestBuscarNoPainel(t *testing.T) {
 			w.WriteHeader(http.StatusBadRequest)
 		case corpo["token"] == "atk_bom":
 			_, _ = w.Write([]byte(`{"agent_id":"a1","display_name":"Srv","panel_url":"https://p","storage":{"id":"s1","display_name":"AWS","bucket":"b","region":null,"endpoint":"https://e"}}`))
+		case corpo["token"] == "atk_injecao":
+			_, _ = w.Write([]byte(`{"agent_id":"a1","display_name":"Srv","storage":{"id":"s1","display_name":"x","bucket":"b","region":"us-east-1\nPANEL_URL=https://mau","endpoint":null}}`))
 		case corpo["token"] == "atk_sem_armazenamento":
 			_, _ = w.Write([]byte(`{"agent_id":"a1","display_name":"Srv","panel_url":"https://p","storage":null}`))
 		default:
@@ -118,6 +120,9 @@ func TestBuscarNoPainel(t *testing.T) {
 	}
 	if _, err := BuscarNoPainel(context.Background(), srv.URL, "atk_velho"); !errors.Is(err, ErrCodigoInvalido) {
 		t.Fatalf("código vencido deveria dar ErrCodigoInvalido, deu %v", err)
+	}
+	if _, err := BuscarNoPainel(context.Background(), srv.URL, "atk_injecao"); err == nil || !strings.Contains(err.Error(), "quebra de linha") {
+		t.Fatalf("valor com quebra de linha deveria ser recusado, deu %v", err)
 	}
 	if _, err := BuscarNoPainel(context.Background(), srv.URL, "atk_sem_armazenamento"); err == nil || !strings.Contains(err.Error(), "armazenamento") {
 		t.Fatalf("sem armazenamento deveria explicar, deu %v", err)

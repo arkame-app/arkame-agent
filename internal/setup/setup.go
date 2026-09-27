@@ -60,6 +60,15 @@ func BuscarNoPainel(ctx context.Context, panelURL, codigo string) (*DoPainel, er
 	if r.Armazenamento == nil {
 		return nil, errors.New("o painel não sabe qual armazenamento este servidor vai usar: gere o comando pela tela Novo servidor, escolhendo o armazenamento")
 	}
+	// Cada valor vira uma linha do arquivo: quebra de linha escreveria outra
+	// chave nele (PANEL_URL=…). O painel já recusa no cadastro; aqui é a
+	// segunda camada.
+	a := r.Armazenamento
+	for _, v := range []*string{&r.AgentID, &a.ID, &a.Bucket, a.Region, a.Endpoint} {
+		if v != nil && strings.ContainsAny(*v, "\r\n") {
+			return nil, errors.New("o painel respondeu um valor com quebra de linha: não gravo isso no arquivo de configuração")
+		}
+	}
 	return &r, nil
 }
 
