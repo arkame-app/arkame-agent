@@ -60,6 +60,17 @@ type Installed struct {
 	NeedsManual string
 }
 
+// LaunchdLabel converte o nome do serviço no identificador reverse-DNS que o
+// launchd espera: arkame-agent-aws → app.arkame.agent-aws. Fora de build tag
+// porque a CLI também monta o comando de reinício.
+func LaunchdLabel(name string) string {
+	trimmed := strings.TrimPrefix(name, "arkame-")
+	if trimmed == "" {
+		trimmed = "agent"
+	}
+	return "app.arkame." + trimmed
+}
+
 // Install registra o agent como serviço do SO.
 func Install(ctx context.Context, cfg *config.Config, opts Options) (*Installed, error) {
 	if opts.Name == "" {

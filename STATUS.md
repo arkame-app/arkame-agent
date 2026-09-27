@@ -4,6 +4,23 @@
 
 > Trabalho ativo principal está no painel (`~/hugo-projects/arkame/`). Para o status global do produto, ver `~/hugo-projects/arkame/STATUS.md`.
 
+## 🧭 Instalação em um comando, com a chave testada (2026-09-27, v0.3.0)
+
+Um Windows real instalou com a chave do bucket errada e nada avisou; e a instalação pedia dois
+comandos num PowerShell como administrador.
+- `install` garante a credencial antes de registrar (`cli/credencial.go`): sem chave no arquivo,
+  pergunta ao painel qual bucket (`POST /api/agents/install-config`, pelo código), pede a chave
+  no terminal (`internal/terminal`: `/dev/tty` ou `CONIN$`, senha sem eco via `x/sys`), testa
+  (`storage.Check` = `GetBucketVersioning`) e grava o arquivo 0600 (Windows: `icacls` por SID).
+  Com chave no arquivo, testa; recusada e sem terminal, para com a causa (`storage.Causa`).
+  `--check-storage=false` pula.
+- Comandos novos: `check-storage`, `set-storage-keys [--restart] [--pause]`.
+- `install.ps1` se reabre elevado (UAC) com `-EncodedCommand` e valida código/painel/versão;
+  a linha do painel não tem `$` e cabe no Executar. `install.sh` valida o código.
+- `service.Detect()` no Windows reportava `ArkameAgent`, nome que não existe; agora `arkame-agent`.
+- Provas: `go test ./internal/setup ./internal/storage`; laço e2e do painel (`scripts/laco.sh`)
+  roda o agente real contra RustFS, com terminal simulado.
+
 ## 🔧 Probe estendido + on-demand + reconcile (2026-06-25)
 
 Acompanha as 13 melhorias de UX do painel. **Compila + `go vet` limpos** (Docker `golang:1.24-alpine`); validação E2E contra storage real pendente (próxima janela com o agente ativo).

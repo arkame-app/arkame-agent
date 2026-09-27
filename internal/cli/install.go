@@ -23,6 +23,7 @@ func newInstallCmd() *cobra.Command {
 		serviceScope    string
 		hostName        string
 		waitApproval    bool
+		checkStorage    bool
 	)
 
 	cmd := &cobra.Command{
@@ -59,6 +60,20 @@ agent_id existente, preservando histórico e path no bucket.`,
 			}
 			if cfg.PanelURL == "" {
 				return fmt.Errorf("panel URL é obrigatório (--panel-url ou PANEL_URL)")
+			}
+
+			// A chave do bucket, testada, antes de registrar: servidor
+			// registrado com chave errada falharia no primeiro backup, calado.
+			if checkStorage {
+				if err := garantirCredencial(ctx, cfg, configFile); err != nil {
+					return err
+				}
+				if cfg, err = config.Load(configFile, config.Overrides{
+					EnrollmentToken: enrollmentToken,
+					PanelURL:        panelURL,
+				}); err != nil {
+					return fmt.Errorf("carregando config: %w", err)
+				}
 			}
 
 			result, err := enrollment.Run(ctx, cfg, enrollment.Options{
@@ -129,6 +144,7 @@ agent_id existente, preservando histórico e path no bucket.`,
 	cmd.Flags().StringVar(&serviceName, "service-name", service.DefaultName, "nome do serviço — use um por credencial de storage no mesmo host (ex.: arkame-agent-aws)")
 	cmd.Flags().StringVar(&serviceScope, "service-scope", "", "system (todo o host, exige root) ou user (só o seu usuário, sem sudo). Padrão: system se root, senão user")
 	cmd.Flags().StringVar(&hostName, "hostname", "", "hostname reportado (default: hostname do sistema)")
+	cmd.Flags().BoolVar(&checkStorage, "check-storage", true, "testar a chave do bucket antes de registrar (sem chave no arquivo, pergunta no terminal)")
 	cmd.Flags().BoolVar(&waitApproval, "wait", true, "aguardar aprovação humana (long-poll). --wait=false retorna logo após enrollment")
 
 	// Mantém alias antigo para compatibilidade com docs.

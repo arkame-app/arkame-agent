@@ -4,19 +4,24 @@
 
 .DESCRIPTION
   Baixa o binário da versão mais recente, confere o checksum SHA-256 e instala
-  em C:\Program Files\Arkame. Com um token, também registra o servidor no
-  painel e cria o serviço do Windows.
+  em C:\Program Files\Arkame. Com o código de instalação do painel, também
+  pergunta a chave do bucket, testa, registra o servidor e cria o serviço.
 
 .EXAMPLE
-  irm https://get.arkame.app/install.ps1 | iex
+  # Windows + R, cole e Enter (o comando que o painel mostra):
+  powershell -ExecutionPolicy Bypass -Command "&([scriptblock]::Create((irm https://get.arkame.app/install.ps1))) -Token atk_xxx"
 
 .EXAMPLE
   $env:ARKAME_TOKEN = 'atk_xxx'
   irm https://get.arkame.app/install.ps1 | iex
 
 .NOTES
-  Registrar o serviço exige PowerShell como Administrador — no Windows não há
-  equivalente ao serviço por usuário do Linux.
+  Instalar o serviço exige administrador. Quem roda sem ser administrador vê o
+  pedido de permissão do Windows e o instalador continua numa janela nova, já
+  elevada — ninguém precisa saber abrir o PowerShell como administrador.
+
+  O comando da primeira linha não usa `$`: colado no Executar, no Prompt de
+  Comando ou no PowerShell, chega igual ao instalador.
 #>
 
 [CmdletBinding()]
@@ -25,7 +30,12 @@ param(
     [string]$PanelUrl    = $(if ($env:ARKAME_PANEL_URL) { $env:ARKAME_PANEL_URL } else { 'https://save.arkame.app' }),
     [string]$Version     = $env:ARKAME_VERSION,
     [string]$ServiceName = 'arkame-agent',
-    [switch]$NoService
+    [switch]$NoService,
+    # Onde este script mora, para se reabrir como administrador.
+    [string]$ScriptUrl   = $(if ($env:ARKAME_SCRIPT_URL) { $env:ARKAME_SCRIPT_URL } else { 'https://get.arkame.app/install.ps1' }),
+    # Marca a janela reaberta como administrador: ela espera um Enter no fim,
+    # senão fecha antes de a pessoa ler o resultado.
+    [switch]$Elevated
 )
 
 $ErrorActionPreference = 'Stop'
@@ -34,9 +44,16 @@ $Repo = 'arkame-app/arkame-agent'
 function Write-Info { param([string]$Message) Write-Host "  $Message" }
 function Write-Ok   { param([string]$Message) Write-Host "  [ok] $Message" -ForegroundColor Green }
 function Write-Warn { param([string]$Message) Write-Host "  [!] $Message"  -ForegroundColor Yellow }
+function Wait-ToClose {
+    if ($Elevated) {
+        Write-Host ""
+        Read-Host "  Pressione Enter para fechar" | Out-Null
+    }
+}
 function Stop-WithError {
     param([string]$Message)
     Write-Host "  [x] $Message" -ForegroundColor Red
+    Wait-ToClose
     exit 1
 }
 
@@ -47,8 +64,42 @@ function Test-Administrator {
 }
 
 Write-Host ""
-Write-Host "Instalador do agent Arkame" -ForegroundColor Cyan
+Write-Host "Instalador do agente Arkame" -ForegroundColor Cyan
 Write-Host ""
+
+# O que vai para a linha de comando da janela elevada precisa ter a forma
+# esperada: nada de aspas nem espaços que mudem o comando.
+if ($Token -and $Token -notmatch '^atk_[A-Za-z0-9_-]{16,}$') {
+    Stop-WithError "codigo de instalacao invalido. Copie de novo o comando do painel."
+}
+if ($PanelUrl -notmatch '^https?://[A-Za-z0-9.:/_-]+$') {
+    Stop-WithError "endereco do painel invalido: $PanelUrl"
+}
+if ($Version -and $Version -notmatch '^v[0-9A-Za-z.+-]+$') {
+    Stop-WithError "versao invalida: $Version"
+}
+
+# Sem administrador: reabre este instalador elevado. O Windows mostra o pedido
+# de permissão; a janela nova baixa o script de novo e segue daqui.
+if (-not (Test-Administrator)) {
+    if ($ScriptUrl -notmatch '^https://[A-Za-z0-9.:/_-]+$') {
+        Stop-WithError "endereco do instalador invalido: $ScriptUrl"
+    }
+    $partes = @("-ScriptUrl '$ScriptUrl'", "-PanelUrl '$PanelUrl'", "-ServiceName '$ServiceName'", '-Elevated')
+    if ($Token)     { $partes += "-Token '$Token'" }
+    if ($Version)   { $partes += "-Version '$Version'" }
+    if ($NoService) { $partes += '-NoService' }
+    $comando = "&([scriptblock]::Create((Invoke-RestMethod -UseBasicParsing '$ScriptUrl'))) " + ($partes -join ' ')
+    $codificado = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($comando))
+    Write-Info "O Windows vai pedir permissao de administrador: clique em Sim."
+    Write-Info "A instalacao continua na janela que abrir."
+    try {
+        Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $codificado)
+    } catch {
+        Stop-WithError "sem permissao de administrador, nao da para instalar o servico. Rode de novo e clique em Sim."
+    }
+    exit 0
+}
 
 # TLS 1.2 para o Windows Server 2016/2019, onde não é o padrão.
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
@@ -77,9 +128,6 @@ $installDir = Join-Path $env:ProgramFiles 'Arkame'
 $exePath    = Join-Path $installDir 'arkame-agent.exe'
 Write-Info "Destino:    $exePath"
 
-if (-not (Test-Administrator)) {
-    Stop-WithError "abra o PowerShell como Administrador: instalar em '$installDir' e criar o servico exigem privilegio elevado."
-}
 
 # ── download ─────────────────────────────────────────────────────────────────
 $archive = "arkame-agent_windows_$arch.zip"
@@ -144,22 +192,26 @@ try {
         Write-Host ""
         Write-Info "Proximo passo - registre este servidor no painel:"
         Write-Host ""
-        Write-Info "  & '$exePath' install --token=SEU_TOKEN"
+        Write-Info "  & '$exePath' install --token=SEU_CODIGO"
         Write-Host ""
-        Write-Info "O token aparece em $PanelUrl/agents/new."
+        Write-Info "O codigo aparece em $PanelUrl/agents/new."
         Write-Host ""
+        Wait-ToClose
         exit 0
     }
 
+    # O agente pergunta a chave do bucket, testa e só então registra.
     Write-Host ""
-    Write-Info "Registrando este servidor no painel..."
     $agentArgs = @('install', "--token=$Token", "--panel-url=$PanelUrl", "--service-name=$ServiceName")
     if ($NoService) { $agentArgs += '--install-service=false' }
 
     & $exePath @agentArgs
     if ($LASTEXITCODE -ne 0) {
-        Stop-WithError "o registro falhou (codigo $LASTEXITCODE). Rode novamente com o token do painel."
+        Stop-WithError "a instalacao nao terminou (codigo $LASTEXITCODE). Veja a mensagem acima."
     }
+    Write-Host ""
+    Write-Ok "Pronto. O painel mostra o servidor e o teste do bucket."
+    Wait-ToClose
 } finally {
     Remove-Item -Path $tmp -Recurse -Force -ErrorAction SilentlyContinue
 }

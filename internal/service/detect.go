@@ -32,7 +32,10 @@ func Detect() Detected {
 		}
 		return Detected{}
 	case "windows":
-		return Detected{Name: "ArkameAgent", Scope: "windows"}
+		// O nome que `install` dá ao serviço. Era "ArkameAgent", que nunca
+		// existiu: o painel mostrava `Restart-Service ArkameAgent`, e o comando
+		// falhava.
+		return Detected{Name: DefaultName, Scope: "windows"}
 	default:
 		return Detected{}
 	}

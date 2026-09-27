@@ -31,12 +31,14 @@ Agent Go do SaaS [Arkame](https://arkame.app) — roda no servidor do cliente, l
 arkame-agent/
 ├── cmd/arkame-agent/main.go    # entry point (delega pro cobra root)
 ├── internal/
-│   ├── cli/                    # comandos: install, run, status, version
+│   ├── cli/                    # comandos: install, run, status, check-storage, set-storage-keys, service, version
 │   ├── config/                 # env-file + flags + defaults
 │   ├── crypto/                 # Ed25519 keypair + fingerprint
 │   ├── enrollment/             # fluxo de registro (first-time + reinstall)
 │   ├── api/                    # HTTP client + types do painel
-│   ├── storage/                # S3 client + probe (GetBucketVersioning etc)
+│   ├── storage/                # S3 client + probe (GetBucketVersioning etc) + check
+│   ├── setup/                  # chave do bucket na instalação: painel, pergunta, teste, arquivo
+│   ├── terminal/               # perguntas no /dev/tty (CONIN$ no Windows), senha sem eco
 │   ├── sync/                   # walker + hasher + engine de upload + throttle
 │   ├── scheduler/              # janelas de tempo + decisão de "should run agora"
 │   ├── daemon/                 # loop principal (heartbeat, poll, execute)
@@ -61,38 +63,55 @@ Binários vão pra `bin/`. Makefile embute `version.Version` / `version.Commit` 
 
 ## Uso
 
-### Primeira instalação
+### Primeira instalação — um comando
+
+O painel, em **Servidores → Novo servidor**, gera o comando com o código de
+instalação (`atk_…`, vale 24 horas e uma vez). Ele baixa o agente, confere o
+checksum, **pergunta a chave de acesso e a senha do bucket, testa no bucket** e
+só então registra o servidor e instala o serviço. Chave recusada: diz a causa e
+pergunta de novo. A chave fica no servidor; o painel só informa qual bucket
+(`POST /api/agents/install-config`).
 
 ```bash
-# 1. Criar arquivo de credenciais do bucket
-sudo mkdir -p /etc/arkame
-sudo tee /etc/arkame/agent.env > /dev/null <<EOF
-STORAGE_ACCESS_KEY=SUA_ACCESS_KEY
-STORAGE_SECRET_KEY=SEU_SECRET
-EOF
-sudo chmod 600 /etc/arkame/agent.env
-
-# 2. Enrollar no painel
-sudo arkame-agent install \
-  --config /etc/arkame/agent.env \
-  --enrollment-token enr_01HXQZ3JK8ABC123DEF456 \
-  --panel-url https://save.arkame.app
-
-# O output imprime o fingerprint. Aprove no painel em:
-#   https://save.arkame.app/agents/<agent_id>
-
-# 3. Verificar status
-arkame-agent status
+# Linux e macOS
+curl -fsSL https://get.arkame.app/install.sh | sudo sh -s -- --token=atk_...
 ```
+
+```text
+# Windows: Windows + R, colar, Enter. O script pede administrador sozinho
+# (o "Sim" do Windows) e continua numa janela nova. Sem `$` de propósito:
+# chega igual colado no Executar, no Prompt de Comando ou no PowerShell.
+powershell -ExecutionPolicy Bypass -Command "&([scriptblock]::Create((irm https://get.arkame.app/install.ps1))) -Token atk_..."
+```
+
+O arquivo gravado (`/etc/arkame/agent.env`; no Windows `C:\etc\arkame\agent.env`)
+fica legível só pelo administrador (0600; no Windows, Administradores e SYSTEM).
+
+Sem terminal (automação), grave o arquivo antes: o `install` testa a chave que
+estiver lá e para com a causa se o bucket recusar. `--check-storage=false` pula
+o teste.
+
+### Trocar a chave do bucket
+
+```bash
+sudo arkame-agent set-storage-keys --restart   # pergunta, testa, grava e reinicia
+arkame-agent check-storage                      # só testa a chave do arquivo
+```
+
+No Windows, o painel mostra a linha para o Windows + R
+(`Start-Process -Verb RunAs … 'set-storage-keys --restart --pause'`).
 
 ### Re-enrollment (trocar servidor mantendo histórico)
 
-Mesmo comando `install` na nova máquina, com um **token fresh** gerado no painel clicando "Reinstalar" em `/agents/:id`. O painel identifica que o token está amarrado a um `agent_id` existente e preserva histórico ao aprovar a nova fingerprint.
+Mesmo comando na nova máquina, com um **código novo** gerado no painel em
+"Reinstalar" (`/agents/:id`). O painel identifica que o código está amarrado a um
+`agent_id` existente e preserva o histórico ao aprovar a nova fingerprint. O
+instalador pergunta a chave do bucket que o servidor já usava.
 
 ### Rodar daemon
 
 ```bash
-# Se instalou como systemd service (default), já está rodando:
+# Se instalou como serviço (padrão), já está rodando:
 systemctl status arkame-agent
 
 # Manualmente:
@@ -102,14 +121,16 @@ arkame-agent run --config /etc/arkame/agent.env
 ### Docker
 
 ```bash
-docker run -d \
-  --name arkame-agent \
-  --restart always \
-  -v /:/host:ro \
-  --env-file /etc/arkame/agent.env \
-  -e ENROLLMENT_TOKEN=enr_01HXQZ3JK8... \
-  -e PANEL_URL=https://save.arkame.app \
-  arkame/agent:latest install --install-service=false
+# Registro: pergunta a chave (por isso -it), testa e espera a aprovação
+sudo docker run --rm -it --user 0 --hostname "$(hostname)" \
+  -v /etc/arkame:/etc/arkame \
+  ghcr.io/arkame-app/arkame-agent:latest \
+  install --token=atk_... --install-service=false
+
+# Serviço
+sudo docker run -d --name arkame-agent --restart always --user 0 --hostname "$(hostname)" \
+  -v /:/host:ro -v /etc/arkame:/etc/arkame \
+  ghcr.io/arkame-app/arkame-agent:latest
 ```
 
 ## Variáveis de ambiente

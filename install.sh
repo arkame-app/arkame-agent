@@ -1,12 +1,12 @@
 #!/bin/sh
-# Instalador do agent Arkame para Linux e macOS.
+# Instalador do agente Arkame para Linux e macOS.
 #
-#   curl -fsSL https://get.arkame.app/install.sh | sh
-#   curl -fsSL https://get.arkame.app/install.sh | sh -s -- --token=atk_...
+#   curl -fsSL https://get.arkame.app/install.sh | sudo sh -s -- --token=atk_...
 #
-# Sem --token, apenas instala o binário; o cadastro no painel fica para depois
-# (`arkame-agent install --token=...`). Com --token, já registra o servidor e
-# deixa o agent rodando como serviço.
+# Com --token (o código de instalação do painel), faz tudo num comando: baixa,
+# pergunta a chave do bucket, testa no bucket, registra o servidor e deixa o
+# agente rodando como serviço. As perguntas vão ao terminal (/dev/tty), porque
+# a entrada deste script é o próprio curl. Sem --token, só instala o binário.
 #
 # Variáveis reconhecidas:
 #   ARKAME_VERSION        versão a instalar (padrão: a mais recente)
@@ -43,14 +43,14 @@ die()  { printf '%s\n' "  ${RED}✗${RESET} $*" >&2; exit 1; }
 
 usage() {
   cat <<'USAGE'
-Instalador do agent Arkame.
+Instalador do agente Arkame.
 
 Uso:
-  curl -fsSL https://get.arkame.app/install.sh | sh
-  curl -fsSL https://get.arkame.app/install.sh | sh -s -- --token=atk_xxx
+  curl -fsSL https://get.arkame.app/install.sh | sudo sh -s -- --token=atk_xxx
+  curl -fsSL https://get.arkame.app/install.sh | sh        (só o binário)
 
 Opções:
-  --token=TOKEN         token de instalação gerado no painel (em Agentes → Novo)
+  --token=CODIGO        código de instalação do painel (Servidores → Novo servidor)
   --panel-url=URL       painel a usar (padrão: https://save.arkame.app)
   --service-name=NOME   nome do serviço (use um por credencial de storage)
   --service-scope=X     system (todo o host, exige sudo) ou user (sem sudo)
@@ -74,6 +74,11 @@ for arg in "$@"; do
     *) die "opção desconhecida: $arg (use --help)" ;;
   esac
 done
+
+# O código vai para a linha de comando do agente: só a forma que o painel gera.
+if [ -n "$TOKEN" ] && ! printf '%s' "$TOKEN" | grep -Eq '^atk_[A-Za-z0-9_-]{16,}$'; then
+  die "código de instalação inválido. Copie de novo o comando do painel."
+fi
 
 # ── plataforma ───────────────────────────────────────────────────────────────
 detect_platform() {
@@ -147,7 +152,7 @@ sha256_of() { # sha256_of <arquivo>
 
 # ── instalação ───────────────────────────────────────────────────────────────
 main() {
-  printf '\n%s\n\n' "${BOLD}Instalador do agent Arkame${RESET}"
+  printf '\n%s\n\n' "${BOLD}Instalador do agente Arkame${RESET}"
 
   detect_platform
   VERSION=$(resolve_version)
@@ -219,15 +224,15 @@ main() {
     printf '\n'
     info "Próximo passo — registre este servidor no painel:"
     printf '\n'
-    info "  ${BOLD}arkame-agent install --token=SEU_TOKEN${RESET}"
+    info "  ${BOLD}sudo arkame-agent install --token=SEU_CODIGO${RESET}"
     printf '\n'
-    info "O token aparece em $PANEL_URL/agents/new."
+    info "O código aparece em $PANEL_URL/agents/new."
     printf '\n'
     return 0
   fi
 
+  # O agente pergunta a chave do bucket, testa e só então registra.
   printf '\n'
-  info "Registrando este servidor no painel…"
   set -- install --token="$TOKEN" --panel-url="$PANEL_URL" --service-name="$SERVICE_NAME"
   [ -n "$SERVICE_SCOPE" ] && set -- "$@" --service-scope="$SERVICE_SCOPE"
   [ "$INSTALL_SERVICE" = "false" ] && set -- "$@" --install-service=false

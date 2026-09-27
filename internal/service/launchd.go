@@ -54,15 +54,7 @@ func defaultScope() Scope {
 	return ScopeUser
 }
 
-// label converte o nome do serviço no identificador reverse-DNS que o launchd
-// espera: arkame-agent-aws → app.arkame.agent-aws.
-func label(name string) string {
-	trimmed := strings.TrimPrefix(name, "arkame-")
-	if trimmed == "" {
-		trimmed = "agent"
-	}
-	return "app.arkame." + trimmed
-}
+func label(name string) string { return LaunchdLabel(name) }
 
 func installPlatform(ctx context.Context, cfg *config.Config, opts Options) (*Installed, error) {
 	lbl := label(opts.Name)
