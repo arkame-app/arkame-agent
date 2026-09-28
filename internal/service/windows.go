@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/arkame-app/agent/internal/config"
 	"golang.org/x/sys/windows/svc"
@@ -76,6 +77,26 @@ func installPlatform(_ context.Context, cfg *config.Config, opts Options) (*Inst
 	}, nil
 }
 
+// servicosDoAgente: os serviços arkame-agent* registrados no SCM.
+func servicosDoAgente() []string {
+	m, err := mgr.Connect()
+	if err != nil {
+		return nil
+	}
+	defer m.Disconnect()
+	todos, err := m.ListServices()
+	if err != nil {
+		return nil
+	}
+	var nomes []string
+	for _, n := range todos {
+		if strings.HasPrefix(strings.ToLower(n), "arkame-agent") {
+			nomes = append(nomes, n)
+		}
+	}
+	return nomes
+}
+
 func restartArgs(name string, _ Scope) []string {
 	return []string{"powershell", "-NoProfile", "-Command", "Restart-Service " + name}
 }
@@ -95,8 +116,15 @@ func uninstallPlatform(_ context.Context, opts Options) error {
 	defer s.Close()
 
 	// Parar antes de remover; se já estiver parado o SCM devolve erro, que aqui
-	// não é problema.
+	// não é problema. E esperar parar de fato: o processo pode estar no meio
+	// de um backup, e enquanto ele vive o programa fica travado no disco.
 	_, _ = s.Control(svc.Stop)
+	for i := 0; i < 60; i++ {
+		if st, err := s.Query(); err != nil || st.State == svc.Stopped {
+			break
+		}
+		time.Sleep(time.Second)
+	}
 
 	if err := s.Delete(); err != nil {
 		return fmt.Errorf("removendo o serviço %s: %w", opts.Name, err)

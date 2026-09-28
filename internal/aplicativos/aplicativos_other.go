@@ -11,12 +11,18 @@ import (
 func ElevarSeNecessario() (bool, error) { return false, nil }
 
 // Registrar não tem o que fazer fora do Windows: o binário é um arquivo só.
-func Registrar(string, string) error { return nil }
+func Registrar(string, string, string, []string) error { return nil }
 
-// Remover apaga o programa. Fora do Windows, o arquivo em uso pode sair.
-func Remover(exe string) error {
+// RemoverEntrada não tem o que fazer fora do Windows.
+func RemoverEntrada(string) {}
+
+// RemoverPrograma apaga o programa. Fora do Windows, o arquivo em uso pode sair.
+func RemoverPrograma(exe string) error {
 	if err := os.Remove(exe); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("removendo %s: %w", exe, err)
 	}
 	return nil
 }
+
+// ProgramaSaiDepois: fora do Windows, sai na hora.
+const ProgramaSaiDepois = false

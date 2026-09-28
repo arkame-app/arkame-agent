@@ -42,6 +42,9 @@ VOLUME ["/host"]
 # /etc/arkame lê o env-file com credenciais de storage
 VOLUME ["/etc/arkame"]
 
+# O painel mostra os comandos de Docker para este servidor (e não os do Linux).
+ENV ARKAME_INSTALL_METHOD=docker
+
 USER nonroot:nonroot
 ENTRYPOINT ["/usr/local/bin/arkame-agent"]
 CMD ["run", "--host-root", "/host", "--config", "/etc/arkame/agent.env"]

@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/arkame-app/agent/internal/aplicativos"
 	"github.com/arkame-app/agent/internal/config"
 	"github.com/arkame-app/agent/internal/service"
 	"github.com/arkame-app/agent/internal/setup"
@@ -93,7 +94,7 @@ func newCheckStorageCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&configFile, "config", "/etc/arkame/agent.env", "arquivo de configuração")
+	cmd.Flags().StringVar(&configFile, "config", config.DefaultPath, "arquivo de configuração")
 	return cmd
 }
 
@@ -113,7 +114,19 @@ configuração e só então grava. Depois, reinicie o serviço para ele usar a
 chave nova (o comando aparece no fim).`,
 		RunE: func(cmd *cobra.Command, _ []string) (err error) {
 			if pausar {
-				defer esperarEnter(&err)
+				defer func() {
+					if pausar { // pode ter sido desligado no caminho
+						esperarEnter(&err)
+					}
+				}()
+			}
+			// Trocar a chave e reiniciar o serviço exigem administrador: no
+			// Windows, o comando se reabre elevado, como o `uninstall`.
+			if reaberto, eerr := aplicativos.ElevarSeNecessario(); eerr != nil {
+				return eerr
+			} else if reaberto {
+				pausar = false
+				return nil
 			}
 			cfg, err := config.Load(configFile, config.Overrides{})
 			if err != nil {
@@ -149,10 +162,13 @@ chave nova (o comando aparece no fim).`,
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&configFile, "config", "/etc/arkame/agent.env", "arquivo de configuração")
+	cmd.Flags().StringVar(&configFile, "config", config.DefaultPath, "arquivo de configuração")
 	cmd.Flags().BoolVar(&reiniciar, "restart", false, "reiniciar o serviço depois de gravar")
 	cmd.Flags().StringVar(&serviceName, "service-name", service.DefaultName, "nome do serviço a reiniciar")
 	cmd.Flags().StringVar(&serviceScope, "service-scope", "", "system ou user, como na instalação. Padrão: system se root, senão user")
 	cmd.Flags().BoolVar(&pausar, "pause", false, "esperar um Enter antes de sair (janela aberta pelo painel)")
+	var elevado bool
+	cmd.Flags().BoolVar(&elevado, "elevado", false, "")
+	_ = cmd.Flags().MarkHidden("elevado")
 	return cmd
 }

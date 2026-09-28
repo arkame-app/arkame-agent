@@ -64,7 +64,7 @@ func newRunCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&configFile, "config", "/etc/arkame/agent.env", "env-file com credenciais de storage")
+	cmd.Flags().StringVar(&configFile, "config", config.DefaultPath, "env-file com credenciais de storage")
 	cmd.Flags().StringVar(&hostRoot, "host-root", "/", "raiz do filesystem a proteger (em container Docker: /host)")
 	cmd.Flags().StringVar(&serviceName, "service-name", service.DefaultName, "nome do serviço (usado só quando iniciado pelo gerenciador de serviços do Windows)")
 

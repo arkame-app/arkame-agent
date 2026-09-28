@@ -104,6 +104,22 @@ func RestartCommand(name string, scope Scope) string {
 	return strings.TrimPrefix(cmd, "powershell -NoProfile -Command ")
 }
 
+// OutrosAgentes lista os outros serviços do agente nesta máquina (um por
+// credencial de storage, com --service-name). Eles usam o mesmo programa:
+// desinstalar um não pode apagá-lo.
+func OutrosAgentes(name string) []string {
+	if name == "" {
+		name = DefaultName
+	}
+	var outros []string
+	for _, n := range servicosDoAgente() {
+		if n != name {
+			outros = append(outros, n)
+		}
+	}
+	return outros
+}
+
 // Install registra o agent como serviço do SO.
 func Install(ctx context.Context, cfg *config.Config, opts Options) (*Installed, error) {
 	if opts.Name == "" {

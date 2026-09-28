@@ -118,6 +118,23 @@ func installPlatform(ctx context.Context, cfg *config.Config, opts Options) (*In
 	}, nil
 }
 
+// servicosDoAgente: os jobs app.arkame.* do sistema e do usuário, pelo nome
+// de serviço que os gerou (app.arkame.agent-aws → arkame-agent-aws).
+func servicosDoAgente() []string {
+	var nomes []string
+	dirs := []string{"/Library/LaunchDaemons"}
+	if h, err := os.UserHomeDir(); err == nil {
+		dirs = append(dirs, filepath.Join(h, "Library", "LaunchAgents"))
+	}
+	for _, d := range dirs {
+		m, _ := filepath.Glob(filepath.Join(d, "app.arkame.*.plist"))
+		for _, f := range m {
+			nomes = append(nomes, "arkame-"+strings.TrimPrefix(strings.TrimSuffix(filepath.Base(f), ".plist"), "app.arkame."))
+		}
+	}
+	return nomes
+}
+
 func restartArgs(name string, scope Scope) []string {
 	return []string{"launchctl", "kickstart", "-k", serviceTarget(scope, LaunchdLabel(name))}
 }

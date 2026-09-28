@@ -19,6 +19,9 @@ import (
 	"strings"
 )
 
+// DefaultPath é o arquivo de configuração padrão (no Windows, C:\etc\arkame\agent.env).
+const DefaultPath = "/etc/arkame/agent.env"
+
 // DefaultRegion é a região quando o armazenamento não informa uma.
 const DefaultRegion = "us-east-1"
 

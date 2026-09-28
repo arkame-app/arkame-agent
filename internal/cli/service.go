@@ -63,7 +63,7 @@ func newServiceInstallCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&configFile, "config", "/etc/arkame/agent.env", "env-file que o serviço vai carregar")
+	cmd.Flags().StringVar(&configFile, "config", config.DefaultPath, "env-file que o serviço vai carregar")
 	cmd.Flags().StringVar(&name, "name", service.DefaultName, "nome do serviço (um por credencial de storage no mesmo host)")
 	cmd.Flags().StringVar(&scope, "scope", "", "system (todo o host, exige root) ou user (sem sudo). Padrão: system se root, senão user")
 	cmd.Flags().BoolVar(&start, "start", true, "iniciar o serviço logo após instalar")

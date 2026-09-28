@@ -66,6 +66,6 @@ func newHeartbeatCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&configFile, "config", "/etc/arkame/agent.env", "env-file")
+	cmd.Flags().StringVar(&configFile, "config", config.DefaultPath, "env-file")
 	return cmd
 }

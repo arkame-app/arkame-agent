@@ -110,6 +110,9 @@ sudo /usr/local/bin/arkame-agent uninstall   # pergunta "sim"; --yes para automa
 Tira o serviço, o arquivo de configuração com a chave, a identidade (token,
 chave privada, agent.id) e o programa; a pasta só sai se ficar vazia. Os backups
 continuam no bucket. No painel, arquive o servidor para ele deixar de ser cobrado.
+Antes de tocar em qualquer coisa, confere que achou a configuração e que pode
+apagá-la. Com mais de um agente na máquina (`--service-name`), use o mesmo
+`--service-name` e `--config` da instalação; o programa só sai com o último.
 
 No Windows, o agente aparece em **Aplicativos instalados** ("Arkame — agente de
 backup"); o Desinstalar chama `uninstall --pause` e pede administrador sozinho.

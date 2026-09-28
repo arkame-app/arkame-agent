@@ -88,7 +88,7 @@ agent_id existente, preservando histórico e path no bucket.`,
 			result, err := enrollment.Run(ctx, cfg, enrollment.Options{
 				Hostname:      hostName,
 				OS:            runtime.GOOS + "-" + runtime.GOARCH,
-				InstallMethod: "binary",
+				InstallMethod: metodoDeInstalacao(),
 			})
 			if err != nil {
 				return fmt.Errorf("enrollment: %w", err)
@@ -128,7 +128,14 @@ agent_id existente, preservando histórico e path no bucket.`,
 				// No Windows, aparece em "Aplicativos instalados", com o
 				// Desinstalar chamando `uninstall`.
 				if exe, err := os.Executable(); err == nil {
-					if err := aplicativos.Registrar(exe, version.Version); err != nil {
+					var argsDoUninstall []string
+					if serviceName != service.DefaultName {
+						argsDoUninstall = append(argsDoUninstall, "--service-name", serviceName)
+					}
+					if configFile != config.DefaultPath {
+						argsDoUninstall = append(argsDoUninstall, "--config", configFile)
+					}
+					if err := aplicativos.Registrar(exe, version.Version, serviceName, argsDoUninstall); err != nil {
 						slog.Warn("não consegui registrar em Aplicativos instalados", "err", err)
 					}
 				}
@@ -153,7 +160,7 @@ agent_id existente, preservando histórico e path no bucket.`,
 		},
 	}
 
-	cmd.Flags().StringVar(&configFile, "config", "/etc/arkame/agent.env", "caminho do env-file com credenciais de storage")
+	cmd.Flags().StringVar(&configFile, "config", config.DefaultPath, "caminho do env-file com credenciais de storage")
 	cmd.Flags().StringVar(&enrollmentToken, "token", "", "enrollment_token gerado no painel (ex: atk_...)")
 	cmd.Flags().StringVar(&panelURL, "panel-url", "https://save.arkame.app", "URL base do painel Arkame")
 	cmd.Flags().BoolVar(&installService, "install-service", true, "instalar como serviço systemd/launchd/Windows Service (set false para só enrollar)")
@@ -172,3 +179,13 @@ agent_id existente, preservando histórico e path no bucket.`,
 
 // mantém contexto disponível para testes
 var _ = context.Background
+
+// metodoDeInstalacao: "docker" dentro da imagem (a variável vem no
+// Dockerfile), "binary" no resto. O painel escolhe os comandos por isto — um
+// servidor em Docker recebia os comandos do Linux, que ali não fazem nada.
+func metodoDeInstalacao() string {
+	if m := os.Getenv("ARKAME_INSTALL_METHOD"); m != "" {
+		return m
+	}
+	return "binary"
+}

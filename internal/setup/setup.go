@@ -41,7 +41,7 @@ type DoPainel struct {
 }
 
 // ErrSemChave: a pessoa saiu sem digitar a chave.
-var ErrSemChave = errors.New("instalação interrompida sem a chave do bucket. Se você não tem a chave, crie uma nova no console do provedor do bucket e rode o comando de novo — nada foi alterado neste servidor")
+var ErrSemChave = errors.New("saída sem a chave do bucket: nada foi gravado. Se você não tem a chave, crie uma nova no console do provedor do bucket e rode o comando de novo")
 
 // ErrCodigoInvalido: código expirado, já usado ou digitado errado.
 var ErrCodigoInvalido = errors.New("o painel não reconheceu o código de instalação: ele expira em 24 horas e vale uma vez. Gere outro no painel, em Servidores → Novo servidor")

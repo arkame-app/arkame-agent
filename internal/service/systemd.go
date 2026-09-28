@@ -170,6 +170,22 @@ func installSystemd(ctx context.Context, cfg *config.Config, opts Options) (*Ins
 	return inst, nil
 }
 
+// servicosDoAgente: as units arkame-agent* do sistema e do usuário.
+func servicosDoAgente() []string {
+	dirs := []string{"/etc/systemd/system"}
+	if d, err := userUnitDir(); err == nil {
+		dirs = append(dirs, d)
+	}
+	var nomes []string
+	for _, d := range dirs {
+		m, _ := filepath.Glob(filepath.Join(d, "arkame-agent*.service"))
+		for _, f := range m {
+			nomes = append(nomes, strings.TrimSuffix(filepath.Base(f), ".service"))
+		}
+	}
+	return nomes
+}
+
 func restartArgs(name string, scope Scope) []string {
 	if scope == ScopeUser {
 		return []string{"systemctl", "--user", "restart", name}
