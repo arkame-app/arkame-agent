@@ -83,8 +83,11 @@ curl -fsSL https://get.arkame.app/install.sh | sudo sh -s -- --token=atk_...
 # administrador (o "Sim" do Windows), se copia para Program Files, entra no
 # PATH e roda o `install`. Sem PowerShell: o Defender barrava o formato
 # `powershell -ExecutionPolicy Bypass … irm` como Trojan:Win32/Commando.A!ml.
-cmd /c "curl -fsSLo "%TEMP%\arkame-agent.exe" https://get.arkame.app/agente.exe && "%TEMP%\arkame-agent.exe" setup --token=atk_..."
+cmd /c "curl -fsSLo "%TEMP%\arkame-agent.exe" https://get.arkame.app/agente.exe && "%TEMP%\arkame-agent.exe" setup --token=atk_... || pause"
 ```
+
+O `curl.exe` vem no Windows 10 (1803+), 11 e Server 2019+. No Server 2016, use o
+`install.ps1` (PowerShell como administrador).
 
 O arquivo gravado (`/etc/arkame/agent.env`; no Windows `C:\etc\arkame\agent.env`)
 fica legível só pelo administrador (0600; no Windows, Administradores e SYSTEM).

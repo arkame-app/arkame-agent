@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/arkame-app/agent/internal/aplicativos"
-	"github.com/arkame-app/agent/internal/service"
 	"github.com/spf13/cobra"
 )
 
@@ -57,9 +56,8 @@ func newSetupCmd() *cobra.Command {
 			}
 			destino := aplicativos.ProgramaInstalado()
 			if !strings.EqualFold(filepath.Clean(exe), filepath.Clean(destino)) {
-				// Trocar o programa por cima exige o serviço parado: em uso, o
-				// Windows não deixa sobrescrever.
-				service.Parar(service.DefaultName)
+				// O serviço segue rodando o programa antigo até o `install`
+				// recriá-lo; se algo falhar aqui, ele continua de pé.
 				if err := copiarPrograma(exe, destino); err != nil {
 					return fmt.Errorf("copiando o programa para %s: %w", destino, err)
 				}
@@ -77,6 +75,10 @@ func newSetupCmd() *cobra.Command {
 			}
 			c := exec.CommandContext(cmd.Context(), destino, args...)
 			c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
+			// O caminho padrão da configuração (/etc/arkame) não tem unidade:
+			// o serviço o resolve no disco do sistema, e o install tem de
+			// resolver no mesmo — não no do perfil de quem roda.
+			c.Dir = discoDoSistema()
 			if err := c.Run(); err != nil {
 				return errors.New("a instalação não terminou: veja a mensagem acima")
 			}
@@ -91,8 +93,17 @@ func newSetupCmd() *cobra.Command {
 	return cmd
 }
 
+func discoDoSistema() string {
+	if d := os.Getenv("SystemDrive"); d != "" {
+		return d + string(filepath.Separator)
+	}
+	return string(filepath.Separator)
+}
+
 // copiarPrograma copia para o destino por um arquivo temporário ao lado, e
-// troca de uma vez: um programa pela metade nunca fica no lugar do bom.
+// troca de uma vez: um programa pela metade nunca fica no lugar do bom. O
+// programa em uso (o serviço rodando) não pode ser sobrescrito no Windows,
+// mas pode ser renomeado: vai para .old, e sai na próxima vez.
 func copiarPrograma(de, para string) error {
 	if err := os.MkdirAll(filepath.Dir(para), 0o755); err != nil {
 		return err
@@ -116,9 +127,19 @@ func copiarPrograma(de, para string) error {
 		_ = os.Remove(tmp)
 		return err
 	}
+	antigo := para + ".old"
+	_ = os.Remove(antigo)
+	if _, err := os.Stat(para); err == nil {
+		if err := os.Rename(para, antigo); err != nil {
+			_ = os.Remove(tmp)
+			return err
+		}
+	}
 	if err := os.Rename(tmp, para); err != nil {
+		_ = os.Rename(antigo, para) // devolve o que estava lá
 		_ = os.Remove(tmp)
 		return err
 	}
+	_ = os.Remove(antigo) // em uso, fica para a próxima
 	return nil
 }
