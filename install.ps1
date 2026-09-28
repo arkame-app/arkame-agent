@@ -16,6 +16,11 @@
   irm https://get.arkame.app/install.ps1 | iex
 
 .NOTES
+  O painel não indica mais este script (28/09): `powershell -ExecutionPolicy
+  Bypass … irm` foi barrado pelo Defender como Trojan:Win32/Commando.A!ml. O
+  comando de Windows agora é `cmd /c "curl … get.arkame.app/agente.exe && …
+  setup --token=…"`, sem PowerShell. Este fica para quem já o usa.
+
   Instalar o serviço exige administrador. Quem roda sem ser administrador vê o
   pedido de permissão do Windows e o instalador continua numa janela nova, já
   elevada — ninguém precisa saber abrir o PowerShell como administrador.

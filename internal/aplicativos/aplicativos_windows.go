@@ -100,6 +100,34 @@ func argsNaLinha(args []string) string {
 	return b.String()
 }
 
+// ProgramaInstalado é onde o programa mora no Windows.
+func ProgramaInstalado() string {
+	pf := os.Getenv("ProgramFiles")
+	if pf == "" {
+		pf = `C:\Program Files`
+	}
+	return filepath.Join(pf, "Arkame", "arkame-agent.exe")
+}
+
+// AdicionarAoPath põe a pasta do programa no PATH da máquina, uma vez.
+func AdicionarAoPath(pasta string) error {
+	k, err := registry.OpenKey(registry.LOCAL_MACHINE, chaveDoPath, registry.QUERY_VALUE|registry.SET_VALUE)
+	if err != nil {
+		return err
+	}
+	defer k.Close()
+	atual, _, err := k.GetStringValue("Path")
+	if err != nil {
+		return err
+	}
+	for _, p := range strings.Split(atual, ";") {
+		if strings.EqualFold(strings.TrimRight(p, `\`), strings.TrimRight(pasta, `\`)) {
+			return nil
+		}
+	}
+	return k.SetExpandStringValue("Path", strings.TrimRight(atual, ";")+";"+pasta)
+}
+
 // RemoverEntrada tira o serviço de "Aplicativos instalados".
 func RemoverEntrada(servico string) {
 	_ = registry.DeleteKey(registry.LOCAL_MACHINE, chaveDoApp(servico))

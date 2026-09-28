@@ -32,8 +32,11 @@ func installPlatform(_ context.Context, cfg *config.Config, opts Options) (*Inst
 	}
 	defer m.Disconnect()
 
-	// Reinstalar por cima: remove o serviço anterior de mesmo nome.
+	// Reinstalar por cima: para e remove o serviço anterior de mesmo nome.
+	// Sem parar, o Windows só o marca para remoção, e criar o novo com o mesmo
+	// nome falha até ele sair.
 	if existing, err := m.OpenService(opts.Name); err == nil {
+		pararEEsperar(existing)
 		_ = existing.Delete()
 		existing.Close()
 		slog.Info("serviço anterior removido para reinstalar", "name", opts.Name)
@@ -97,6 +100,32 @@ func servicosDoAgente() []string {
 	return nomes
 }
 
+// pararEEsperar para o serviço e espera ele parar de fato: o processo pode
+// estar no meio de um backup, e enquanto ele vive o programa fica travado no
+// disco. Já parado, o SCM devolve erro no Control, que aqui não é problema.
+func pararEEsperar(s *mgr.Service) {
+	_, _ = s.Control(svc.Stop)
+	for i := 0; i < 60; i++ {
+		if st, err := s.Query(); err != nil || st.State == svc.Stopped {
+			return
+		}
+		time.Sleep(time.Second)
+	}
+}
+
+// Parar para o serviço, se existir — para trocar o programa por cima.
+func Parar(name string) {
+	m, err := mgr.Connect()
+	if err != nil {
+		return
+	}
+	defer m.Disconnect()
+	if s, err := m.OpenService(name); err == nil {
+		pararEEsperar(s)
+		s.Close()
+	}
+}
+
 func restartArgs(name string, _ Scope) []string {
 	return []string{"powershell", "-NoProfile", "-Command", "Restart-Service " + name}
 }
@@ -115,16 +144,7 @@ func uninstallPlatform(_ context.Context, opts Options) error {
 	}
 	defer s.Close()
 
-	// Parar antes de remover; se já estiver parado o SCM devolve erro, que aqui
-	// não é problema. E esperar parar de fato: o processo pode estar no meio
-	// de um backup, e enquanto ele vive o programa fica travado no disco.
-	_, _ = s.Control(svc.Stop)
-	for i := 0; i < 60; i++ {
-		if st, err := s.Query(); err != nil || st.State == svc.Stopped {
-			break
-		}
-		time.Sleep(time.Second)
-	}
+	pararEEsperar(s)
 
 	if err := s.Delete(); err != nil {
 		return fmt.Errorf("removendo o serviço %s: %w", opts.Name, err)

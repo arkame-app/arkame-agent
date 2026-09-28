@@ -13,6 +13,12 @@ func ElevarSeNecessario() (bool, error) { return false, nil }
 // Registrar não tem o que fazer fora do Windows: o binário é um arquivo só.
 func Registrar(string, string, string, []string) error { return nil }
 
+// ProgramaInstalado é onde o install.sh põe o programa.
+func ProgramaInstalado() string { return "/usr/local/bin/arkame-agent" }
+
+// AdicionarAoPath: /usr/local/bin já está no PATH.
+func AdicionarAoPath(string) error { return nil }
+
 // RemoverEntrada não tem o que fazer fora do Windows.
 func RemoverEntrada(string) {}
 

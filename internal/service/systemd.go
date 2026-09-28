@@ -186,6 +186,9 @@ func servicosDoAgente() []string {
 	return nomes
 }
 
+// Parar: fora do Windows o programa pode ser trocado com o serviço de pé.
+func Parar(string) {}
+
 func restartArgs(name string, scope Scope) []string {
 	if scope == ScopeUser {
 		return []string{"systemctl", "--user", "restart", name}

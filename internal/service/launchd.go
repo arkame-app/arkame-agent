@@ -135,6 +135,9 @@ func servicosDoAgente() []string {
 	return nomes
 }
 
+// Parar: fora do Windows o programa pode ser trocado com o serviço de pé.
+func Parar(string) {}
+
 func restartArgs(name string, scope Scope) []string {
 	return []string{"launchctl", "kickstart", "-k", serviceTarget(scope, LaunchdLabel(name))}
 }

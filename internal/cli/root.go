@@ -39,6 +39,7 @@ func newRootCmd() *cobra.Command {
 		newCheckStorageCmd(),
 		newSetStorageKeysCmd(),
 		newUninstallCmd(),
+		newSetupCmd(),
 		newHeartbeatCmd(),
 		newVersionCmd(),
 	)

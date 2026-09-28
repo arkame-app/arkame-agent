@@ -45,6 +45,15 @@ archives:
       - README.md
       - LICENSE*
 
+  # O programa avulso, sem pacote: é o que o comando de Windows baixa com o
+  # curl.exe (get.arkame.app/agente.exe) e executa — sem PowerShell, que o
+  # Defender barrava no formato "baixa e roda". Nos outros sistemas fica à
+  # disposição de quem prefere baixar à mão.
+  - id: binario
+    ids: [arkame-agent]
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    formats: [binary]
+
 checksum:
   name_template: checksums.txt
   algorithm: sha256

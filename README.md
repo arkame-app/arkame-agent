@@ -78,10 +78,12 @@ curl -fsSL https://get.arkame.app/install.sh | sudo sh -s -- --token=atk_...
 ```
 
 ```text
-# Windows: Windows + R, colar, Enter. O script pede administrador sozinho
-# (o "Sim" do Windows) e continua numa janela nova. Sem `$` de propósito:
-# chega igual colado no Executar, no Prompt de Comando ou no PowerShell.
-powershell -ExecutionPolicy Bypass -Command "&([scriptblock]::Create((irm https://get.arkame.app/install.ps1))) -Token atk_..."
+# Windows: Windows + R, colar, Enter. O curl.exe do Windows baixa o agente
+# (get.arkame.app/agente.exe → release mais recente) e o `setup` dele pede
+# administrador (o "Sim" do Windows), se copia para Program Files, entra no
+# PATH e roda o `install`. Sem PowerShell: o Defender barrava o formato
+# `powershell -ExecutionPolicy Bypass … irm` como Trojan:Win32/Commando.A!ml.
+cmd /c "curl -fsSLo "%TEMP%\arkame-agent.exe" https://get.arkame.app/agente.exe && "%TEMP%\arkame-agent.exe" setup --token=atk_..."
 ```
 
 O arquivo gravado (`/etc/arkame/agent.env`; no Windows `C:\etc\arkame\agent.env`)
