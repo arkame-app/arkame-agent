@@ -7,9 +7,11 @@ import (
 	"os"
 	"runtime"
 
+	"github.com/arkame-app/agent/internal/aplicativos"
 	"github.com/arkame-app/agent/internal/config"
 	"github.com/arkame-app/agent/internal/enrollment"
 	"github.com/arkame-app/agent/internal/service"
+	"github.com/arkame-app/agent/pkg/version"
 	"github.com/spf13/cobra"
 )
 
@@ -122,6 +124,13 @@ agent_id existente, preservando histórico e path no bucket.`,
 				})
 				if err != nil {
 					return fmt.Errorf("instalando serviço do SO: %w", err)
+				}
+				// No Windows, aparece em "Aplicativos instalados", com o
+				// Desinstalar chamando `uninstall`.
+				if exe, err := os.Executable(); err == nil {
+					if err := aplicativos.Registrar(exe, version.Version); err != nil {
+						slog.Warn("não consegui registrar em Aplicativos instalados", "err", err)
+					}
 				}
 				slog.Info("serviço instalado e iniciado",
 					"os", runtime.GOOS, "name", inst.Name, "scope", string(inst.Scope))

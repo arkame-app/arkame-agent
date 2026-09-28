@@ -40,6 +40,9 @@ type DoPainel struct {
 	Armazenamento *Armazenamento `json:"storage"`
 }
 
+// ErrSemChave: a pessoa saiu sem digitar a chave.
+var ErrSemChave = errors.New("instalação interrompida sem a chave do bucket. Se você não tem a chave, crie uma nova no console do provedor do bucket e rode o comando de novo — nada foi alterado neste servidor")
+
 // ErrCodigoInvalido: código expirado, já usado ou digitado errado.
 var ErrCodigoInvalido = errors.New("o painel não reconheceu o código de instalação: ele expira em 24 horas e vale uma vez. Gere outro no painel, em Servidores → Novo servidor")
 
@@ -121,16 +124,21 @@ func PerguntarETestar(ctx context.Context, t *terminal.Terminal, base *config.Co
 	out := t.Saida()
 	fmt.Fprintf(out, "\n  Credencial do bucket %s (fica só nesta máquina; o painel não a recebe)\n\n", base.StorageBucket)
 	for tentativa := 1; tentativa <= MaxTentativas; tentativa++ {
-		ak, err := t.Pergunta("Chave de acesso (access key)")
+		ak, err := t.Pergunta("Chave de acesso (access key) — em branco para sair")
 		if err != nil {
 			return "", "", err
+		}
+		// Quem não tem a chave precisa de uma saída que não seja errar cinco
+		// vezes (teste do fundador, 27/09).
+		if ak == "" {
+			return "", "", ErrSemChave
 		}
 		sk, err := t.Segredo("Senha da chave (secret key)")
 		if err != nil {
 			return "", "", err
 		}
-		if ak == "" || sk == "" {
-			fmt.Fprintln(out, "  ✗ as duas são obrigatórias.")
+		if sk == "" {
+			fmt.Fprintln(out, "  ✗ falta a senha da chave.")
 			continue
 		}
 		c := *base
@@ -142,7 +150,7 @@ func PerguntarETestar(ctx context.Context, t *terminal.Terminal, base *config.Co
 				return "", "", fmt.Errorf("%s", storage.Causa(err))
 			}
 			if tentativa < MaxTentativas {
-				fmt.Fprintln(out, "  Digite de novo:")
+				fmt.Fprintln(out, "  Digite de novo (sem a chave? deixe em branco e aperte Enter para sair):")
 			}
 			continue
 		}

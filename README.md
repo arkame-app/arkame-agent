@@ -101,6 +101,20 @@ arkame-agent check-storage                      # só testa a chave do arquivo
 No Windows, o painel mostra a linha para o Windows + R
 (`Start-Process -Verb RunAs … 'set-storage-keys --restart --pause'`).
 
+### Remover o agente de um servidor
+
+```bash
+sudo /usr/local/bin/arkame-agent uninstall   # pergunta "sim"; --yes para automação
+```
+
+Tira o serviço, o arquivo de configuração com a chave, a identidade (token,
+chave privada, agent.id) e o programa; a pasta só sai se ficar vazia. Os backups
+continuam no bucket. No painel, arquive o servidor para ele deixar de ser cobrado.
+
+No Windows, o agente aparece em **Aplicativos instalados** ("Arkame — agente de
+backup"); o Desinstalar chama `uninstall --pause` e pede administrador sozinho.
+Pelo Executar: `powershell -Command "Start-Process -Verb RunAs 'C:\Program Files\Arkame\arkame-agent.exe' 'uninstall --pause'"`.
+
 ### Re-enrollment (trocar servidor mantendo histórico)
 
 Mesmo comando na nova máquina, com um **código novo** gerado no painel em

@@ -113,18 +113,7 @@ configuração e só então grava. Depois, reinicie o serviço para ele usar a
 chave nova (o comando aparece no fim).`,
 		RunE: func(cmd *cobra.Command, _ []string) (err error) {
 			if pausar {
-				// Aberto pelo painel numa janela própria (Windows + R): sem
-				// isto a janela fecha antes de a pessoa ler o resultado.
-				defer func() {
-					if err != nil {
-						fmt.Fprintln(os.Stderr, "\n  ✗", err)
-					}
-					fmt.Fprint(os.Stderr, "\n  Pressione Enter para fechar.")
-					if t, terr := terminal.Open(); terr == nil {
-						_, _ = t.Pergunta("")
-						t.Close()
-					}
-				}()
+				defer esperarEnter(&err)
 			}
 			cfg, err := config.Load(configFile, config.Overrides{})
 			if err != nil {
