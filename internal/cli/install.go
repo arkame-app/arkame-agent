@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"runtime"
 
 	"github.com/arkame-app/agent/internal/aplicativos"
@@ -48,6 +49,11 @@ gerado no painel clicando "Reinstalar" em /agents/:id — ele é amarrado ao
 agent_id existente, preservando histórico e path no bucket.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
+			// Caminho absoluto: no Windows o padrão (/etc/arkame/agent.env) não
+			// tem unidade, e o serviço recebe exatamente este texto.
+			if abs, err := filepath.Abs(configFile); err == nil {
+				configFile = abs
+			}
 
 			carregar := func() (*config.Config, error) {
 				c, err := config.Load(configFile, config.Overrides{
