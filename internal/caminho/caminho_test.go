@@ -17,6 +17,9 @@ func TestNoDiscoWindows(t *testing.T) {
 	if got := noDisco(false, "/host", "/var/dados"); got != "/host/var/dados" {
 		t.Errorf("Linux no Docker: %q", got)
 	}
+	if got := noDisco(false, "/host", "/../../etc"); got != "/host/etc" {
+		t.Errorf("`..` não sai do /host: %q", got)
+	}
 }
 
 func TestNaChaveWindows(t *testing.T) {

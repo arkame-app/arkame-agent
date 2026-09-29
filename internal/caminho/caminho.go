@@ -21,7 +21,8 @@ import (
 	"strings"
 )
 
-var ehWindows = runtime.GOOS == "windows"
+// Windows diz se o agente roda no Windows — a regra de caminho de todo o agente.
+var Windows = runtime.GOOS == "windows"
 
 // Unidade devolve "C:" quando o caminho começa por uma unidade do Windows.
 func Unidade(p string) string {
@@ -32,11 +33,11 @@ func Unidade(p string) string {
 }
 
 // NoDisco leva o caminho do plano ao caminho real nesta máquina.
-func NoDisco(hostRoot, p string) string { return noDisco(ehWindows, hostRoot, p) }
+func NoDisco(hostRoot, p string) string { return noDisco(Windows, hostRoot, p) }
 
 func noDisco(windows bool, hostRoot, p string) string {
 	if !windows {
-		return filepath.Join(hostRoot, p)
+		return dentroDoHost(hostRoot, p)
 	}
 	w := strings.ReplaceAll(p, "/", `\`)
 	u := Unidade(w)
@@ -56,7 +57,7 @@ func noDisco(windows bool, hostRoot, p string) string {
 }
 
 // NaChave leva o caminho real ao caminho dentro do bucket, sempre com `/`.
-func NaChave(hostRoot, abs string) string { return naChave(ehWindows, hostRoot, abs) }
+func NaChave(hostRoot, abs string) string { return naChave(Windows, hostRoot, abs) }
 
 func naChave(windows bool, hostRoot, abs string) string {
 	if !windows {
@@ -76,19 +77,33 @@ func naChave(windows bool, hostRoot, abs string) string {
 
 // Destino valida o diretório de destino de uma restauração e o leva ao disco.
 // No Windows aceita `C:\…`, `C:/…` e o formato antigo `/…` (disco do sistema).
-func Destino(hostRoot, dir string) (string, error) { return destino(ehWindows, hostRoot, dir) }
+func Destino(hostRoot, dir string) (string, error) { return destino(Windows, hostRoot, dir) }
 
 func destino(windows bool, hostRoot, dir string) (string, error) {
-	if windows {
-		if Unidade(dir) == "" && !strings.HasPrefix(dir, "/") && !strings.HasPrefix(dir, `\`) {
+	if !absoluto(windows, dir) {
+		if windows {
 			return "", fmt.Errorf(`destino deve ser absoluto, como C:\Restaurados: %q`, dir)
 		}
-		return noDisco(true, hostRoot, dir), nil
-	}
-	if !strings.HasPrefix(dir, "/") {
 		return "", fmt.Errorf("destino deve ser absoluto, como /restaurados: %q", dir)
 	}
-	return filepath.Join(hostRoot, dir), nil
+	return noDisco(windows, hostRoot, dir), nil
+}
+
+// Absoluto diz se o caminho do painel é absoluto neste sistema: `C:\…` (ou o
+// formato antigo `/…`) no Windows, `/…` no resto.
+func Absoluto(p string) bool { return absoluto(Windows, p) }
+
+func absoluto(windows bool, p string) bool {
+	if windows {
+		return Unidade(p) != "" || strings.HasPrefix(p, "/") || strings.HasPrefix(p, `\`)
+	}
+	return strings.HasPrefix(p, "/")
+}
+
+// dentroDoHost junta ao HostRoot sem deixar `..` sair dele: no Docker, o
+// servidor está em /host, e `/../..` levaria ao container.
+func dentroDoHost(hostRoot, p string) string {
+	return filepath.Join(hostRoot, filepath.Clean("/"+p))
 }
 
 // Raiz diz se o pedido do painel é a raiz do navegador de pastas — no Windows,

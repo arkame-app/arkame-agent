@@ -9,7 +9,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/arkame-app/agent/internal/caminho"
 	"io"
 	"os"
 	"path/filepath"
@@ -17,6 +16,7 @@ import (
 	"time"
 
 	"github.com/arkame-app/agent/internal/api"
+	"github.com/arkame-app/agent/internal/caminho"
 	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
@@ -337,6 +337,13 @@ func splitDestFilename(destFilename string) (subDir, baseName string, err error)
 		return "", "", fmt.Errorf("dest_filename inválido: %q", destFilename)
 	}
 	segments := strings.Split(destFilename, "/")
+	// A chave de um servidor Windows começa pela unidade (`C:/Users/…`);
+	// dentro do destino ela vira pasta (`C\Users\…`) — `C:` não é nome válido
+	// no meio de um caminho do Windows. O painel já faz isso; aqui é a segunda
+	// camada.
+	if len(segments) > 1 && caminho.Unidade(segments[0]) != "" && len(segments[0]) == 2 {
+		segments[0] = segments[0][:1]
+	}
 	for _, seg := range segments {
 		if seg == "" || seg == "." || seg == ".." {
 			return "", "", fmt.Errorf("dest_filename inválido: %q", destFilename)

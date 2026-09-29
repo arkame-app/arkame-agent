@@ -6,8 +6,6 @@ package fsbrowse
 import (
 	"fmt"
 	"os"
-	"path/filepath"
-	"runtime"
 	"sort"
 
 	"github.com/arkame-app/agent/internal/caminho"
@@ -29,10 +27,10 @@ const MaxEntries = 1000
 // container). No Windows, a raiz é a lista de unidades (C:, D:…), e os caminhos
 // vêm no formato do Windows (fundador, 28/09: "path deve ser absoluto: /").
 func ListDir(hostRoot, path string) ([]Entry, error) {
-	if runtime.GOOS == "windows" && caminho.Raiz(path) {
+	if caminho.Windows && caminho.Raiz(path) {
 		return unidades(), nil
 	}
-	if runtime.GOOS != "windows" && !filepath.IsAbs(path) {
+	if !caminho.Absoluto(path) {
 		return nil, fmt.Errorf("path deve ser absoluto: %q", path)
 	}
 	clean := caminho.NoDisco(hostRoot, path)

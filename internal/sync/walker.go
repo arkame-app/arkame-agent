@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io/fs"
 	"path/filepath"
-	"runtime"
 	"strings"
 
 	"github.com/arkame-app/agent/internal/caminho"
@@ -29,6 +28,10 @@ func Walk(ctx context.Context, hostRoot string, sourcePaths []string, excludeGlo
 		defer close(out)
 		defer close(errs)
 
+		excludeGlobs := prepararExclusoes(excludeGlobs)
+		// Pasta do plano que não abre é falha dela, não do plano: as outras
+		// seguem, e o erro vai no fim (o daemon trata como backup parcial).
+		var ilegiveis []string
 		for _, sp := range sourcePaths {
 			root := caminho.NoDisco(hostRoot, sp)
 
@@ -70,32 +73,50 @@ func Walk(ctx context.Context, hostRoot string, sourcePaths []string, excludeGlo
 				return nil
 			})
 			if err != nil && ctx.Err() == nil {
+				if strings.HasPrefix(err.Error(), "não consegui ler") {
+					ilegiveis = append(ilegiveis, err.Error())
+					continue
+				}
 				errs <- err
 				return
 			}
+		}
+		if len(ilegiveis) > 0 {
+			errs <- fmt.Errorf("%s", strings.Join(ilegiveis, "; "))
 		}
 	}()
 
 	return out, errs
 }
 
-func matchesAny(path string, globs []string) bool {
-	if len(globs) == 0 {
-		return false
-	}
-	// No Windows os nomes não diferenciam maiúsculas: *.tmp pega ARQUIVO.TMP.
-	if runtime.GOOS == "windows" {
-		path = strings.ToLower(path)
-	}
-	base := filepath.Base(path)
+// prepararExclusoes limpa os padrões uma vez por backup (e não uma vez por
+// arquivo): sem vazios e, no Windows, em minúsculas e com `\`.
+func prepararExclusoes(globs []string) []string {
+	var out []string
 	for _, g := range globs {
 		g = strings.TrimSpace(g)
 		if g == "" {
 			continue
 		}
-		if runtime.GOOS == "windows" {
+		if caminho.Windows {
 			g = strings.ToLower(filepath.FromSlash(g))
 		}
+		out = append(out, g)
+	}
+	return out
+}
+
+func matchesAny(path string, globs []string) bool {
+	if len(globs) == 0 {
+		return false
+	}
+	// No Windows os nomes não diferenciam maiúsculas: *.tmp pega ARQUIVO.TMP
+	// (os padrões já vêm em minúsculas de prepararExclusoes).
+	if caminho.Windows {
+		path = strings.ToLower(path)
+	}
+	base := filepath.Base(path)
+	for _, g := range globs {
 		if ok, _ := filepath.Match(g, base); ok {
 			return true
 		}

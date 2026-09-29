@@ -20,6 +20,22 @@ func TestWalkPastaInexistenteFalha(t *testing.T) {
 	}
 }
 
+// Uma pasta que não abre não impede as outras do plano.
+func TestWalkUmaPastaRuimNaoBloqueiaAsOutras(t *testing.T) {
+	boa := t.TempDir()
+	if err := os.WriteFile(filepath.Join(boa, "a.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	arquivos, erros := Walk(context.Background(), "/", []string{filepath.Join(boa, "nao-existe"), boa}, nil)
+	n := 0
+	for range arquivos {
+		n++
+	}
+	if err := <-erros; err == nil || n != 1 {
+		t.Fatalf("esperava 1 arquivo da pasta boa e o erro da ruim; veio %d arquivos, erro %v", n, err)
+	}
+}
+
 func TestWalkChaveRelativaAoHostRoot(t *testing.T) {
 	raiz := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(raiz, "var", "dados"), 0o755); err != nil {
