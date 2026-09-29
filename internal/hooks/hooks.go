@@ -25,7 +25,6 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -81,12 +80,7 @@ func Run(ctx context.Context, comando string, prazo time.Duration) (Result, erro
 	// aqui o `/bin/sh` faz `exec` e o neto não existe; no Ubuntu do runner, não.
 	// O nome do teste já dizia a consequência para o cliente: o agendamento
 	// inteiro do servidor ficaria preso, e o próximo backup nunca começaria.
-	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
-		cmd = exec.Command("cmd", "/C", comando)
-	} else {
-		cmd = exec.Command("/bin/sh", "-c", comando)
-	}
+	cmd := comandoDoShell(comando)
 	grupoProprio(cmd)
 
 	buf := &bufferSeguro{}

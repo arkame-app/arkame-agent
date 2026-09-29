@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/arkame-app/agent/internal/caminho"
 	"io"
 	"os"
 	"path/filepath"
@@ -77,8 +78,11 @@ func Run(ctx context.Context, opts Options, item api.RestoreItem) error {
 	if item.Bucket == "" || item.SourceKey == "" {
 		return errors.New("item sem bucket ou source_key")
 	}
-	if !strings.HasPrefix(item.DestPath, "/") {
-		return fmt.Errorf("dest_path deve ser absoluto: %q", item.DestPath)
+	// No Windows, `C:\Restaurados` (ou o formato antigo `/restore`, no disco do
+	// sistema); no resto, `/restore` dentro do HostRoot.
+	destDir, err := caminho.Destino(opts.HostRoot, item.DestPath)
+	if err != nil {
+		return err
 	}
 	// dest_filename pode conter subdiretórios relativos (restore de pasta/snapshot
 	// preserva a estrutura), mas nunca path absoluto, "..", ou backslash.
@@ -87,7 +91,7 @@ func Run(ctx context.Context, opts Options, item api.RestoreItem) error {
 		return err
 	}
 
-	rootedDir := filepath.Join(opts.HostRoot, item.DestPath, filepath.FromSlash(subDir))
+	rootedDir := filepath.Join(destDir, filepath.FromSlash(subDir))
 	if err := os.MkdirAll(rootedDir, 0o755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", rootedDir, err)
 	}

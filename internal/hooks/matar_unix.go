@@ -7,6 +7,9 @@ import (
 	"syscall"
 )
 
+// comandoDoShell roda o comando no /bin/sh.
+func comandoDoShell(comando string) *exec.Cmd { return exec.Command("/bin/sh", "-c", comando) }
+
 // grupoProprio coloca o comando no próprio grupo de processos.
 //
 // Sem isto, matar o comando mata só o `/bin/sh`. Um hook de verdade quase nunca

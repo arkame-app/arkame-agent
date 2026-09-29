@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
+
+	"github.com/arkame-app/agent/internal/caminho"
 )
 
 // Entry é um item de diretório reportado ao painel.
@@ -21,13 +24,18 @@ type Entry struct {
 // só precisa da estrutura para seleção de pastas).
 const MaxEntries = 1000
 
-// ListDir lista um diretório absoluto do host. Retorna erro para paths
-// relativos ou não-diretórios; symlinks aparecem como arquivos (não segue).
-func ListDir(path string) ([]Entry, error) {
-	if !filepath.IsAbs(path) {
+// ListDir lista um diretório do servidor, pelo caminho do plano. No Linux,
+// dentro do HostRoot (no Docker, /host — sem isso o navegador listava o
+// container). No Windows, a raiz é a lista de unidades (C:, D:…), e os caminhos
+// vêm no formato do Windows (fundador, 28/09: "path deve ser absoluto: /").
+func ListDir(hostRoot, path string) ([]Entry, error) {
+	if runtime.GOOS == "windows" && caminho.Raiz(path) {
+		return unidades(), nil
+	}
+	if runtime.GOOS != "windows" && !filepath.IsAbs(path) {
 		return nil, fmt.Errorf("path deve ser absoluto: %q", path)
 	}
-	clean := filepath.Clean(path)
+	clean := caminho.NoDisco(hostRoot, path)
 
 	dirents, err := os.ReadDir(clean)
 	if err != nil {
@@ -57,4 +65,15 @@ func ListDir(path string) ([]Entry, error) {
 		entries = entries[:MaxEntries]
 	}
 	return entries, nil
+}
+
+// unidades lista as unidades do Windows que existem (C:, D:…), como pastas.
+func unidades() []Entry {
+	var e []Entry
+	for l := 'A'; l <= 'Z'; l++ {
+		if st, err := os.Stat(string(l) + `:\`); err == nil && st.IsDir() {
+			e = append(e, Entry{Name: string(l) + ":", Dir: true})
+		}
+	}
+	return e
 }

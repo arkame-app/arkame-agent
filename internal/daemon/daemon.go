@@ -597,7 +597,7 @@ func fsBrowseLoop(ctx context.Context, c *api.Client, cfg *config.Config) {
 
 		for _, req := range resp.Requests {
 			report := api.FsListingReport{}
-			entries, lerr := fsbrowse.ListDir(req.Path)
+			entries, lerr := fsbrowse.ListDir(cfg.HostRoot, req.Path)
 			if lerr != nil {
 				report.Error = lerr.Error()
 			} else {
