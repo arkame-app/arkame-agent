@@ -27,6 +27,7 @@ func newInstallCmd() *cobra.Command {
 		hostName        string
 		waitApproval    bool
 		checkStorage    bool
+		pausar          bool
 	)
 
 	cmd := &cobra.Command{
@@ -47,7 +48,17 @@ arkame-agent-oci, ...) e aponte --config para o env-file correspondente.
 Em re-enrollment (trocar servidor físico / reinstalar), o token novo é
 gerado no painel clicando "Reinstalar" em /agents/:id — ele é amarrado ao
 agent_id existente, preservando histórico e path no bucket.`,
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) (err error) {
+			if pausar {
+				// Aberto pelo `setup` do Windows numa janela própria: ela espera
+				// o Enter, com o resultado — inclusive o erro — à vista.
+				defer func() {
+					if err == nil {
+						fmt.Fprintln(os.Stderr, "\n  ✓ Pronto. O painel mostra o servidor e o teste do bucket.")
+					}
+					esperarEnter(&err)
+				}()
+			}
 			ctx := cmd.Context()
 			// Caminho absoluto: no Windows o padrão (/etc/arkame/agent.env) não
 			// tem unidade, e o serviço recebe exatamente este texto.
@@ -173,6 +184,7 @@ agent_id existente, preservando histórico e path no bucket.`,
 	cmd.Flags().StringVar(&serviceName, "service-name", service.DefaultName, "nome do serviço — use um por credencial de storage no mesmo host (ex.: arkame-agent-aws)")
 	cmd.Flags().StringVar(&serviceScope, "service-scope", "", "system (todo o host, exige root) ou user (só o seu usuário, sem sudo). Padrão: system se root, senão user")
 	cmd.Flags().StringVar(&hostName, "hostname", "", "hostname reportado (default: hostname do sistema)")
+	cmd.Flags().BoolVar(&pausar, "pause", false, "esperar um Enter antes de sair (janela aberta pelo setup no Windows)")
 	cmd.Flags().BoolVar(&checkStorage, "check-storage", true, "testar a chave do bucket antes de registrar (sem chave no arquivo, pergunta no terminal)")
 	cmd.Flags().BoolVar(&waitApproval, "wait", true, "aguardar aprovação humana (long-poll). --wait=false retorna logo após enrollment")
 

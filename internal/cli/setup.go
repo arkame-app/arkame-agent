@@ -68,8 +68,13 @@ func newSetupCmd() *cobra.Command {
 			}
 
 			// O install roda do programa instalado, para o serviço apontar para
-			// ele, e não para a cópia baixada na pasta temporária.
-			args := []string{"install", "--token=" + enrollmentToken}
+			// ele, e não para a cópia baixada na pasta temporária. E este
+			// processo sai logo em seguida, sem esperar: a cópia baixada fica
+			// livre, e rodar o comando de novo com uma janela ainda aberta não
+			// esbarra mais no arquivo em uso — o curl falhava com "(23) … on
+			// write" (fundador, 28/09). A janela segue com o install, que espera
+			// o Enter no fim.
+			args := []string{"install", "--token=" + enrollmentToken, "--pause"}
 			if panelURL != "" {
 				args = append(args, "--panel-url="+panelURL)
 			}
@@ -79,11 +84,11 @@ func newSetupCmd() *cobra.Command {
 			// o serviço o resolve no disco do sistema, e o install tem de
 			// resolver no mesmo — não no do perfil de quem roda.
 			c.Dir = discoDoSistema()
-			if err := c.Run(); err != nil {
-				return errors.New("a instalação não terminou: veja a mensagem acima")
+			if err := c.Start(); err != nil {
+				return fmt.Errorf("iniciando %s: %w", destino, err)
 			}
-			fmt.Fprintln(os.Stderr, "\n  ✓ Pronto. O painel mostra o servidor e o teste do bucket.")
-			return nil
+			pausar = false
+			return c.Process.Release()
 		},
 	}
 	cmd.Flags().StringVar(&enrollmentToken, "token", "", "código de instalação gerado no painel (atk_…)")
