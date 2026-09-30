@@ -23,3 +23,6 @@ build/
 
 # Binário operacional local (não versionado)
 dist/
+
+# Recursos do .exe (versão) gerados pelo go-winres na release
+cmd/arkame-agent/rsrc_windows_*.syso

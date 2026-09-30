@@ -4,6 +4,50 @@ Agent Go do SaaS [Arkame](https://arkame.app) — roda no servidor do cliente, l
 
 **Status:** funcional. Enrollment (Ed25519 + bearer JWT), daemon com 4 loops (heartbeat, probe, plans/backup, restore), sync engine (walker + hash + dedup HeadObject + multipart upload), restore com escrita atômica + verify, e warming de cold storage estão implementados. Build limpo (`go vet ./...`). Resta hardening (mTLS, self-update, snapshots, observabilidade) — ver "O que falta".
 
+## About (English)
+
+Arkame Agent is an open source (Apache 2.0) backup agent for Linux, macOS and
+Windows servers. It reads the folders the user selects, uploads them directly to
+the user's own S3-compatible bucket (AWS S3, Backblaze B2, Wasabi, Cloudflare R2,
+Oracle Cloud and others) with the user's own credentials — which never leave the
+machine — and restores any version back to the server. It reports only backup
+metadata to the [Arkame](https://arkame.app) management panel.
+
+## Download
+
+Every release is built and published by GitHub Actions from this repository:
+[github.com/arkame-app/arkame-agent/releases](https://github.com/arkame-app/arkame-agent/releases)
+(binaries for Linux, macOS and Windows, amd64 and arm64, with SHA-256 checksums
+signed by Sigstore/cosign, and a container image at `ghcr.io/arkame-app/arkame-agent`).
+
+The panel shows a one-line install command for each system; see
+[Uso](#uso) below. Windows binaries are being set up for code signing through
+the **SignPath Foundation** (free code signing for open source projects; the
+application is under review, and until approval Windows binaries are unsigned).
+See the [code signing policy](#code-signing-policy).
+
+## Code signing policy
+
+Free code signing provided by [SignPath.io](https://about.signpath.io/),
+certificate by [SignPath Foundation](https://signpath.org/).
+
+Only binaries built by this repository's GitHub Actions release workflow, from
+this repository's source code, are signed. Every release is approved manually
+before signing.
+
+| Role | Members |
+|---|---|
+| Committers and reviewers | [hugolf](https://github.com/hugolf) |
+| Approvers | [hugolf](https://github.com/hugolf) |
+
+**Privacy.** The agent sends files only to the bucket the user configures, with
+the user's own key, which is never sent anywhere else. To the Arkame panel it
+sends only backup metadata (server name, operating system, agent version and IP
+address; heartbeats; bucket connection test results; and each backup's file
+index — path, size, modification date, SHA-256 and bucket version) — never file
+contents. See the [privacy policy](https://arkame.app/privacidade). The agent
+can be fully removed with `arkame-agent uninstall`.
+
 ## Arquitetura
 
 ```
