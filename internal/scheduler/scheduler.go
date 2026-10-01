@@ -21,7 +21,10 @@ func ShouldRun(plan api.Plan, now time.Time) bool {
 		// iniciar a sessão, tornando o disparo one-shot.
 		return plan.NextRunAt != nil && !now.Before(*plan.NextRunAt)
 	}
-	if plan.NextRunAt != nil && now.Before(*plan.NextRunAt) {
+	// Agendado sem próxima execução: não roda. O painel calcula a agenda e
+	// sempre manda; vazio é falha do painel, e rodar seria backup a cada
+	// consulta — o que acontecia até 01/10.
+	if plan.NextRunAt == nil || now.Before(*plan.NextRunAt) {
 		return false
 	}
 	if len(plan.Windows) > 0 && !InAnyWindow(plan.Windows, now) {
