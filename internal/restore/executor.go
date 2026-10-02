@@ -91,7 +91,10 @@ func Run(ctx context.Context, opts Options, item api.RestoreItem) error {
 		return err
 	}
 
-	rootedDir := filepath.Join(destDir, filepath.FromSlash(subDir))
+	// Com os links seguidos no servidor: um link absoluto no meio do caminho
+	// levaria a gravação para dentro do container, e o arquivo sumiria no
+	// próximo reinício.
+	rootedDir := caminho.RealNoDisco(opts.HostRoot, filepath.Join(destDir, filepath.FromSlash(subDir)))
 	if err := os.MkdirAll(rootedDir, 0o755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", rootedDir, err)
 	}

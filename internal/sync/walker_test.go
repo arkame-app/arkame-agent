@@ -60,3 +60,44 @@ func TestWalkChaveRelativaAoHostRoot(t *testing.T) {
 		t.Fatalf("chaves = %v", chaves)
 	}
 }
+
+// Origem que é link (/home no Fedora Atomic): lê o destino, mas a chave no
+// bucket segue o caminho escolhido no plano. Link de arquivo dentro da pasta
+// copia o arquivo para onde aponta, resolvido no servidor.
+func TestWalkOrigemQueELink(t *testing.T) {
+	raiz := t.TempDir()
+	casa := filepath.Join(raiz, "var", "home", "hugo")
+	if err := os.MkdirAll(casa, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(casa, "nota.txt"), []byte("oi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(raiz, "etc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(raiz, "etc", "conf"), []byte("servidor"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("var/home", filepath.Join(raiz, "home")); err != nil {
+		t.Fatal(err)
+	}
+	// Link absoluto para /etc/conf: no Docker, tem de ser o /etc do servidor.
+	if err := os.Symlink("/etc/conf", filepath.Join(casa, "conf-link")); err != nil {
+		t.Fatal(err)
+	}
+	arquivos, erros := Walk(context.Background(), raiz, []string{"/home/hugo"}, nil)
+	got := map[string]string{}
+	for f := range arquivos {
+		got[f.RelativePath] = f.AbsolutePath
+	}
+	if err := <-erros; err != nil {
+		t.Fatal(err)
+	}
+	if got["home/hugo/nota.txt"] != filepath.Join(casa, "nota.txt") {
+		t.Fatalf("arquivo pela origem-link: %v", got)
+	}
+	if got["home/hugo/conf-link"] != filepath.Join(raiz, "etc", "conf") {
+		t.Fatalf("link absoluto deveria apontar para o /etc do servidor: %v", got)
+	}
+}

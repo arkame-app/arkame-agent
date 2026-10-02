@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -33,7 +34,15 @@ func Walk(ctx context.Context, hostRoot string, sourcePaths []string, excludeGlo
 		// seguem, e o erro vai no fim (o daemon trata como backup parcial).
 		var ilegiveis []string
 		for _, sp := range sourcePaths {
-			root := caminho.NoDisco(hostRoot, sp)
+			// O caminho escolhido no plano (como a pessoa o vê) e o caminho de
+			// verdade, com os links seguidos no servidor. Lê-se do de verdade;
+			// a chave no bucket segue o escolhido: quem marcou /home vê e
+			// restaura /home, mesmo que no disco seja /var/home.
+			escolhido := caminho.NoDisco(hostRoot, sp)
+			root := caminho.Real(hostRoot, sp)
+			chave := func(p string) string {
+				return caminho.NaChave(hostRoot, escolhido+strings.TrimPrefix(p, root))
+			}
 
 			err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 				if err != nil {
@@ -56,16 +65,33 @@ func Walk(ctx context.Context, hostRoot string, sourcePaths []string, excludeGlo
 				if matchesAny(path, excludeGlobs) {
 					return nil
 				}
+				leitura := path
 				info, err := d.Info()
 				if err != nil {
+					return nil
+				}
+				if d.Type()&fs.ModeSymlink != 0 {
+					// Link dentro da pasta: copia o arquivo para onde ele aponta,
+					// resolvido no servidor (no Docker, o container resolveria
+					// pelo lado dele). Link para pasta não é seguido — evita
+					// laço e cópia em dobro do que já está em outro lugar.
+					alvo := caminho.Real(hostRoot, strings.TrimPrefix(path, filepath.Clean(hostRoot)))
+					st, serr := os.Stat(alvo)
+					if serr != nil || !st.Mode().IsRegular() {
+						return nil
+					}
+					leitura, info = alvo, st
+				} else if !info.Mode().IsRegular() {
+					// Socket, pipe, dispositivo: não há conteúdo a guardar, e
+					// abrir um pipe trava o backup.
 					return nil
 				}
 				select {
 				case <-ctx.Done():
 					return ctx.Err()
 				case out <- FileInfo{
-					AbsolutePath: path,
-					RelativePath: caminho.NaChave(hostRoot, path),
+					AbsolutePath: leitura,
+					RelativePath: chave(path),
 					Size:         info.Size(),
 					ModTime:      info.ModTime().UnixNano(),
 				}:

@@ -6,6 +6,7 @@ package fsbrowse
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 
 	"github.com/arkame-app/agent/internal/caminho"
@@ -33,7 +34,7 @@ func ListDir(hostRoot, path string) ([]Entry, error) {
 	if !caminho.Absoluto(path) {
 		return nil, fmt.Errorf("path deve ser absoluto: %q", path)
 	}
-	clean := caminho.NoDisco(hostRoot, path)
+	clean := caminho.Real(hostRoot, path)
 
 	dirents, err := os.ReadDir(clean)
 	if err != nil {
@@ -43,6 +44,18 @@ func ListDir(hostRoot, path string) ([]Entry, error) {
 	entries := make([]Entry, 0, len(dirents))
 	for _, d := range dirents {
 		e := Entry{Name: d.Name(), Dir: d.IsDir()}
+		// Link simbólico: o que vale é para onde ele aponta, resolvido no
+		// servidor (no Fedora Atomic, /home é um link para var/home).
+		if d.Type()&os.ModeSymlink != 0 {
+			if info, serr := os.Stat(caminho.Real(hostRoot, filepath.Join(path, d.Name()))); serr == nil {
+				e.Dir = info.IsDir()
+				if !e.Dir {
+					e.Size = info.Size()
+				}
+			}
+			entries = append(entries, e)
+			continue
+		}
 		if !e.Dir {
 			if info, ierr := d.Info(); ierr == nil {
 				e.Size = info.Size()
