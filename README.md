@@ -24,6 +24,9 @@ The panel shows a one-line install command for each system; see
 [Uso](#uso) below. Windows binaries are being set up for code signing through
 the **SignPath Foundation** (free code signing for open source projects; the
 application is under review, and until approval Windows binaries are unsigned).
+Until then, Windows 11 with Smart App Control turned on blocks the agent;
+Windows 10 and Windows Server work normally. On Linux, Docker is the default
+install method.
 See the [code signing policy](#code-signing-policy).
 
 ## Code signing policy
@@ -116,6 +119,34 @@ só então registra o servidor e instala o serviço. Chave recusada: diz a causa
 pergunta de novo. A chave fica no servidor; o painel só informa qual bucket
 (`POST /api/agents/install-config`).
 
+#### Docker (padrão em Linux)
+
+O registro roda num container com terminal (`-it`): pergunta e testa a chave,
+registra e espera a aprovação, gravando tudo em `/etc/arkame`. Só se ele terminar
+bem o container antigo sai e o serviço sobe (`--restart always`), lendo o mesmo
+lugar. `label=disable`: com SELinux (RHEL, Rocky, Fedora) o container não
+gravava em `/etc/arkame` nem lia o host; sem SELinux, não faz nada. A raiz do
+servidor vai montada com leitura e escrita (`-v /:/host`, sem `:ro`): a
+restauração grava no servidor, inclusive no lugar original.
+
+```bash
+sudo docker run --rm -it --user 0 --security-opt label=disable --hostname "$(hostname)" -v /etc/arkame:/etc/arkame \
+  ghcr.io/arkame-app/arkame-agent:latest install --token=atk_... --panel-url=https://save.arkame.app --install-service=false \
+&& { sudo docker rm -f arkame-agent >/dev/null 2>&1; \
+  sudo docker run -d --name arkame-agent --restart always --user 0 --security-opt label=disable --hostname "$(hostname)" \
+  -v /:/host -v /etc/arkame:/etc/arkame ghcr.io/arkame-app/arkame-agent:latest; }
+```
+
+No Docker, os comandos antes/depois do backup de um plano não rodam (a imagem
+não tem shell, e os programas estão no host): agende dumps de banco no próprio
+host (cron), numa pasta incluída no plano.
+
+Servidor sem sinal: `sudo docker logs --tail 50 arkame-agent` e
+`sudo docker restart arkame-agent`. Trocar a chave do bucket:
+`sudo docker run --rm -it --user 0 -v /etc/arkame:/etc/arkame ghcr.io/arkame-app/arkame-agent:latest set-storage-keys && sudo docker restart arkame-agent`.
+
+#### Nativo (Linux, macOS e Windows)
+
 ```bash
 # Linux e macOS
 curl -fsSL https://get.arkame.app/install.sh | sudo sh -s -- --token=atk_...
@@ -132,6 +163,11 @@ cmd /c "curl -fsSLo "%TEMP%\arkame-agent.exe" https://get.arkame.app/agente.exe 
 
 O `curl.exe` vem no Windows 10 (1803+), 11 e Server 2019+. No Server 2016, use o
 `install.ps1` (PowerShell como administrador).
+
+> **Windows 11 com Controle Inteligente de Aplicativos (Smart App Control):** o
+> Windows bloqueia o agente até a assinatura de código (SignPath Foundation) ser
+> aprovada — ver [Code signing policy](#code-signing-policy). Windows 10 e
+> Windows Server funcionam normalmente.
 
 O arquivo gravado (`/etc/arkame/agent.env`; no Windows `C:\etc\arkame\agent.env`)
 fica legível só pelo administrador (0600; no Windows, Administradores e SYSTEM).
@@ -182,22 +218,6 @@ systemctl status arkame-agent
 
 # Manualmente:
 arkame-agent run --config /etc/arkame/agent.env
-```
-
-### Docker — também um comando
-
-O registro roda num container com terminal (`-it`): pergunta e testa a chave,
-registra e espera a aprovação, gravando tudo em `/etc/arkame`. Só se ele terminar
-bem o container antigo sai e o serviço sobe (`--restart always`), lendo o mesmo
-lugar. `label=disable`: com SELinux (RHEL, Rocky, Fedora) o container não
-gravava em `/etc/arkame` nem lia o host; sem SELinux, não faz nada.
-
-```bash
-sudo docker run --rm -it --user 0 --security-opt label=disable --hostname "$(hostname)" -v /etc/arkame:/etc/arkame \
-  ghcr.io/arkame-app/arkame-agent:latest install --token=atk_... --panel-url=https://save.arkame.app --install-service=false \
-&& { sudo docker rm -f arkame-agent >/dev/null 2>&1; \
-  sudo docker run -d --name arkame-agent --restart always --user 0 --security-opt label=disable --hostname "$(hostname)" \
-  -v /:/host:ro -v /etc/arkame:/etc/arkame ghcr.io/arkame-app/arkame-agent:latest; }
 ```
 
 ## Variáveis de ambiente
