@@ -13,8 +13,8 @@ dist: build/release
 before:
   hooks:
     - go mod tidy
-    # Nome do produto e versão dentro do .exe (VERSIONINFO): a SignPath
-    # Foundation exige, e o Windows os mostra em Propriedades → Detalhes. O
+    # Nome do produto e versão dentro do .exe (VERSIONINFO): a assinatura de
+    # código vai exigir, e o Windows os mostra em Propriedades → Detalhes. O
     # go-winres roda só aqui, fora do go.mod; gera os .syso que o `go build`
     # para Windows embute (ignorados no git).
     - go run github.com/tc-hib/go-winres@v0.3.3 simply --arch amd64,arm64 --manifest cli --product-name "Arkame Agent" --file-description "Arkame Agent - backup agent" --product-version {{ .Version }} --file-version {{ .Version }} --copyright "Arkame - Apache License 2.0" --original-filename arkame-agent.exe --out cmd/arkame-agent/rsrc

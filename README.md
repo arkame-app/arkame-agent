@@ -21,22 +21,10 @@ Every release is built and published by GitHub Actions from this repository:
 signed by Sigstore/cosign, and a container image at `ghcr.io/arkame-app/arkame-agent`).
 
 The panel shows a one-line install command for each system; see
-[Uso](#uso) below. Windows binaries are being set up for code signing through
-the **SignPath Foundation** (free code signing for open source projects; the
-application is under review, and until approval Windows binaries are unsigned).
-Until then, Windows 11 with Smart App Control turned on blocks the agent;
-Windows 10 and Windows Server work normally. On Linux, Docker is the default
-install method.
-See the [code signing policy](#code-signing-policy).
-
-## Code signing policy
-
-Free code signing provided by [SignPath.io](https://about.signpath.io/),
-certificate by [SignPath Foundation](https://signpath.org/).
-
-Only binaries built by this repository's GitHub Actions release workflow, from
-this repository's source code, are signed. Every release is approved manually
-before signing.
+[Uso](#uso) below. Windows binaries are not code-signed yet: Windows 11 with
+Smart App Control turned on blocks the agent, while Windows 10 and Windows
+Server work normally. Integrity is covered by the SHA-256 checksums signed with
+Sigstore/cosign. On Linux, Docker is the default install method.
 
 | Role | Members |
 |---|---|
@@ -165,8 +153,7 @@ O `curl.exe` vem no Windows 10 (1803+), 11 e Server 2019+. No Server 2016, use o
 `install.ps1` (PowerShell como administrador).
 
 > **Windows 11 com Controle Inteligente de Aplicativos (Smart App Control):** o
-> Windows bloqueia o agente até a assinatura de código (SignPath Foundation) ser
-> aprovada — ver [Code signing policy](#code-signing-policy). Windows 10 e
+> Windows bloqueia o agente, que ainda não tem assinatura de código. Windows 10 e
 > Windows Server funcionam normalmente.
 
 O arquivo gravado (`/etc/arkame/agent.env`; no Windows `C:\etc\arkame\agent.env`)
