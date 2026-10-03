@@ -28,20 +28,6 @@ func Real(hostRoot, p string) string {
 	return real(hostRoot, p)
 }
 
-// RealNoDisco é o Real de um caminho que já está no disco (com o HostRoot na
-// frente): a pasta final de uma restauração, montada do destino mais o
-// caminho original do arquivo, pode ter um link no meio.
-func RealNoDisco(hostRoot, disco string) string {
-	if Windows {
-		return disco
-	}
-	raiz := filepath.Clean(hostRoot)
-	if raiz == "/" || raiz == "." || raiz == "" {
-		return real("/", disco)
-	}
-	return real(raiz, strings.TrimPrefix(disco, raiz))
-}
-
 func real(hostRoot, p string) string {
 	raiz := filepath.Clean(hostRoot)
 	if raiz == "" || raiz == "." {

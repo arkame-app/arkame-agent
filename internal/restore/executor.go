@@ -100,13 +100,17 @@ func Run(ctx context.Context, opts Options, item api.RestoreItem) error {
 		return err
 	}
 
-	// Com os links seguidos no servidor: um link absoluto no meio do caminho
-	// levaria a gravação para dentro do container, e o arquivo sumiria no
-	// próximo reinício.
-	rootedDir := caminho.RealNoDisco(opts.HostRoot, filepath.Join(destDir, filepath.FromSlash(subDir)))
-	if err := os.MkdirAll(rootedDir, 0o755); err != nil {
-		return fmt.Errorf("mkdir %s: %w", rootedDir, err)
+	// A pasta é aberta sem seguir link de usuário (ErrDestinoLink): o agente
+	// grava como root, e quem manda na pasta de destino poderia trocá-la por
+	// um link para /root/.ssh. Os links do sistema (/home -> var/home no
+	// Fedora Atomic) continuam valendo, e um link absoluto recomeça no
+	// HostRoot, não dentro do container.
+	dir, err := abrirPasta(opts.HostRoot, destDir, subDir)
+	if err != nil {
+		return err
 	}
+	defer dir.Close()
+	rootedDir := dir.caminho
 
 	// Item refeito: a gravação deu certo, mas o PATCH final não chegou ao
 	// painel, e o item voltou na fila. O resolveConflict via o arquivo que
@@ -128,22 +132,19 @@ func Run(ctx context.Context, opts Options, item api.RestoreItem) error {
 	}
 	finalPath := filepath.Join(rootedDir, finalName)
 
-	tmpFile, err := os.CreateTemp(rootedDir, padraoTemporario(finalName))
+	tmpFile, tmpNome, err := dir.criarTemp(padraoTemporario(finalName))
 	if err != nil {
 		return fmt.Errorf("tempfile: %w", err)
 	}
-	tmpPath := tmpFile.Name()
 	cleanup := true
 	defer func() {
 		if cleanup {
-			os.Remove(tmpPath)
+			tmpFile.Close()
+			dir.remover(tmpNome)
 		}
 	}()
 
 	written, hashErr := downloadObject(ctx, opts.S3, item, tmpFile)
-	if cerr := tmpFile.Close(); cerr != nil && hashErr == nil {
-		hashErr = cerr
-	}
 	if hashErr != nil {
 		var iose *s3types.InvalidObjectState
 		if errors.As(hashErr, &iose) {
@@ -159,19 +160,17 @@ func Run(ctx context.Context, opts Options, item api.RestoreItem) error {
 		return fmt.Errorf("sha256 mismatch: esperado=%s baixado=%s", item.SourceSha256, written.sha256)
 	}
 
-	// O CreateTemp cria com 0600, e o rename levava isso ao destino: todo
+	// O temporário nasce com 0600, e o rename levava isso ao destino: todo
 	// arquivo restaurado ficava 0600 (e root:root, com o agente como root),
 	// inclusive por cima de um arquivo que o serviço do cliente lia com outro
 	// usuário. Por cima de um arquivo existente, herda o modo e o dono dele;
-	// arquivo novo fica 0644.
-	if err := ajustarPermissoes(tmpPath, finalPath); err != nil {
+	// arquivo novo fica 0644. Pelo descritor, não pelo caminho.
+	if err := ajustarPermissoes(tmpFile, finalPath); err != nil {
 		return err
 	}
-
-	if err := os.Rename(tmpPath, finalPath); err != nil {
-		return fmt.Errorf("rename tmp → final: %w", err)
+	if err := tmpFile.Close(); err != nil {
+		return fmt.Errorf("fechando o temporário: %w", err)
 	}
-	cleanup = false
 	// A data do arquivo no backup, quando o painel a manda: a data de agora
 	// faz todo arquivo restaurado parecer recém-alterado (backup incremental,
 	// make, rsync e quem procura "o que mudou" passam a errar).
@@ -179,7 +178,14 @@ func Run(ctx context.Context, opts Options, item api.RestoreItem) error {
 	if item.SourceModifiedAt != nil && !item.SourceModifiedAt.IsZero() {
 		mtime = *item.SourceModifiedAt
 	}
-	_ = aplicarData(finalPath, time.Now(), mtime)
+	_ = dir.aplicarData(tmpNome, time.Now(), mtime)
+
+	if err := dir.renomear(tmpNome, finalName); err != nil {
+		dir.remover(tmpNome)
+		cleanup = false
+		return fmt.Errorf("rename tmp → final: %w", err)
+	}
+	cleanup = false
 	return nil
 }
 
@@ -189,19 +195,19 @@ const modoDeArquivoNovo os.FileMode = 0o644
 // ajustarPermissoes dá ao temporário o modo (e, como root fora do Windows, o
 // dono) do arquivo que ele vai substituir; sem arquivo regular no destino,
 // modoDeArquivoNovo.
-func ajustarPermissoes(tmpPath, finalPath string) error {
+func ajustarPermissoes(tmp *os.File, finalPath string) error {
 	modo := modoDeArquivoNovo
 	existente, err := os.Lstat(finalPath)
 	regular := err == nil && existente.Mode().IsRegular()
 	if regular {
 		modo = existente.Mode() & (os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky)
 	}
-	if err := os.Chmod(tmpPath, modo); err != nil {
-		return fmt.Errorf("chmod %s: %w", tmpPath, err)
+	if err := tmp.Chmod(modo); err != nil {
+		return fmt.Errorf("chmod %s: %w", tmp.Name(), err)
 	}
 	if regular {
-		if err := copiarDono(tmpPath, existente); err != nil {
-			return fmt.Errorf("chown %s: %w", tmpPath, err)
+		if err := copiarDono(tmp, existente); err != nil {
+			return fmt.Errorf("chown %s: %w", tmp.Name(), err)
 		}
 	}
 	return nil

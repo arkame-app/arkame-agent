@@ -86,11 +86,10 @@ func destino(windows bool, hostRoot, dir string) (string, error) {
 		}
 		return "", fmt.Errorf("destino deve ser absoluto, como /restaurados: %q", dir)
 	}
-	if !windows {
-		// A restauração grava no caminho de verdade: um link absoluto no
-		// meio do destino não pode levar a gravação para dentro do container.
-		return real(hostRoot, dir), nil
-	}
+	// Sem seguir link: a restauração abre o caminho ela mesma, componente por
+	// componente, e só segue os links do sistema (restore.abrirPasta). Seguir
+	// aqui deixava quem manda na pasta de destino desviar a gravação do
+	// agente (root) com um link para /root/.ssh.
 	return noDisco(windows, hostRoot, dir), nil
 }
 

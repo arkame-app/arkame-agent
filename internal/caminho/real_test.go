@@ -54,13 +54,3 @@ func TestRealNaoLacaComLinkCircular(t *testing.T) {
 	}
 	_ = real(raiz, "/a/x") // basta terminar
 }
-
-// Restauração no lugar de origem: a pasta final passa por um link absoluto
-// (/opt -> /var/opt) e tem de ficar no servidor, não no container.
-func TestRealNoDiscoDaRestauracao(t *testing.T) {
-	raiz := servidorAtomic(t)
-	got := RealNoDisco(raiz, filepath.Join(raiz, "opt", "app", "conf"))
-	if got != filepath.Join(raiz, "var", "opt", "app", "conf") {
-		t.Fatalf("RealNoDisco = %q", got)
-	}
-}

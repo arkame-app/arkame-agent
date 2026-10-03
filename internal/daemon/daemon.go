@@ -898,6 +898,10 @@ func processarFilaDeRestore(ctx context.Context, c *api.Client, s3c *s3.Client, 
 			if isObjectGone(err) {
 				update.ErrorCode = "not_found"
 			}
+			// Caminho com link que não é do sistema: nada foi gravado.
+			if errors.Is(err, restore.ErrDestinoLink) {
+				update.ErrorCode = restore.CodigoDestinoLink
+			}
 			slog.Error("restore item falhou",
 				"item_id", item.ItemID, "key", item.SourceKey, "err", err)
 		}

@@ -9,7 +9,7 @@ import (
 
 // copiarDono dá ao arquivo o dono e o grupo do existente. Só como root: outro
 // usuário não pode dar o arquivo a terceiros, e o que ele cria já é dele.
-func copiarDono(caminho string, existente os.FileInfo) error {
+func copiarDono(f *os.File, existente os.FileInfo) error {
 	if os.Geteuid() != 0 {
 		return nil
 	}
@@ -17,5 +17,5 @@ func copiarDono(caminho string, existente os.FileInfo) error {
 	if !ok {
 		return nil
 	}
-	return os.Lchown(caminho, int(st.Uid), int(st.Gid))
+	return f.Chown(int(st.Uid), int(st.Gid))
 }
