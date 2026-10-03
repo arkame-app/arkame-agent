@@ -80,7 +80,8 @@ func TestRestauracaoPreservaModoDoArquivoSubstituido(t *testing.T) {
 	}
 }
 
-// Arquivo novo: 0644, não 0600; e a data do backup, quando o painel a manda.
+// Arquivo novo: 0600 (o modo original não está no índice, e o arquivo pode ser
+// um segredo); e a data do backup, quando o painel a manda.
 func TestRestauracaoArquivoNovoModoEData(t *testing.T) {
 	conteudo := []byte("x")
 	dir := t.TempDir()
@@ -94,8 +95,8 @@ func TestRestauracaoArquivoNovoModoEData(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if runtime.GOOS != "windows" && st.Mode().Perm() != 0o644 {
-		t.Fatalf("arquivo novo com modo %v, queria 0644", st.Mode().Perm())
+	if runtime.GOOS != "windows" && st.Mode().Perm() != 0o600 {
+		t.Fatalf("arquivo novo com modo %v, queria 0600", st.Mode().Perm())
 	}
 	if !st.ModTime().Equal(quando) {
 		t.Fatalf("mtime = %v, queria %v (modified_at do backup)", st.ModTime(), quando)

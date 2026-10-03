@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/arkame-app/agent/internal/segredo"
 )
 
 // pasta é a pasta da restauração. No Windows não há openat: a conferência é
@@ -22,22 +24,36 @@ type pasta struct {
 // apontam para outro lugar — o Go os entrega sem ModeDir) no caminho é
 // ErrDestinoLink. Pasta do OneDrive e outros reparse points que não desviam o
 // caminho continuam valendo: chegam como pasta.
+//
+// A primeira pasta que o agente cria até destDir (C:\Restaurados, na
+// restauração para pasta nova) nasce com a DACL do segredo: só
+// Administradores e SYSTEM, herdada pelo que a restauração gravar nela. Sem
+// isso ela herdava a ACL de C:\, que dá leitura a Users, e o que se restaura
+// de um servidor (chaves, .env, bancos) ficava legível por qualquer usuário.
+// As subpastas que o dest_filename cria dentro de uma pasta que já existia
+// (restauração no lugar de origem) herdam a ACL dela, como os vizinhos.
 func abrirPasta(_ string, destDir, subDir string) (*pasta, error) {
 	alvo := filepath.Join(destDir, filepath.FromSlash(subDir))
 	vol := filepath.VolumeName(alvo)
 	atual := vol + `\`
-	for _, c := range strings.Split(strings.Trim(alvo[len(vol):], `\`), `\`) {
-		if c == "" || c == "." {
-			continue
-		}
+	nDestino := len(componentes(destDir[len(filepath.VolumeName(destDir)):]))
+	protegida := false
+	for i, c := range componentes(alvo[len(vol):]) {
 		if c == ".." {
 			return nil, fmt.Errorf("destino com ..: %s", alvo)
 		}
 		atual = filepath.Join(atual, c)
 		st, err := os.Lstat(atual)
 		if os.IsNotExist(err) {
-			if merr := os.Mkdir(atual, 0o755); merr != nil && !os.IsExist(merr) {
+			merr := os.Mkdir(atual, 0o700)
+			if merr != nil && !os.IsExist(merr) {
 				return nil, fmt.Errorf("mkdir %s: %w", atual, merr)
+			}
+			if merr == nil && i < nDestino && !protegida {
+				if perr := segredo.ProtegerPasta(atual); perr != nil {
+					return nil, perr
+				}
+				protegida = true
 			}
 			st, err = os.Lstat(atual)
 		}
@@ -53,6 +69,18 @@ func abrirPasta(_ string, destDir, subDir string) (*pasta, error) {
 		return nil, fmt.Errorf("%s não é pasta", atual)
 	}
 	return &pasta{caminho: atual}, nil
+}
+
+// componentes separa o caminho (sem a unidade) nas pastas, sem as vazias e
+// sem ".".
+func componentes(p string) []string {
+	var cs []string
+	for _, c := range strings.Split(strings.Trim(p, `\`), `\`) {
+		if c != "" && c != "." {
+			cs = append(cs, c)
+		}
+	}
+	return cs
 }
 
 func (p *pasta) Close() error { return nil }

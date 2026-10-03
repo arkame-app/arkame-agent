@@ -90,7 +90,9 @@ func abrirPasta(hostRoot, destDir, subDir string) (*pasta, error) {
 		}
 		if errors.Is(err, unix.ENOENT) && criados < 1000 {
 			criados++
-			if merr := unix.Mkdirat(dir, c, 0o755); merr != nil && !errors.Is(merr, unix.EEXIST) {
+			// 0700: o que vai dentro pode ser segredo, e o modo original
+			// da pasta não está no índice.
+			if merr := unix.Mkdirat(dir, c, 0o700); merr != nil && !errors.Is(merr, unix.EEXIST) {
 				return nil, fmt.Errorf("mkdir %s: %w", filepath.Join(atual(), c), merr)
 			}
 			// Abre na próxima volta, de novo sem seguir link: se alguém pôs

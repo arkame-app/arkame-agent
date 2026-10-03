@@ -164,12 +164,10 @@ func Run(ctx context.Context, opts Options, item api.RestoreItem) error {
 	}
 	aposBaixar()
 
-	// O temporário nasce com 0600, e o rename levava isso ao destino: todo
-	// arquivo restaurado ficava 0600 (e root:root, com o agente como root),
-	// inclusive por cima de um arquivo que o serviço do cliente lia com outro
-	// usuário. Por cima de um arquivo existente, herda o modo e o dono dele;
-	// arquivo novo fica 0644. Pelo descritor, não pelo caminho.
-	if err := ajustarPermissoes(tmpFile, dir, finalName); err != nil {
+	// Por cima de um arquivo existente, ou ao lado dele (suffix-version), herda
+	// o modo e o dono dele; arquivo novo fica 0600. Pelo descritor, não pelo
+	// caminho.
+	if err := ajustarPermissoes(tmpFile, dir, baseName, finalName); err != nil {
 		return err
 	}
 	if err := tmpFile.Close(); err != nil {
@@ -201,16 +199,24 @@ var (
 	aposBaixar     = func() {}
 )
 
-// modoDeArquivoNovo é o modo de um arquivo restaurado que não substitui outro.
-const modoDeArquivoNovo os.FileMode = 0o644
+// modoDeArquivoNovo é o modo de um arquivo restaurado sem um existente de
+// mesmo nome. O modo original não está no índice, e o arquivo pode ser um
+// segredo (/etc/shadow, chave privada, .env): era 0644, e restaurar /etc para
+// /restore deixava tudo isso legível por qualquer usuário. Quem precisa de
+// outro modo o dá depois; o contrário não se desfaz.
+const modoDeArquivoNovo os.FileMode = 0o600
 
 // trocarDono é o copiarDono da plataforma; variável para o teste simular,
 // sem root, o chown que limpa setuid/setgid.
 var trocarDono = copiarDono
 
 // ajustarPermissoes dá ao temporário o modo (e, como root fora do Windows, o
-// dono) do arquivo que ele vai substituir; sem arquivo regular no destino,
-// modoDeArquivoNovo.
+// dono) do arquivo existente com o nome do item (baseName): o que ele vai
+// substituir (overwrite) ou ao lado do qual vai ficar (suffix-version, com
+// finalName diferente). Sem arquivo regular com esse nome, modoDeArquivoNovo.
+//
+// A cópia ao lado não herda setuid/setgid: seria um segundo binário
+// privilegiado, com o conteúdo antigo. Só quem substitui o original os herda.
 //
 // O chown vem antes do chmod: no Linux o chown limpa S_ISUID e S_ISGID, mesmo
 // feito pelo root, e o chmod antes dele deixava o binário setuid/setgid
@@ -220,11 +226,14 @@ var trocarDono = copiarDono
 // link). Era um os.Lstat do caminho em texto: durante o download a pessoa
 // trocava a pasta por um link para /usr/bin, e o arquivo dela recebia o
 // 04755 root:root do /usr/bin/passwd — root local.
-func ajustarPermissoes(tmp *os.File, dir *pasta, finalName string) error {
+func ajustarPermissoes(tmp *os.File, dir *pasta, baseName, finalName string) error {
 	modo := modoDeArquivoNovo
-	existente, err := dir.infoDe(finalName)
+	existente, err := dir.infoDe(baseName)
 	if err == nil && existente.regular {
 		modo = existente.modo
+		if finalName != baseName {
+			modo &^= os.ModeSetuid | os.ModeSetgid
+		}
 		if err := trocarDono(tmp, existente.uid, existente.gid); err != nil {
 			return fmt.Errorf("chown %s: %w", tmp.Name(), err)
 		}

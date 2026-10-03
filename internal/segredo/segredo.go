@@ -44,6 +44,12 @@ func Gravar(caminho string, dados []byte, modo os.FileMode) error {
 // no Windows, Administradores e SYSTEM).
 func Proteger(caminho string) error { return protegerComModo(caminho, 0o600) }
 
+// ProtegerPasta deixa uma pasta que o agente acabou de criar só para o
+// administrador, herdado pelo que for gravado nela: no Windows, a DACL
+// protegida de Administradores e SYSTEM; fora dele não faz nada (quem cria
+// a pasta já lhe dá o modo).
+func ProtegerPasta(dir string) error { return protegerPasta(dir) }
+
 // CriarPasta cria a pasta da configuração. Se fomos nós que a criamos, ela já
 // nasce protegida (no Windows, Administradores e SYSTEM, herdado pelo que for
 // gravado nela); pasta que já existia não é tocada — pode ser uma pasta da
