@@ -20,6 +20,14 @@ var (
 	_ [0]struct{} = [ioReparseTagMountPoint ^ windows.IO_REPARSE_TAG_MOUNT_POINT]struct{}{}
 )
 
+// errosLinkSemAlvoDoSistema são os equivalentes do Windows ao ELOOP e ao
+// ENAMETOOLONG no stat do alvo de um link (o ENOTDIR lá já vem como
+// ERROR_PATH_NOT_FOUND, que é fs.ErrNotExist).
+var errosLinkSemAlvoDoSistema = []error{
+	windows.ERROR_CANT_RESOLVE_FILENAME, // link em laço
+	windows.ERROR_FILENAME_EXCED_RANGE,  // nome longo demais
+}
+
 // fileAttributeTagInfo é FILE_ATTRIBUTE_TAG_INFO (winbase.h), que o x/sys não
 // define.
 type fileAttributeTagInfo struct {

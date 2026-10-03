@@ -52,6 +52,26 @@ type puladosDoWalk struct {
 // só conseguem um EACCES.
 var naoPermitido = func(err error) bool { return errors.Is(err, syscall.EPERM) }
 
+// linkSemAlvo diz se o erro do stat do alvo de um link quer dizer que não há
+// arquivo para onde ele aponte: não existe, link em laço (ELOOP: x -> x,
+// a -> b -> a), caminho que atravessa um arquivo (ENOTDIR: l -> a.txt/x) ou
+// nome longo demais. São todos link quebrado, ignorados; contá-los como item
+// não lido deixava todo backup daquela origem parcial, para sempre, por um
+// link esquecido. Só o resto (EACCES, EPERM, EIO, ESTALE…) é destino que
+// existe e não deu para ler.
+func linkSemAlvo(err error) bool {
+	if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ELOOP) ||
+		errors.Is(err, syscall.ENOTDIR) || errors.Is(err, syscall.ENAMETOOLONG) {
+		return true
+	}
+	for _, e := range errosLinkSemAlvoDoSistema {
+		if errors.Is(err, e) {
+			return true
+		}
+	}
+	return false
+}
+
 // walk é o Walk que, com puladosOut, devolve quantos arquivos ficaram de fora
 // por estarem só na nuvem ou por serem reparse points de outro filtro. O valor
 // é gravado antes de o canal de erros fechar: só se lê depois de vê-lo fechado
@@ -176,7 +196,7 @@ func walk(ctx context.Context, hostRoot string, sourcePaths []string, excludeGlo
 						// Disco) entra na conta, como um arquivo comum: calado,
 						// o link sumia de uma sessão "concluída" e o painel lia
 						// a falta como remoção.
-						if !errors.Is(serr, fs.ErrNotExist) {
+						if !linkSemAlvo(serr) {
 							anotar(path, serr)
 						}
 						return nil

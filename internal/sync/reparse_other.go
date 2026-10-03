@@ -8,3 +8,6 @@ import "errors"
 func lerReparseDoSistema(string) (uint32, uint32, error) {
 	return 0, 0, errors.New("reparse point só existe no Windows")
 }
+
+// Fora do Windows, ELOOP/ENOTDIR/ENAMETOOLONG já cobrem o link sem alvo.
+var errosLinkSemAlvoDoSistema []error

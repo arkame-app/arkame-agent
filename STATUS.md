@@ -78,7 +78,12 @@ Binário Linux rodando local contra o painel em produção (`save.arkame.app`) +
 > Link para arquivo cujo destino não dá para ler (EACCES; no macOS, sem Acesso Total ao
 > Disco) entra na conta do backup parcial, como um arquivo comum ilegível. Antes era
 > pulado calado: sumia de uma sessão "concluída" e o painel lia a falta como remoção.
-> Link quebrado e link para pasta continuam fora, sem deixar a sessão parcial.
+> Link quebrado e link para pasta continuam fora, sem deixar a sessão parcial. Conta
+> como link quebrado também o link em laço (`x -> x`, `a -> b -> a`: ELOOP), o que
+> atravessa um arquivo (`l -> a.txt/x`: ENOTDIR) e o de nome longo demais
+> (ENAMETOOLONG); no Windows, ERROR_CANT_RESOLVE_FILENAME e ERROR_FILENAME_EXCED_RANGE.
+> Só os demais erros (EACCES, EPERM, EIO, ESTALE…) deixam a sessão parcial: antes, um
+> link em laço esquecido deixava todo backup daquela origem parcial para sempre.
 
 - **Enrollment Ed25519**: `internal/enrollment` gera keypair, POST `/api/agents/enroll`, long-poll na `wait-token` até receber JWT bearer
 - **Bearer auth**: client HTTP envia `Authorization: Bearer <token>` em todos os requests pós-approval; `ErrNotReady` (204) e `ErrGone` (410) pra long-poll handling

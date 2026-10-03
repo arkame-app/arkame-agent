@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -377,5 +378,63 @@ func TestWalkLinkComDestinoIlegivelViraErro(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "quebrado") || strings.Contains(err.Error(), "pasta") {
 		t.Fatalf("link quebrado ou para pasta não é falha: %v", err)
+	}
+}
+
+// Link em laço (self -> self, a -> b -> a) e link que atravessa um arquivo
+// (l -> ok.txt/x) não têm conteúdo a copiar: são link quebrado, ignorados
+// como o que aponta para o nada. Contados como item não lido, um link
+// esquecido deixava todo backup daquela origem parcial para sempre (passada 20).
+func TestWalkLinkEmLacoOuAtravessandoArquivoEIgnorado(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink no Windows pede privilégio")
+	}
+	raiz := t.TempDir()
+	if err := os.WriteFile(filepath.Join(raiz, "ok.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	links := map[string]string{
+		"self":   "self",
+		"a":      "b",
+		"b":      "a",
+		"notdir": "ok.txt/x",
+	}
+	for nome, alvo := range links {
+		if err := os.Symlink(alvo, filepath.Join(raiz, nome)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	arquivos, erros := Walk(context.Background(), "/", []string{raiz}, nil)
+	var vistos []string
+	for f := range arquivos {
+		vistos = append(vistos, filepath.Base(f.AbsolutePath))
+	}
+	if err := <-erros; err != nil {
+		t.Fatalf("link em laço ou atravessando arquivo não é falha: %v", err)
+	}
+	if len(vistos) != 1 || vistos[0] != "ok.txt" {
+		t.Fatalf("esperava só ok.txt, veio %v", vistos)
+	}
+}
+
+// linkSemAlvo separa o link sem alvo (ignorado) do destino que existe e não
+// deu para ler (backup parcial).
+func TestLinkSemAlvo(t *testing.T) {
+	for _, c := range []struct {
+		err  error
+		quer bool
+	}{
+		{fs.ErrNotExist, true},
+		{&fs.PathError{Op: "stat", Path: "x", Err: syscall.ELOOP}, true},
+		{&fs.PathError{Op: "stat", Path: "x", Err: syscall.ENOTDIR}, true},
+		{&fs.PathError{Op: "stat", Path: "x", Err: syscall.ENAMETOOLONG}, true},
+		{&fs.PathError{Op: "stat", Path: "x", Err: syscall.EACCES}, false},
+		{&fs.PathError{Op: "stat", Path: "x", Err: syscall.EPERM}, false},
+		{&fs.PathError{Op: "stat", Path: "x", Err: syscall.EIO}, false},
+	} {
+		if got := linkSemAlvo(c.err); got != c.quer {
+			t.Errorf("linkSemAlvo(%v) = %v, quer %v", c.err, got, c.quer)
+		}
 	}
 }
