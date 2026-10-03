@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/arkame-app/agent/internal/config"
 	"github.com/arkame-app/agent/internal/service"
@@ -34,12 +35,18 @@ func newServiceInstallCmd() *cobra.Command {
 		Use:   "install",
 		Short: "Registra o agent como serviço (systemd, launchd ou Windows Service)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			// Caminho absoluto, como no install: a unit (e o plist, e o SCM)
+			// recebe este texto, e um caminho relativo não aponta para nada
+			// quando o serviço sobe.
+			if abs, err := filepath.Abs(configFile); err == nil {
+				configFile = abs
+			}
 			cfg, err := config.Load(configFile, config.Overrides{})
 			if err != nil {
 				return fmt.Errorf("carregando config: %w", err)
 			}
 
-			inst, err := service.Install(cmd.Context(), cfg, service.Options{
+			inst, err := instalarServico(cmd.Context(), cfg, service.Options{
 				Name:  name,
 				Scope: service.Scope(scope),
 				Start: start,
