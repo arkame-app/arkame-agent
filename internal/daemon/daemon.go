@@ -702,15 +702,31 @@ func isObjectGone(err error) bool {
 // long-poll em GET /fs-requests (o servidor segura a conexão até ~25s; 204 =
 // nada pendente) e responde cada requisição com a listagem do diretório.
 // Latência percebida pelo usuário: ~1-3s por nível expandido.
+// intervaloMinimoFs é o menor intervalo entre duas aberturas do long-poll do
+// explorador de pastas quando o painel responde 204 sem segurar a conexão.
+var intervaloMinimoFs = 2 * time.Second
+
 func fsBrowseLoop(ctx context.Context, c *api.Client, cfg *config.Config) {
 	for {
 		if ctx.Err() != nil {
 			return
 		}
 		var resp api.FsRequestsResponse
+		inicio := time.Now()
 		err := c.GET(ctx, "/api/agents/"+cfg.AgentID+"/fs-requests", &resp)
 		if errors.Is(err, api.ErrNotReady) {
-			continue // 204: reabre o long-poll
+			// 204: reabre o long-poll. Se o painel respondeu na hora em vez
+			// de segurar (proxy na frente, painel sem long-poll), reabrir
+			// direto vira um laço apertado de requisições: espera o resto
+			// do intervalo mínimo antes.
+			if falta := intervaloMinimoFs - time.Since(inicio); falta > 0 {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(falta):
+				}
+			}
+			continue
 		}
 		if err != nil {
 			slog.Debug("poll fs-requests falhou", "err", err)
