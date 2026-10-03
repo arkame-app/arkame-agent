@@ -191,7 +191,34 @@ try {
         Start-Sleep -Seconds 2
     }
 
-    Copy-Item -Path $extracted -Destination $exePath -Force
+    # Outro serviço (um segundo agente, -ServiceName arkame-agent-oci) pode
+    # estar rodando o mesmo exe: o Windows não deixa sobrescrever um exe em
+    # uso, mas deixa renomear. O atual sai do caminho (.old) e o novo entra
+    # no lugar, como o setup do agente faz. Um .old ainda em uso fica para
+    # uma próxima instalação.
+    Get-ChildItem -Path $installDir -Filter 'arkame-agent.exe.old*' -ErrorAction SilentlyContinue |
+        ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
+    $oldPath = $null
+    if (Test-Path -LiteralPath $exePath) {
+        $oldPath = "$exePath.old"
+        if (Test-Path -LiteralPath $oldPath) {
+            # O .old anterior não saiu (em uso): outro nome.
+            $oldPath = "$exePath.old-" + [Guid]::NewGuid().ToString('N')
+        }
+        Move-Item -LiteralPath $exePath -Destination $oldPath -Force
+    }
+    try {
+        Copy-Item -LiteralPath $extracted -Destination $exePath -Force
+    } catch {
+        # Devolve o que estava lá: sem exe, os serviços não sobem mais.
+        if ($oldPath) {
+            Move-Item -LiteralPath $oldPath -Destination $exePath -Force -ErrorAction SilentlyContinue
+        }
+        throw
+    }
+    if ($oldPath) {
+        Remove-Item -LiteralPath $oldPath -Force -ErrorAction SilentlyContinue
+    }
     Write-Ok "Instalado: $exePath"
 
     # PATH da máquina, para o comando ficar disponível em novos terminais.
