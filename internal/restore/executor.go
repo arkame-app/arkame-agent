@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/arkame-app/agent/internal/api"
 	"github.com/arkame-app/agent/internal/caminho"
@@ -109,7 +110,7 @@ func Run(ctx context.Context, opts Options, item api.RestoreItem) error {
 	}
 	finalPath := filepath.Join(rootedDir, finalName)
 
-	tmpFile, err := os.CreateTemp(rootedDir, ".arkame-restore-*."+finalName)
+	tmpFile, err := os.CreateTemp(rootedDir, padraoTemporario(finalName))
 	if err != nil {
 		return fmt.Errorf("tempfile: %w", err)
 	}
@@ -443,4 +444,23 @@ func previsaoDeAquecimento(classe string, tier s3types.Tier) time.Time {
 		// para errar.
 		return agora.Add(5 * time.Hour)
 	}
+}
+
+// padraoTemporario é o nome do arquivo temporário da restauração. O nome final
+// vai junto só para quem olhar a pasta entender o que é — e por isso pode ser
+// cortado: com o prefixo e os dígitos aleatórios, um nome final perto do
+// limite de 255 bytes dos sistemas de arquivos fazia o CreateTemp falhar
+// (ENAMETOOLONG), e o arquivo, que caberia com o nome dele, não restaurava.
+func padraoTemporario(finalName string) string {
+	const prefixo = ".arkame-restore-*."
+	// 255 menos o prefixo e até 20 dígitos aleatórios do CreateTemp.
+	const maxSufixo = 255 - len(prefixo) - 20
+	if len(finalName) > maxSufixo {
+		corte := maxSufixo
+		for corte > 0 && !utf8.RuneStart(finalName[corte]) {
+			corte-- // não parte um caractere ao meio
+		}
+		finalName = finalName[:corte]
+	}
+	return prefixo + finalName
 }

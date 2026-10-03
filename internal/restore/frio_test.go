@@ -2,9 +2,12 @@ package restore
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
@@ -111,5 +114,24 @@ func TestPedidoDeRestauracao(t *testing.T) {
 	oci := pedidoDeRestauracao("", s3types.TierStandard)
 	if oci.Days == nil || *oci.Days < 1 || *oci.Days > 10 {
 		t.Errorf("classe vazia (OCI): Days = %v, precisa estar entre 1 e 10", oci.Days)
+	}
+}
+
+// Nome final perto do limite de 255 bytes: o temporário (prefixo + dígitos +
+// nome) passava do limite e a restauração falhava com ENAMETOOLONG.
+func TestTemporarioComNomeLongo(t *testing.T) {
+	dir := t.TempDir()
+	nome := strings.Repeat("á", 120) + ".txt" // 244 bytes: cabe como nome final
+	f, err := os.CreateTemp(dir, padraoTemporario(nome))
+	if err != nil {
+		t.Fatalf("temporário de nome longo: %v", err)
+	}
+	f.Close()
+	base := filepath.Base(f.Name())
+	if len(base) > 255 || !utf8.ValidString(base) {
+		t.Fatalf("nome do temporário inválido (%d bytes)", len(base))
+	}
+	if err := os.Rename(f.Name(), filepath.Join(dir, nome)); err != nil {
+		t.Fatalf("o nome final cabe: %v", err)
 	}
 }
