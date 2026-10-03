@@ -194,13 +194,12 @@ try {
 
     New-Item -ItemType Directory -Path $installDir -Force | Out-Null
 
-    # Um binário em uso não pode ser sobrescrito: paramos o serviço antes.
+    # O serviço não para para a troca: o exe em uso sai do caminho por rename
+    # (abaixo). Parar aqui deixava o serviço parado quando o script terminava
+    # sem -Token (o jeito de atualizar) ou quando a cópia falhava — backups
+    # parados sem aviso até o próximo boot.
     $existing = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
-    if ($existing -and $existing.Status -eq 'Running') {
-        Write-Info "Parando o servico $ServiceName para atualizar o binario..."
-        Stop-Service -Name $ServiceName -Force
-        Start-Sleep -Seconds 2
-    }
+    $wasRunning = $existing -and $existing.Status -eq 'Running'
 
     # Outro serviço (um segundo agente, -ServiceName arkame-agent-oci) pode
     # estar rodando o mesmo exe: o Windows não deixa sobrescrever um exe em
@@ -240,6 +239,18 @@ try {
     }
 
     if (-not $Token) {
+        # Só o binário: o serviço segue rodando o exe antigo (.old) até
+        # reiniciar. Reinicia agora, já com o novo no lugar, para a
+        # atualização valer. Com -Token, o install do agente reinicia.
+        if ($wasRunning) {
+            try {
+                Restart-Service -Name $ServiceName -Force
+                Write-Ok "Servico $ServiceName reiniciado com a versao nova"
+            } catch {
+                Write-Warn "Nao consegui reiniciar o servico ${ServiceName}: $($_.Exception.Message)"
+                Write-Warn "Reinicie-o (services.msc) para a versao nova valer."
+            }
+        }
         Write-Host ""
         Write-Info "Proximo passo - registre este servidor no painel:"
         Write-Host ""
