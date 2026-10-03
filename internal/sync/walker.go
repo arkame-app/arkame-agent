@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -99,7 +100,7 @@ func walk(ctx context.Context, hostRoot string, sourcePaths []string, excludeGlo
 					}
 					// O que está excluído do plano não entra na conta: não ia
 					// para o backup de qualquer jeito.
-					if matchesAny(path, excludeGlobs) {
+					if excluido(caminho.Windows, root, path, excludeGlobs) {
 						if d != nil && d.IsDir() {
 							return filepath.SkipDir
 						}
@@ -118,13 +119,10 @@ func walk(ctx context.Context, hostRoot string, sourcePaths []string, excludeGlo
 				// Pasta excluída (node_modules, .cache) nem é aberta: entrar
 				// nela lia milhares de arquivos à toa, e um erro de leitura lá
 				// dentro deixava todo backup "parcial". Mesma regra dos
-				// arquivos (nome ou segmento do caminho); a pasta do plano em
-				// si nunca é pulada.
-				if matchesAny(path, excludeGlobs) {
+				// arquivos (nome ou segmento do caminho dentro da pasta do
+				// plano); a pasta do plano em si nunca é pulada.
+				if excluido(caminho.Windows, root, path, excludeGlobs) {
 					if d.IsDir() {
-						if path == root {
-							return nil
-						}
 						return filepath.SkipDir
 					}
 					return nil
@@ -267,23 +265,45 @@ func prepararExclusoes(globs []string) []string {
 	return out
 }
 
-func matchesAny(path string, globs []string) bool {
+// excluido diz se p, dentro da pasta do plano raiz, casa com algum padrão de
+// exclusão: pelo nome (*.tmp) ou por um segmento do caminho (node_modules).
+//
+// Só conta o caminho RELATIVO à pasta do plano. Era o caminho absoluto: um
+// segmento da própria pasta escolhida excluía tudo — AppData em
+// C:\Users\Ana\AppData\Roaming\Thunderbird, cache em /var/cache/app, e até o
+// host de /host no Docker. A pasta do plano em si nunca é excluída.
+//
+// Função pura, com o separador pela plataforma dada, para os testes cobrirem
+// caminhos do Windows em qualquer sistema. No Windows os nomes não
+// diferenciam maiúsculas (os padrões já vêm em minúsculas e com `\` de
+// prepararExclusoes).
+func excluido(windows bool, raiz, p string, globs []string) bool {
 	if len(globs) == 0 {
 		return false
 	}
-	// No Windows os nomes não diferenciam maiúsculas: *.tmp pega ARQUIVO.TMP
-	// (os padrões já vêm em minúsculas de prepararExclusoes).
-	if caminho.Windows {
-		path = strings.ToLower(path)
+	sep := "/"
+	if windows {
+		sep = `\`
 	}
-	base := filepath.Base(path)
+	rel := strings.TrimLeft(strings.TrimPrefix(p, raiz), sep)
+	if rel == "" {
+		return false
+	}
+	if windows {
+		rel = strings.ToLower(rel)
+	}
+	base := rel[strings.LastIndex(rel, sep)+1:]
+	comSep := sep + rel
 	for _, g := range globs {
-		if ok, _ := filepath.Match(g, base); ok {
-			return true
+		// path.Match trata `\` como escape: no Windows, um padrão com `\` é
+		// de vários segmentos e nunca casa com um nome só.
+		if !windows || !strings.Contains(g, `\`) {
+			if ok, _ := path.Match(g, base); ok {
+				return true
+			}
 		}
-		// match em qualquer segmento do path (para node_modules etc)
-		if strings.Contains(path, string(filepath.Separator)+g+string(filepath.Separator)) ||
-			strings.HasSuffix(path, string(filepath.Separator)+g) {
+		// Segmento (ou sequência de segmentos) do caminho relativo.
+		if strings.Contains(comSep, sep+g+sep) || strings.HasSuffix(comSep, sep+g) {
 			return true
 		}
 	}
