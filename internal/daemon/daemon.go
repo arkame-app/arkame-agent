@@ -295,11 +295,7 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 		saidaDosHooks.WriteString(r.Output)
 	}
 
-	// Falha total: ou o walker abortou sem nada enviado, ou TODOS os arquivos
-	// falharam no upload (nenhum enviado, nenhum dedup) — não pode virar "complete".
-	totalFailure := (result == nil) ||
-		(syncErr != nil && result.Stats.FilesUploaded == 0) ||
-		(result.FilesFailed > 0 && len(result.VersionMap) == 0)
+	totalFailure, completeStatus := avaliarSessao(result, syncErr)
 	if totalFailure {
 		msg := "todos os arquivos falharam no upload"
 		if syncErr != nil {
@@ -344,12 +340,6 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 		})
 	}
 
-	// Parcial se o walker reportou erro OU se algum arquivo falhou no upload
-	// (mas pelo menos um foi enviado/dedup, senão teria caído em totalFailure).
-	completeStatus := "complete"
-	if syncErr != nil || result.FilesFailed > 0 {
-		completeStatus = "partial"
-	}
 	completeBody := struct {
 		Status     string           `json:"status"`
 		Stats      api.SessionStats `json:"stats"`
@@ -376,6 +366,29 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 		"files_uploaded", result.Stats.FilesUploaded,
 		"files_indexed", completeResp.FilesIndexed)
 	return nil
+}
+
+// avaliarSessao decide como a sessão termina.
+//
+// Falha total quando nada entrou no version_map e houve erro (do walker ou de
+// upload): não pode virar "complete". Com algo no version_map — enviado agora
+// OU já presente no bucket (dedup) —, o erro deixa a sessão "partial".
+//
+// O critério era FilesUploaded == 0: num dia sem mudança (tudo dedup) com uma
+// pasta ilegível, o backup inteiro virava "failed", embora todo o resto
+// estivesse salvo e indexável.
+func avaliarSessao(result *syncengine.Result, syncErr error) (falhou bool, status string) {
+	if result == nil {
+		return true, ""
+	}
+	houveErro := syncErr != nil || result.FilesFailed > 0
+	if houveErro && len(result.VersionMap) == 0 {
+		return true, ""
+	}
+	if houveErro {
+		return false, "partial"
+	}
+	return false, "complete"
 }
 
 // restoreLoop puxa restore_items pendentes e executa cada um:
