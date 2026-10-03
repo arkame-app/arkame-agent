@@ -41,6 +41,9 @@ func newRunCmd() *cobra.Command {
 			if !cfg.TokenExists() {
 				return fmt.Errorf("agent ainda não foi aprovado — rode 'arkame-agent install' primeiro")
 			}
+			if cfg.AgentID == "" {
+				return fmt.Errorf("agent sem identidade: nem AGENT_ID em %s nem o arquivo %s — rode 'arkame-agent install' de novo", configFile, cfg.AgentIDPath)
+			}
 			// Instalações anteriores gravaram o token e a chave privada com
 			// os.WriteFile(0600), que no Windows não restringe nada. Protege
 			// o que já está no disco a cada partida (idempotente).

@@ -129,6 +129,17 @@ func Load(envFile string, o Overrides) (*Config, error) {
 		PollIntervalSec:      segundosOu(get("POLL_INTERVAL_SEC"), 60),
 	}
 
+	// O AGENT_ID só entrava pelo env-file, e só o `install` com a pergunta da
+	// chave o escrevia lá. Com a chave já no arquivo, ou com
+	// --check-storage=false, o enrollment gravava só o agent.id — e o daemon
+	// subia chamando /api/agents//plans para sempre. O agent.id é a fonte do
+	// enrollment; vale quando o env não diz.
+	if cfg.AgentID == "" && cfg.AgentIDPath != "" {
+		if b, err := os.ReadFile(cfg.AgentIDPath); err == nil {
+			cfg.AgentID = strings.TrimSpace(string(b))
+		}
+	}
+
 	return cfg, nil
 }
 
