@@ -105,7 +105,9 @@ func Run(ctx context.Context, opts Options, item api.RestoreItem) error {
 	// um link para /root/.ssh. Os links do sistema (/home -> var/home no
 	// Fedora Atomic) continuam valendo, e um link absoluto recomeça no
 	// HostRoot, não dentro do container.
-	dir, err := abrirPasta(opts.HostRoot, destDir, subDir)
+	noLugar := noLugarDeOrigem(caminho.Windows, caminho.NaChave(opts.HostRoot,
+		filepath.Join(destDir, filepath.FromSlash(item.DestFilename))), item.SourceKey)
+	dir, err := abrirPasta(opts.HostRoot, destDir, subDir, noLugar)
 	if err != nil {
 		return err
 	}
@@ -165,8 +167,8 @@ func Run(ctx context.Context, opts Options, item api.RestoreItem) error {
 	aposBaixar()
 
 	// Por cima de um arquivo existente, ou ao lado dele (suffix-version), herda
-	// o modo e o dono dele; arquivo novo fica 0600. Pelo descritor, não pelo
-	// caminho.
+	// o modo e o dono dele; arquivo novo fica 0600, do dono da pasta. Pelo
+	// descritor, não pelo caminho.
 	if err := ajustarPermissoes(tmpFile, dir, baseName, finalName); err != nil {
 		return err
 	}
@@ -213,7 +215,12 @@ var trocarDono = copiarDono
 // ajustarPermissoes dá ao temporário o modo (e, como root fora do Windows, o
 // dono) do arquivo existente com o nome do item (baseName): o que ele vai
 // substituir (overwrite) ou ao lado do qual vai ficar (suffix-version, com
-// finalName diferente). Sem arquivo regular com esse nome, modoDeArquivoNovo.
+// finalName diferente). Sem arquivo regular com esse nome, modoDeArquivoNovo,
+// com o dono e o grupo da pasta (fstat do descritor dela): do root, o arquivo
+// novo ficava root:root 0600 — a Ana restaurava /home/ana/proj/relatorio.odt
+// no lugar e não o abria, e o index.php restaurado em /var/www dava 403 ao
+// nginx. O dono da pasta já pode criar arquivos nela; dar-lhe o arquivo não
+// abre nada a mais.
 //
 // A cópia ao lado não herda setuid/setgid: seria um segundo binário
 // privilegiado, com o conteúdo antigo. Só quem substitui o original os herda.
@@ -235,6 +242,14 @@ func ajustarPermissoes(tmp *os.File, dir *pasta, baseName, finalName string) err
 			modo &^= os.ModeSetuid | os.ModeSetgid
 		}
 		if err := trocarDono(tmp, existente.uid, existente.gid); err != nil {
+			return fmt.Errorf("chown %s: %w", tmp.Name(), err)
+		}
+	} else {
+		uid, gid, err := dir.dono()
+		if err != nil {
+			return err
+		}
+		if err := trocarDono(tmp, uid, gid); err != nil {
 			return fmt.Errorf("chown %s: %w", tmp.Name(), err)
 		}
 	}

@@ -28,16 +28,6 @@ func trocarPastaPorLink(t *testing.T, gancho *func(), pasta, alheio string) {
 	}
 }
 
-// contarTrocaDeDono troca o trocarDono por um que só conta as chamadas.
-func contarTrocaDeDono(t *testing.T) *int {
-	t.Helper()
-	n := 0
-	antes := trocarDono
-	t.Cleanup(func() { trocarDono = antes })
-	trocarDono = func(*os.File, int, int) error { n++; return nil }
-	return &n
-}
-
 // alheioCom cria, numa pasta de fora, o arquivo nome com o modo e o conteúdo
 // dados (o /usr/bin/passwd 04755 root:root do cenário).
 func alheioCom(t *testing.T, nome string, conteudo []byte, modo os.FileMode) string {
@@ -80,7 +70,12 @@ func TestTrocaDaPastaDuranteODownloadNaoCopiaDonoNemModoDeFora(t *testing.T) {
 	if err := os.Mkdir(pasta, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	chown := contarTrocaDeDono(t)
+	// O arquivo de fora com outro grupo: um chown com o dono dele aparece.
+	gAlheio := grupoExtra(t, filepath.Join(alheio, "passwd"))
+	if err := os.Chmod(filepath.Join(alheio, "passwd"), setuid); err != nil { // o chown limpou o setuid
+		t.Fatal(err)
+	}
+	donos, _ := registrarDonos(t)
 	trocarPastaPorLink(t, &aposBaixar, pasta, alheio)
 
 	if err := Run(context.Background(), Options{S3: bucketComObjeto(t, conteudo), HostRoot: "/"},
@@ -95,8 +90,11 @@ func TestTrocaDaPastaDuranteODownloadNaoCopiaDonoNemModoDeFora(t *testing.T) {
 	if st.Mode() != modoDeArquivoNovo {
 		t.Fatalf("modo do restaurado = %v, queria %v (arquivo novo); veio do arquivo de fora", st.Mode(), modoDeArquivoNovo)
 	}
-	if *chown != 0 {
-		t.Fatalf("trocou o dono %d vez(es) pelo arquivo de fora", *chown)
+	// Arquivo novo fica do dono da pasta aberta, nunca do arquivo de fora.
+	uid, gid := donoDe(t, pasta+".old")
+	if len(*donos) != 1 || (*donos)[0] != [2]int{uid, gid} || gid == gAlheio {
+		t.Fatalf("donos dados ao restaurado: %v, queria só o da pasta aberta (%d:%d), nunca o grupo %d do arquivo de fora",
+			*donos, uid, gid, gAlheio)
 	}
 }
 

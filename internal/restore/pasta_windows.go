@@ -46,8 +46,10 @@ type pasta struct {
 // isso ela herdava a ACL de C:\, que dá leitura a Users, e o que se restaura
 // de um servidor (chaves, .env, bancos) ficava legível por qualquer usuário.
 // As subpastas que o dest_filename cria dentro de uma pasta que já existia
-// (restauração no lugar de origem) herdam a ACL dela, como os vizinhos.
-func abrirPasta(_ string, destDir, subDir string) (*pasta, error) {
+// herdam a ACL dela, como os vizinhos. No lugar de origem (noLugar), nada
+// nasce com a DACL do segredo: a pasta original que tinha sido apagada
+// (C:\Users\ana\proj) volta herdando a ACL da mãe, e a Ana a abre.
+func abrirPasta(_ string, destDir, subDir string, noLugar bool) (*pasta, error) {
 	alvo := filepath.Join(destDir, filepath.FromSlash(subDir))
 	vol := filepath.VolumeName(alvo)
 	atual := vol + `\`
@@ -64,7 +66,7 @@ func abrirPasta(_ string, destDir, subDir string) (*pasta, error) {
 			if merr != nil && !os.IsExist(merr) {
 				return nil, fmt.Errorf("mkdir %s: %w", atual, merr)
 			}
-			if merr == nil && i < nDestino && !protegida {
+			if merr == nil && i < nDestino && !protegida && !noLugar {
 				if perr := segredo.ProtegerPasta(atual); perr != nil {
 					return nil, perr
 				}
@@ -205,6 +207,10 @@ func componentes(p string) []string {
 }
 
 func (p *pasta) Close() error { return windows.CloseHandle(p.h) }
+
+// dono: no Windows o dono vem da ACL herdada da pasta (copiarDono não faz
+// nada).
+func (p *pasta) dono() (int, int, error) { return -1, -1, nil }
 
 // criarTemp cria o temporário e confere, pelo handle dele, que ele nasceu na
 // pasta conferida; se nasceu em outro lugar (junção trocada no caminho), é

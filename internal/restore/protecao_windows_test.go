@@ -5,6 +5,7 @@ package restore
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"golang.org/x/sys/windows"
@@ -40,5 +41,20 @@ func TestPastaDeDestinoCriadaNasceProtegida(t *testing.T) {
 	// Pasta que já existia não é tocada.
 	if daclProtegida(t, filepath.Dir(destino)) {
 		t.Fatalf("%s (que já existia) ficou com a DACL protegida", filepath.Dir(destino))
+	}
+}
+
+// No lugar de origem, a pasta apagada que a restauração recria herda a ACL da
+// mãe: com a DACL do segredo, o dono perdia o acesso à própria pasta.
+func TestPastaDoLugarDeOrigemRecriadaHerdaAACL(t *testing.T) {
+	conteudo := []byte("relatório")
+	proj := filepath.Join(t.TempDir(), "proj")
+	item := itemDe(proj, "relatorio.odt", conteudo, "suffix-version")
+	item.SourceKey = "arkame/ag1/" + strings.ReplaceAll(filepath.Join(proj, "relatorio.odt"), `\`, "/")
+	if err := Run(context.Background(), Options{S3: bucketComObjeto(t, conteudo)}, item); err != nil {
+		t.Fatal(err)
+	}
+	if daclProtegida(t, proj) {
+		t.Fatalf("%s (o lugar de origem) recriada com a DACL protegida", proj)
 	}
 }

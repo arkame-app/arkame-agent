@@ -36,7 +36,11 @@ var euid = os.Geteuid
 // Fedora Atomic e de /var -> private/var no macOS; nenhum usuário comum
 // consegue plantar um assim. Qualquer outro link é ErrDestinoLink. Como em
 // caminho.Real, um link absoluto recomeça no hostRoot.
-func abrirPasta(hostRoot, destDir, subDir string) (*pasta, error) {
+//
+// As pastas criadas ficam 0700, do dono da pasta-mãe (herdarDonoDaMae), no
+// lugar de origem ou não: o último argumento (noLugarDeOrigem) só conta no
+// Windows.
+func abrirPasta(hostRoot, destDir, subDir string, _ bool) (*pasta, error) {
 	raiz := filepath.Clean(hostRoot)
 	if raiz == "" || raiz == "." {
 		raiz = "/"
@@ -68,6 +72,7 @@ func abrirPasta(hostRoot, destDir, subDir string) (*pasta, error) {
 	atual := func() string { return filepath.Join(append([]string{raiz}, nomes...)...) }
 
 	seguidos, criados := 0, 0
+	recemCriada := "" // a pasta que o Mkdirat acabou de criar, aberta na volta seguinte
 	for len(pendentes) > 0 {
 		c := pendentes[0]
 		pendentes = pendentes[1:]
@@ -83,7 +88,15 @@ func abrirPasta(hostRoot, destDir, subDir string) (*pasta, error) {
 		}
 		dir := fds[len(fds)-1]
 		fd, err := unix.Openat(dir, c, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+		criada := c == recemCriada
+		recemCriada = ""
 		if err == nil {
+			if criada {
+				if herr := herdarDonoDaMae(dir, fd); herr != nil {
+					unix.Close(fd)
+					return nil, fmt.Errorf("chown %s: %w", filepath.Join(atual(), c), herr)
+				}
+			}
 			fds = append(fds, fd)
 			nomes = append(nomes, c)
 			continue
@@ -91,9 +104,14 @@ func abrirPasta(hostRoot, destDir, subDir string) (*pasta, error) {
 		if errors.Is(err, unix.ENOENT) && criados < 1000 {
 			criados++
 			// 0700: o que vai dentro pode ser segredo, e o modo original
-			// da pasta não está no índice.
-			if merr := unix.Mkdirat(dir, c, 0o700); merr != nil && !errors.Is(merr, unix.EEXIST) {
+			// da pasta não está no índice. O dono é o da pasta-mãe (ver
+			// herdarDonoDaMae), depois de aberta.
+			merr := unix.Mkdirat(dir, c, 0o700)
+			if merr != nil && !errors.Is(merr, unix.EEXIST) {
 				return nil, fmt.Errorf("mkdir %s: %w", filepath.Join(atual(), c), merr)
+			}
+			if merr == nil {
+				recemCriada = c
 			}
 			// Abre na próxima volta, de novo sem seguir link: se alguém pôs
 			// um link no lugar entre o mkdir e o open, cai na conferência.
@@ -127,6 +145,48 @@ func abrirPasta(hostRoot, destDir, subDir string) (*pasta, error) {
 	fechar(0)
 	ok = true
 	return &pasta{caminho: atual(), fd: fd}, nil
+}
+
+// trocarDonoDaPasta é o fchown da pasta que a restauração criou; variável
+// para o teste ver, sem root, o dono escolhido. Só como root, como o
+// copiarDono: outro usuário não dá a pasta a terceiros.
+var trocarDonoDaPasta = func(fd, uid, gid int) error {
+	if os.Geteuid() != 0 {
+		return nil
+	}
+	return unix.Fchown(fd, uid, gid)
+}
+
+// herdarDonoDaMae dá à pasta que a restauração acabou de criar (fd) o dono e
+// o grupo da pasta-mãe aberta (maeFd). Criada pelo root, ela ficava root 0700:
+// a Ana restaurava /home/ana/proj/relatorio.odt, a pasta proj apagada voltava
+// do root, e a Ana não entrava na própria pasta. Dar a pasta ao dono da mãe é
+// seguro: ele já pode criar pastas nela.
+//
+// Só se a pasta aberta ainda é a que o agente criou (do agente, sem acesso do
+// grupo nem dos outros): entre o mkdir e o open, quem manda na mãe pode pôr
+// outra pasta no lugar, e uma pasta alheia não muda de dono.
+func herdarDonoDaMae(maeFd, fd int) error {
+	var mae, st unix.Stat_t
+	if err := unix.Fstat(maeFd, &mae); err != nil {
+		return err
+	}
+	if err := unix.Fstat(fd, &st); err != nil {
+		return err
+	}
+	if int64(st.Uid) != int64(euid()) || st.Mode&0o077 != 0 {
+		return nil
+	}
+	return trocarDonoDaPasta(fd, int(mae.Uid), int(mae.Gid))
+}
+
+// dono é o dono e o grupo da pasta aberta, pelo descritor.
+func (p *pasta) dono() (int, int, error) {
+	var st unix.Stat_t
+	if err := unix.Fstat(p.fd, &st); err != nil {
+		return 0, 0, &os.PathError{Op: "stat", Path: p.caminho, Err: err}
+	}
+	return int(st.Uid), int(st.Gid), nil
 }
 
 // linkDoSistema: o link e a pasta onde ele está são do root (ou do agente), e
