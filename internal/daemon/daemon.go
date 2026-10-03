@@ -309,7 +309,7 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 		slog.Info("comando de antes concluído", "plan_id", plan.ID, "duracao", r.Duration)
 	}
 
-	result, syncErr := syncengine.Run(ctx, syncengine.EngineOptions{
+	result, syncErr := rodarSync(ctx, syncengine.EngineOptions{
 		S3:           s3c,
 		Bucket:       plan.StorageRef.Bucket,
 		PrefixRoot:   plan.StorageRef.PrefixRoot + "data/" + cfg.AgentID + "/",
@@ -411,10 +411,15 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 		VersionMap   []entry          `json:"version_map"`
 		ErrorCode    string           `json:"error_code,omitempty"`
 		ErrorMessage string           `json:"error_message,omitempty"`
+		// Arquivos do OneDrive só na nuvem que ficaram de fora. Com ele, o
+		// painel não trata a sessão como inventário da origem: a falta
+		// desses arquivos não é remoção.
+		CloudOnlySkipped int `json:"cloud_only_skipped,omitempty"`
 	}{
-		Status:     completeStatus,
-		Stats:      result.Stats,
-		VersionMap: versionMap,
+		Status:           completeStatus,
+		Stats:            result.Stats,
+		VersionMap:       versionMap,
+		CloudOnlySkipped: result.CloudOnlySkipped,
 	}
 	if completeStatus == "partial" {
 		// A causa da sessão parcial ia embora: o painel via "parcial" sem
@@ -486,6 +491,10 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 		"files_indexed", indexados)
 	return nil
 }
+
+// rodarSync é o syncengine.Run, numa variável para os testes darem o
+// resultado sem um disco que o produza (arquivo só na nuvem do OneDrive).
+var rodarSync = syncengine.Run
 
 // finalizacaoGraca é quanto a finalização (comando de depois, /fail,
 // /complete, PATCH final da restauração) ainda tem depois que o serviço manda

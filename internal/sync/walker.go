@@ -33,6 +33,14 @@ type FileInfo struct {
 // Walk percorre os paths fornecidos, respeitando excludeGlobs (patterns tipo *.tmp, node_modules).
 // Emite FileInfo via channel. Fecha o channel ao final ou em erro de ctx.
 func Walk(ctx context.Context, hostRoot string, sourcePaths []string, excludeGlobs []string) (<-chan FileInfo, <-chan error) {
+	return walk(ctx, hostRoot, sourcePaths, excludeGlobs, nil)
+}
+
+// walk é o Walk que, com soNaNuvemOut, devolve quantos arquivos do OneDrive
+// ficaram de fora por estarem só na nuvem. O valor é gravado antes de o canal
+// de erros fechar: só se lê depois de vê-lo fechado (receber o erro não basta,
+// ele vai antes da gravação).
+func walk(ctx context.Context, hostRoot string, sourcePaths []string, excludeGlobs []string, soNaNuvemOut *int) (<-chan FileInfo, <-chan error) {
 	out := make(chan FileInfo, 128)
 	errs := make(chan error, 1)
 
@@ -51,9 +59,14 @@ func Walk(ctx context.Context, hostRoot string, sourcePaths []string, excludeGlo
 		naoLidos := 0
 		var exemplos []string
 		// Arquivos do OneDrive que só estão na nuvem: ficam de fora sem
-		// deixar o backup parcial; vão só para o log, num resumo.
+		// deixar o backup parcial. Vão ao log, num resumo, e a contagem vai
+		// ao painel (cloud_only_skipped): sem ela, a falta deles na sessão
+		// "completa" parecia arquivo removido na origem.
 		soNaNuvem := 0
 		exemploNuvem := ""
+		if soNaNuvemOut != nil {
+			defer func() { *soNaNuvemOut = soNaNuvem }()
+		}
 		anotar := func(p string, err error) {
 			naoLidos++
 			if len(exemplos) < maxExemplosNaoLidos {
@@ -138,7 +151,7 @@ func Walk(ctx context.Context, hostRoot string, sourcePaths []string, excludeGlo
 						return nil
 					}
 					leitura, info = alvo, st
-				} else if st, classe := irregularLegivel(caminho.Windows, path, info.Mode()); classe == reparseCopiar {
+				} else if st, classe := classificarEntrada(caminho.Windows, path, info.Mode()); classe == reparseCopiar {
 					info = st
 				} else if classe == reparseSoNaNuvem {
 					// Só na nuvem: não é falha, e lê-lo baixaria o arquivo.
@@ -188,6 +201,10 @@ func Walk(ctx context.Context, hostRoot string, sourcePaths []string, excludeGlo
 
 	return out, errs
 }
+
+// classificarEntrada é irregularLegivel, numa variável para os testes do
+// walker simularem, fora do Windows, um arquivo que só está na nuvem.
+var classificarEntrada = irregularLegivel
 
 // irregularLegivel diz se uma entrada que o Go marca como irregular é, no
 // Windows, um arquivo de nuvem para o backup — e devolve a ficha dele.

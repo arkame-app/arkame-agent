@@ -43,6 +43,11 @@ type Result struct {
 	// PrimeiraFalha é o primeiro arquivo que falhou e por quê — exemplo que
 	// vai ao painel numa sessão parcial.
 	PrimeiraFalha string
+	// CloudOnlySkipped conta os arquivos do OneDrive que ficaram de fora por
+	// estarem só na nuvem (lê-los baixaria o OneDrive inteiro). Vai ao painel
+	// no /complete: a sessão não é um inventário completo da origem, e a
+	// falta desses arquivos não pode virar "removido na origem".
+	CloudOnlySkipped int
 }
 
 // Run executa o sync de um plano.
@@ -64,7 +69,8 @@ func Run(ctx context.Context, o EngineOptions) (*Result, error) {
 	// não pode deixar o walker bloqueado no canal.
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	fileCh, errCh := Walk(ctx, o.HostRoot, o.SourcePaths, o.ExcludeGlobs)
+	var soNaNuvem int
+	fileCh, errCh := walk(ctx, o.HostRoot, o.SourcePaths, o.ExcludeGlobs, &soNaNuvem)
 	result := &Result{}
 
 	for fi := range fileCh {
@@ -98,8 +104,14 @@ func Run(ctx context.Context, o EngineOptions) (*Result, error) {
 			}
 		}
 	}
-	if err, ok := <-errCh; ok && err != nil {
-		return result, err
+	walkErr := <-errCh
+	// A contagem do walker é gravada antes de o canal fechar: lê-se com ele
+	// fechado.
+	for range errCh {
+	}
+	result.CloudOnlySkipped = soNaNuvem
+	if walkErr != nil {
+		return result, walkErr
 	}
 	return result, nil
 }

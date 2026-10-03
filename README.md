@@ -184,6 +184,13 @@ No Windows, o serviço grava o log ao lado da configuração, em
 powershell -Command "Get-Content -Tail 50 -Wait 'C:\etc\arkame\agent.log'"
 ```
 
+> **OneDrive (Windows):** arquivos que estão só na nuvem (os marcadores
+> "disponível online") ficam de fora do backup — lê-los faria o agente baixar o
+> OneDrive inteiro para o disco do servidor. Para entrar no backup, o arquivo
+> precisa estar disponível offline ("Sempre manter neste dispositivo"). A sessão
+> informa ao painel quantos ficaram de fora, e a falta deles não conta como
+> arquivo removido na origem.
+
 Sem terminal (automação), grave o arquivo antes: o `install` testa a chave que
 estiver lá e para com a causa se o bucket recusar. `--check-storage=false` pula
 o teste.
