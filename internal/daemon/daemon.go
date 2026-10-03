@@ -383,13 +383,24 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 	}
 
 	completeBody := struct {
-		Status     string           `json:"status"`
-		Stats      api.SessionStats `json:"stats"`
-		VersionMap []entry          `json:"version_map"`
+		Status       string           `json:"status"`
+		Stats        api.SessionStats `json:"stats"`
+		VersionMap   []entry          `json:"version_map"`
+		ErrorCode    string           `json:"error_code,omitempty"`
+		ErrorMessage string           `json:"error_message,omitempty"`
 	}{
 		Status:     completeStatus,
 		Stats:      result.Stats,
 		VersionMap: versionMap,
+	}
+	if completeStatus == "partial" {
+		// A causa da sessão parcial ia embora: o painel via "parcial" sem
+		// saber por quê, e o log do agente não dizia nada além dos avisos
+		// por arquivo.
+		completeBody.ErrorCode = "sync_partial"
+		completeBody.ErrorMessage = causaDoParcial(result, syncErr)
+		slog.Warn("backup parcial", "plan_id", plan.ID, "session_id", startResp.SessionID,
+			"arquivos_com_falha", result.FilesFailed, "err", syncErr, "causa", completeBody.ErrorMessage)
 	}
 	var completeResp struct {
 		// Ponteiro: ausente (resposta de "not_running", painel antigo) não é
@@ -526,6 +537,27 @@ func concluirSessao(ctx context.Context, c *api.Client, path string, body, out a
 		case <-time.After(recuosDoComplete[tentativa]):
 		}
 	}
+}
+
+// causaDoParcial resume por que a sessão ficou parcial: quantos arquivos
+// falharam (com o primeiro de exemplo) e o erro do walker, se houve.
+func causaDoParcial(result *syncengine.Result, syncErr error) string {
+	var partes []string
+	if result.FilesFailed > 0 {
+		p := fmt.Sprintf("%d arquivo(s) não subiram", result.FilesFailed)
+		if result.PrimeiraFalha != "" {
+			p += " (ex.: " + result.PrimeiraFalha + ")"
+		}
+		partes = append(partes, p)
+	}
+	if syncErr != nil {
+		partes = append(partes, syncErr.Error())
+	}
+	msg := strings.Join(partes, "; ")
+	if len(msg) > 4000 {
+		msg = strings.ToValidUTF8(msg[:4000], "")
+	}
+	return msg
 }
 
 // avaliarSessao decide como a sessão termina.

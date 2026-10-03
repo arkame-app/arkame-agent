@@ -40,6 +40,9 @@ type Result struct {
 	Stats       api.SessionStats
 	VersionMap  []api.FileEntry
 	FilesFailed int // arquivos que falharam no upload (pulados); usado p/ decidir partial/failed
+	// PrimeiraFalha é o primeiro arquivo que falhou e por quê — exemplo que
+	// vai ao painel numa sessão parcial.
+	PrimeiraFalha string
 }
 
 // Run executa o sync de um plano.
@@ -80,6 +83,9 @@ func Run(ctx context.Context, o EngineOptions) (*Result, error) {
 				"path", fi.RelativePath,
 				"err", err)
 			result.FilesFailed++
+			if result.PrimeiraFalha == "" {
+				result.PrimeiraFalha = fi.RelativePath + ": " + err.Error()
+			}
 			continue
 		}
 		result.Stats.FilesTotal++
