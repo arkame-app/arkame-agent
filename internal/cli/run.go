@@ -90,7 +90,9 @@ func newRunCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&configFile, "config", config.DefaultPath, "env-file com credenciais de storage")
-	cmd.Flags().StringVar(&hostRoot, "host-root", "/", "raiz do filesystem a proteger (em container Docker: /host)")
+	// Padrão vazio: com "/" aqui, a flag sempre vencia o HOST_ROOT do
+	// ambiente/env-file (a precedência é CLI > env). O "/" vem do config.
+	cmd.Flags().StringVar(&hostRoot, "host-root", "", "raiz do filesystem a proteger (em container Docker: /host). Padrão: HOST_ROOT, senão /")
 	cmd.Flags().StringVar(&serviceName, "service-name", service.DefaultName, "nome do serviço (usado só quando iniciado pelo gerenciador de serviços do Windows)")
 
 	return cmd

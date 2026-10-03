@@ -179,7 +179,9 @@ agent_id existente, preservando histórico e path no bucket.`,
 
 	cmd.Flags().StringVar(&configFile, "config", config.DefaultPath, "caminho do env-file com credenciais de storage")
 	cmd.Flags().StringVar(&enrollmentToken, "token", "", "enrollment_token gerado no painel (ex: atk_...)")
-	cmd.Flags().StringVar(&panelURL, "panel-url", "https://save.arkame.app", "URL base do painel Arkame")
+	// Padrão vazio: com a URL aqui, a flag sempre vencia o PANEL_URL do
+	// env-file (painel de parceiro whitelabel). O padrão vem do config.
+	cmd.Flags().StringVar(&panelURL, "panel-url", "", "URL base do painel Arkame. Padrão: PANEL_URL, senão https://save.arkame.app")
 	cmd.Flags().BoolVar(&installService, "install-service", true, "instalar como serviço systemd/launchd/Windows Service (set false para só enrollar)")
 	cmd.Flags().StringVar(&serviceName, "service-name", service.DefaultName, "nome do serviço — use um por credencial de storage no mesmo host (ex.: arkame-agent-aws)")
 	cmd.Flags().StringVar(&serviceScope, "service-scope", "", "system (todo o host, exige root) ou user (só o seu usuário, sem sudo). Padrão: system se root, senão user")
