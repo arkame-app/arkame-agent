@@ -266,6 +266,11 @@ espera não teria quem o concluísse.
 sudo /usr/local/bin/arkame-agent set-storage-keys --restart   # pergunta, testa, grava e reinicia
 sudo /usr/local/bin/arkame-agent check-storage                # só testa a chave do arquivo
 
+# Com root, quando o instalador avisou que /usr/local/bin não é só do root
+# (Homebrew em Mac Intel): o programa está em /opt/arkame/bin
+sudo /opt/arkame/bin/arkame-agent set-storage-keys --restart
+sudo /opt/arkame/bin/arkame-agent check-storage
+
 # Instalação sem root (Linux ou macOS)
 ~/.local/bin/arkame-agent check-storage --service-scope user
 ```
@@ -277,6 +282,9 @@ No Windows, o painel mostra a linha para o Windows + R
 
 ```bash
 sudo /usr/local/bin/arkame-agent uninstall   # pergunta "sim"; --yes para automação
+
+# Com root, quando o instalador avisou que /usr/local/bin não é só do root
+sudo /opt/arkame/bin/arkame-agent uninstall
 
 # Instalação sem root (Linux ou macOS)
 ~/.local/bin/arkame-agent uninstall --service-scope user
