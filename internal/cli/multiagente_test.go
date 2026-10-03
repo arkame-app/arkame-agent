@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/arkame-app/agent/internal/config"
@@ -76,5 +77,60 @@ func TestInstallComConfigPropriaSeparaAIdentidade(t *testing.T) {
 	padrao, _ := filepath.Abs(config.DefaultPath)
 	if mudou, _ := identidadePropria(padrao, &config.Config{TokenPath: config.DefaultTokenPath}); mudou {
 		t.Fatal("mexeu na configuração padrão")
+	}
+}
+
+// Com --service-name do segundo agente e sem --config, set-storage-keys e
+// uninstall usam o arquivo do serviço dele, e não o padrão (o do agente
+// principal): antes, a chave era testada e gravada no agente errado, e o
+// uninstall apagava a configuração do vizinho.
+func TestServiceNameUsaOArquivoDoProprioServico(t *testing.T) {
+	t.Setenv("STORAGE_BUCKET", "")
+	dir := t.TempDir()
+	doOutro := filepath.Join(dir, "agent-oci.env")
+	if err := os.WriteFile(doOutro, []byte("PANEL_URL=https://x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pedidos := []string{}
+	antes := configDoServico
+	configDoServico = func(nome string) (string, bool) {
+		pedidos = append(pedidos, nome)
+		if nome == "arkame-agent-oci" {
+			return doOutro, true
+		}
+		return "", false
+	}
+	t.Cleanup(func() { configDoServico = antes })
+
+	// set-storage-keys: o arquivo sem STORAGE_BUCKET é o do serviço pedido.
+	cmd := newSetStorageKeysCmd()
+	cmd.SetArgs([]string{"--service-name", "arkame-agent-oci"})
+	cmd.SilenceUsage, cmd.SilenceErrors = true, true
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), doOutro) {
+		t.Fatalf("set-storage-keys deveria usar %s, veio %v", doOutro, err)
+	}
+
+	// uninstall: o serviço sem registro legível não cai no arquivo padrão.
+	cmd = newUninstallCmd()
+	cmd.SetArgs([]string{"--service-name", "arkame-agent-sumido", "--yes"})
+	cmd.SilenceUsage, cmd.SilenceErrors = true, true
+	err = cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "arkame-agent-sumido") || !strings.Contains(err.Error(), "nada foi removido") {
+		t.Fatalf("uninstall deveria parar sem achar o arquivo do serviço, veio %v", err)
+	}
+
+	// --config explícito vence, e o serviço padrão segue no arquivo padrão.
+	c := newUninstallCmd()
+	_ = c.ParseFlags([]string{"--config", "/x/y.env", "--service-name", "arkame-agent-oci"})
+	if got, _ := configDoAgente(c, "/x/y.env", "arkame-agent-oci"); got != "/x/y.env" {
+		t.Fatalf("--config explícito virou %s", got)
+	}
+	c = newUninstallCmd()
+	if got, _ := configDoAgente(c, config.DefaultPath, "arkame-agent"); got != config.DefaultPath {
+		t.Fatalf("serviço padrão virou %s", got)
+	}
+	if !slices.Equal(pedidos, []string{"arkame-agent-oci", "arkame-agent-sumido"}) {
+		t.Fatalf("consultas ao registro: %v", pedidos)
 	}
 }

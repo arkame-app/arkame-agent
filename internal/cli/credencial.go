@@ -128,6 +128,10 @@ chave nova (o comando aparece no fim).`,
 				pausar = false
 				return nil
 			}
+			configFile, err := configDoAgente(cmd, configFile, serviceName)
+			if err != nil {
+				return err
+			}
 			cfg, err := config.Load(configFile, config.Overrides{})
 			if err != nil {
 				return fmt.Errorf("carregando config: %w", err)
@@ -171,4 +175,23 @@ chave nova (o comando aparece no fim).`,
 	cmd.Flags().BoolVar(&elevado, "elevado", false, "")
 	_ = cmd.Flags().MarkHidden("elevado")
 	return cmd
+}
+
+// configDoServico é o leitor do registro do serviço; os testes o trocam.
+var configDoServico = service.ConfigDoServico
+
+// configDoAgente decide de qual agente é o arquivo de configuração. Com
+// --service-name de outro agente e sem --config, o arquivo é o que o serviço
+// dele usa (unit, plist, SCM). Antes ficava o padrão — o do agente principal:
+// set-storage-keys testava e gravava a chave no agente errado, e o uninstall
+// apagava a configuração do vizinho.
+func configDoAgente(cmd *cobra.Command, configFile, serviceName string) (string, error) {
+	if cmd.Flags().Changed("config") || serviceName == "" || serviceName == service.DefaultName {
+		return configFile, nil
+	}
+	c, ok := configDoServico(serviceName)
+	if !ok || c == "" {
+		return "", fmt.Errorf("não achei o arquivo de configuração do serviço %s: use --config com o caminho da instalação dele", serviceName)
+	}
+	return c, nil
 }

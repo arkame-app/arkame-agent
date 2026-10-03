@@ -146,6 +146,13 @@ func ConfigsDosOutros(name string) (configs []string, completo bool) {
 	return configs, completo
 }
 
+// ConfigDoServico devolve o arquivo de configuração que o serviço name usa,
+// lido do registro dele (unit, plist, SCM). ok é false quando o serviço não
+// existe ou o registro não cita o arquivo.
+func ConfigDoServico(name string) (string, bool) {
+	return configDoServico(name)
+}
+
 // configDaUnit lê o env-file de uma unit do systemd gerada pelo agente
 // (EnvironmentFile=, ou o --config do ExecStart).
 func configDaUnit(conteudo string) string {
