@@ -208,6 +208,10 @@ agent_id existente, preservando histórico e path no bucket.`,
 					fmt.Fprintln(os.Stderr, "")
 					fmt.Fprintln(os.Stderr, "  ⚠", inst.LingerNote)
 				}
+				if passo := passoDoAcessoTotal(runtime.GOOS, inst); passo != "" {
+					fmt.Fprintln(os.Stderr, "")
+					fmt.Fprintln(os.Stderr, passo)
+				}
 				fmt.Fprintln(os.Stderr, "")
 			}
 			return nil
@@ -266,6 +270,28 @@ func identidadePropria(configFile string, cfg *config.Config) (bool, error) {
 		return false, fmt.Errorf("gravando os caminhos da identidade em %s: %w", configFile, err)
 	}
 	return true, nil
+}
+
+// passoDoAcessoTotal é o passo que falta no macOS: sem o Acesso Total ao
+// Disco, o serviço (LaunchDaemon ou LaunchAgent) não lê Mesa, Documentos,
+// Downloads nem o iCloud Drive — o TCC devolve "operation not permitted" e o
+// backup sai parcial sem dizer o que fazer. Fora do macOS, vazio.
+func passoDoAcessoTotal(goos string, inst *service.Installed) string {
+	if goos != "darwin" {
+		return ""
+	}
+	programa := inst.Programa
+	if programa == "" {
+		programa = "/usr/local/bin/arkame-agent"
+		if inst.Scope == service.ScopeUser {
+			programa = "~/.local/bin/arkame-agent"
+		}
+	}
+	return "  ⚠ Falta um passo no macOS: dê Acesso Total ao Disco ao agente.\n" +
+		"    Ajustes do Sistema → Privacidade e Segurança → Acesso Total ao Disco → +\n" +
+		"    e escolha " + programa + " (no seletor, Cmd+Shift+G e cole o caminho).\n" +
+		"    Depois reinicie o serviço: " + inst.StartCmd + "\n" +
+		"    Sem isso, Mesa, Documentos, Downloads e iCloud Drive ficam de fora do backup."
 }
 
 // errSemEspera: --wait=false não é aceito.

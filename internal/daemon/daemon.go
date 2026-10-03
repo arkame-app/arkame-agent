@@ -12,11 +12,13 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"os"
 	"runtime"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/arkame-app/agent/internal/api"
@@ -657,7 +659,26 @@ func causaDoParcial(result *syncengine.Result, syncErr error) string {
 	if len(msg) > 4000 {
 		msg = strings.ToValidUTF8(msg[:4000], "")
 	}
+	if msg != "" && sistemaDoAgente == "darwin" && (result.NaoPermitido || errors.Is(syncErr, syscall.EPERM)) {
+		msg += dicaDoAcessoTotal()
+	}
 	return msg
+}
+
+// sistemaDoAgente é o runtime.GOOS; os testes o trocam.
+var sistemaDoAgente = runtime.GOOS
+
+// dicaDoAcessoTotal vai ao fim da causa da sessão parcial no macOS quando
+// uma leitura voltou EPERM: é o TCC barrando o serviço, que não tem Acesso
+// Total ao Disco (Mesa, Documentos, Downloads, iCloud Drive). Sem ela, o
+// painel só via "operation not permitted" e ninguém sabia o que fazer.
+func dicaDoAcessoTotal() string {
+	programa := "o arkame-agent"
+	if exe, err := os.Executable(); err == nil {
+		programa = exe
+	}
+	return "; no macOS, \"operation not permitted\" é o sistema barrando o agente: dê Acesso Total ao Disco a " +
+		programa + " em Ajustes do Sistema → Privacidade e Segurança → Acesso Total ao Disco e reinicie o serviço"
 }
 
 // notaDoDepois vai ao fim da causa de uma sessão parcial ou falha quando o

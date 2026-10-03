@@ -132,3 +132,22 @@ func TestInstallRecusaNomeSemPrefixoAntesDoRegistro(t *testing.T) {
 		t.Fatalf("painel=%d serviço=%d: nada deveria ter sido feito", chamadas.Load(), servico.Load())
 	}
 }
+
+// No macOS, sem Acesso Total ao Disco, o serviço não lê Mesa, Documentos,
+// Downloads nem iCloud Drive, e nada dizia o que fazer: o install diz o passo,
+// com o programa que o serviço chama.
+func TestInstallDizOPassoDoAcessoTotalNoMacOS(t *testing.T) {
+	inst := &service.Installed{Scope: service.ScopeSystem, Programa: "/usr/local/bin/arkame-agent", StartCmd: "sudo launchctl kickstart -k system/app.arkame.agent"}
+	p := passoDoAcessoTotal("darwin", inst)
+	for _, quer := range []string{"Acesso Total ao Disco", "Privacidade e Segurança", "/usr/local/bin/arkame-agent", inst.StartCmd} {
+		if !strings.Contains(p, quer) {
+			t.Fatalf("passo sem %q:\n%s", quer, p)
+		}
+	}
+	if p := passoDoAcessoTotal("darwin", &service.Installed{Scope: service.ScopeUser}); !strings.Contains(p, "~/.local/bin/arkame-agent") {
+		t.Fatalf("escopo do usuário sem o programa de ~/.local/bin:\n%s", p)
+	}
+	if p := passoDoAcessoTotal("linux", inst); p != "" {
+		t.Fatalf("fora do macOS não há passo: %q", p)
+	}
+}

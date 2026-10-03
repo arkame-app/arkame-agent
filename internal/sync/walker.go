@@ -10,6 +10,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/arkame-app/agent/internal/caminho"
@@ -42,7 +43,14 @@ func Walk(ctx context.Context, hostRoot string, sourcePaths []string, excludeGlo
 type puladosDoWalk struct {
 	SoNaNuvem int // arquivos do OneDrive só na nuvem
 	Reparse   int // outros reparse points (Azure File Sync, HSM) ou ilegíveis
+	// NaoPermitido: alguma leitura voltou EPERM ("operation not permitted"),
+	// que no macOS é o TCC barrando o serviço sem Acesso Total ao Disco.
+	NaoPermitido bool
 }
+
+// naoPermitido diz se o erro é EPERM. Variável para os testes, que no Linux
+// só conseguem um EACCES.
+var naoPermitido = func(err error) bool { return errors.Is(err, syscall.EPERM) }
 
 // walk é o Walk que, com puladosOut, devolve quantos arquivos ficaram de fora
 // por estarem só na nuvem ou por serem reparse points de outro filtro. O valor
@@ -77,11 +85,15 @@ func walk(ctx context.Context, hostRoot string, sourcePaths []string, excludeGlo
 		// (reparse_skipped). Antes ficavam de fora calados.
 		reparse := 0
 		exemploReparse := ""
+		eperm := false
 		if puladosOut != nil {
-			defer func() { *puladosOut = puladosDoWalk{SoNaNuvem: soNaNuvem, Reparse: reparse} }()
+			defer func() {
+				*puladosOut = puladosDoWalk{SoNaNuvem: soNaNuvem, Reparse: reparse, NaoPermitido: eperm}
+			}()
 		}
 		anotar := func(p string, err error) {
 			naoLidos++
+			eperm = eperm || naoPermitido(err)
 			if len(exemplos) < maxExemplosNaoLidos {
 				causa := err
 				if u := errors.Unwrap(err); u != nil {
@@ -108,6 +120,7 @@ func walk(ctx context.Context, hostRoot string, sourcePaths []string, excludeGlo
 					// backup vazio "concluído" — era o que acontecia com
 					// `C:\Users\…` no Windows antes de 28/09.
 					if path == root {
+						eperm = eperm || naoPermitido(err)
 						return fmt.Errorf("não consegui ler %s: %w", root, err)
 					}
 					// O que está excluído do plano não entra na conta: não ia

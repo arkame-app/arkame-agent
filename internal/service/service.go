@@ -68,6 +68,9 @@ type Installed struct {
 	LogsCmd     string
 	LingerNote  string
 	NeedsManual string
+	// Programa é o executável que o serviço chama. No macOS é a ele que se
+	// dá o Acesso Total ao Disco.
+	Programa string
 }
 
 // LaunchdLabel converte o nome do serviço no identificador reverse-DNS que o
@@ -366,7 +369,11 @@ func Install(ctx context.Context, cfg *config.Config, opts Options) (*Installed,
 			"não sei qual env-file o serviço deve carregar: rode com --config apontando para o arquivo de credenciais")
 	}
 
-	return installPlatform(ctx, cfg, opts)
+	inst, err := installPlatform(ctx, cfg, opts)
+	if inst != nil {
+		inst.Programa = opts.BinaryPath
+	}
+	return inst, err
 }
 
 // Uninstall remove o serviço do SO. Não apaga token, chave nem env-file — só

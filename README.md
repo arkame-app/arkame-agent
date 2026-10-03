@@ -198,6 +198,23 @@ powershell -Command "Get-Content -Tail 50 -Wait 'C:\etc\arkame\agent.log'"
 > informa ao painel quantos ficaram de fora, e a falta deles não conta como
 > arquivo removido na origem.
 
+> **macOS — Acesso Total ao Disco:** como serviço (LaunchDaemon ou
+> LaunchAgent), o agente não lê Mesa, Documentos, Downloads nem o iCloud Drive
+> até receber o Acesso Total ao Disco: o macOS devolve "operation not
+> permitted" e o backup sai parcial. Depois do `install`:
+>
+> 1. Ajustes do Sistema → Privacidade e Segurança → Acesso Total ao Disco → **+**.
+> 2. No seletor, Cmd+Shift+G e cole o caminho do programa:
+>    `/usr/local/bin/arkame-agent` (instalação com sudo) ou
+>    `~/.local/bin/arkame-agent` (instalação sem root). Ative a chave dele.
+> 3. Reinicie o serviço com o comando que o `install` mostrou
+>    (`sudo launchctl kickstart -k system/app.arkame.agent`, ou
+>    `launchctl kickstart -k gui/$(id -u)/app.arkame.agent` sem root).
+>
+> O `install` mostra esse passo no fim, e a sessão parcial causada por isso diz
+> o mesmo no painel. Trocar o programa (atualização) pode exigir conceder de
+> novo.
+
 Sem terminal (automação), grave o arquivo antes: o `install` testa a chave que
 estiver lá e para com a causa se o bucket recusar. `--check-storage=false` pula
 o teste.

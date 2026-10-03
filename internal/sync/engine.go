@@ -52,6 +52,10 @@ type Result struct {
 	// File Sync em camada fria, HSM) ou que não deu para ler: ficam de fora e
 	// vão ao painel no /complete pelo mesmo motivo do CloudOnlySkipped.
 	ReparseSkipped int
+	// NaoPermitido: alguma leitura (varredura ou arquivo) voltou EPERM. No
+	// macOS é o TCC: o serviço precisa de Acesso Total ao Disco, e a causa da
+	// sessão parcial diz isso.
+	NaoPermitido bool
 }
 
 // Run executa o sync de um plano.
@@ -93,6 +97,7 @@ func Run(ctx context.Context, o EngineOptions) (*Result, error) {
 				"path", fi.RelativePath,
 				"err", err)
 			result.FilesFailed++
+			result.NaoPermitido = result.NaoPermitido || naoPermitido(err)
 			if result.PrimeiraFalha == "" {
 				result.PrimeiraFalha = fi.RelativePath + ": " + err.Error()
 			}
@@ -115,6 +120,7 @@ func Run(ctx context.Context, o EngineOptions) (*Result, error) {
 	}
 	result.CloudOnlySkipped = pulados.SoNaNuvem
 	result.ReparseSkipped = pulados.Reparse
+	result.NaoPermitido = result.NaoPermitido || pulados.NaoPermitido
 	// Cancelado no meio da varredura, o walker fecha o canal sem erro: sem
 	// esta checagem, a sessão saía "complete" com só parte dos arquivos.
 	if err := ctx.Err(); err != nil {
