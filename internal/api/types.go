@@ -255,7 +255,9 @@ type FsEntry struct {
 
 // FsListingReport é o body de POST /api/agents/<id>/fs-requests/<reqId>.
 type FsListingReport struct {
-	Entries []FsEntry `json:"entries,omitempty"`
+	// Sem omitempty: pasta vazia vai como [] — sem o campo, o explorador do
+	// painel entendia que a listagem não tinha chegado e ficava girando.
+	Entries []FsEntry `json:"entries"`
 	Error   string    `json:"error,omitempty"`
 }
 
