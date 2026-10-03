@@ -186,6 +186,33 @@ func TestIrregularLegivelTagIlegivel(t *testing.T) {
 	}
 }
 
+// Arquivo compactado pelo WOF (o Go o entrega como irregular) e arquivo
+// otimizado pela Desduplicação de Dados: a leitura comum devolve o conteúdo,
+// e eles entram no backup. Só se não abrirem contam como pulados.
+func TestIrregularLegivelWofEDedupEntram(t *testing.T) {
+	arq := filepath.Join(t.TempDir(), "compactado.dll")
+	if err := os.WriteFile(arq, []byte("conteúdo"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, tag := range []uint32{0x80000017, 0x80000013} {
+		lerReparseFalso(t, 0x20|0x400, tag)
+		st, classe := irregularLegivel(true, arq, fs.ModeIrregular|0o666)
+		if classe != reparseCopiar || st == nil || st.Size() != int64(len("conteúdo")) {
+			t.Fatalf("tag %#x deveria entrar como arquivo: classe=%v st=%v", tag, classe, st)
+		}
+	}
+	antes := abrirParaLer
+	t.Cleanup(func() { abrirParaLer = antes })
+	abrirParaLer = func(string) (*os.File, error) { return nil, fs.ErrPermission }
+	if _, classe := irregularLegivel(true, arq, fs.ModeIrregular|0o666); classe != reparsePulado {
+		t.Fatalf("WOF/dedup que não abre deveria contar como pulado, veio %v", classe)
+	}
+	abrirParaLer = func(string) (*os.File, error) { return nil, fs.ErrNotExist }
+	if _, classe := irregularLegivel(true, arq, fs.ModeIrregular|0o666); classe != reparseIgnorar {
+		t.Fatalf("WOF/dedup apagado no meio da leitura não conta, veio %v", classe)
+	}
+}
+
 func TestClassificarReparse(t *testing.T) {
 	const reparse = 0x400
 	casos := []struct {
@@ -204,8 +231,9 @@ func TestClassificarReparse(t *testing.T) {
 		{"AppExecLink", reparse, 0x8000001B, reparseIgnorar},
 		{"symlink", reparse, 0xA000000C, reparseIgnorar},
 		{"junção", reparse, 0xA0000003, reparseIgnorar},
-		{"dedup", reparse, 0x80000013, reparsePulado},
-		{"WOF (compactado)", reparse, 0x80000017, reparsePulado},
+		{"dedup", reparse, 0x80000013, reparseLegivel},
+		{"WOF (compactado)", reparse, 0x80000017, reparseLegivel},
+		{"WOF que é pasta", reparse | 0x10, 0x80000017, reparseIgnorar},
 		{"Azure File Sync em camada fria", reparse | 0x1000, 0x8000001E, reparsePulado},
 		{"HSM", reparse, 0xC0000004, reparsePulado},
 		{"parecido com CLOUD em outro nibble", reparse, 0x9001001A, reparsePulado},

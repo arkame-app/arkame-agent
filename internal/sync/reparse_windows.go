@@ -16,6 +16,8 @@ var (
 	_ [0]struct{} = [attrOffline ^ windows.FILE_ATTRIBUTE_OFFLINE]struct{}{}
 	_ [0]struct{} = [attrRecallOnOpen ^ windows.FILE_ATTRIBUTE_RECALL_ON_OPEN]struct{}{}
 	_ [0]struct{} = [attrRecallOnDataAccess ^ windows.FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS]struct{}{}
+	_ [0]struct{} = [ioReparseTagSymlink ^ windows.IO_REPARSE_TAG_SYMLINK]struct{}{}
+	_ [0]struct{} = [ioReparseTagMountPoint ^ windows.IO_REPARSE_TAG_MOUNT_POINT]struct{}{}
 )
 
 // fileAttributeTagInfo é FILE_ATTRIBUTE_TAG_INFO (winbase.h), que o x/sys não

@@ -30,6 +30,14 @@ const (
 	ioReparseTagAppExecLink uint32 = 0x8000001B
 	ioReparseTagSymlink     uint32 = 0xA000000C
 	ioReparseTagMountPoint  uint32 = 0xA0000003
+
+	// Arquivos que a leitura comum do Windows devolve inteiros: compactados
+	// pelo WOF (compact.exe, CompactOS; IO_REPARSE_TAG_WOF) e otimizados pela
+	// Desduplicação de Dados do Windows Server (IO_REPARSE_TAG_DEDUP, comum em
+	// servidor de arquivos). O Go já entrega o dedup como regular
+	// (os/types_windows.go); o WOF chega como irregular e cai aqui.
+	ioReparseTagWof   uint32 = 0x80000017
+	ioReparseTagDedup uint32 = 0x80000013
 )
 
 // classeReparse é o que o walker faz com um reparse point que não é link.
@@ -45,11 +53,14 @@ const (
 	// Abrir baixaria o arquivo; fica de fora e entra só na contagem do log.
 	reparseSoNaNuvem
 	// reparsePulado: reparse point de outro filtro (Azure File Sync em camada
-	// fria, IO_REPARSE_TAG_STORAGE_SYNC 0x8000001E; HSM; WOF) ou que não deu
+	// fria, IO_REPARSE_TAG_STORAGE_SYNC 0x8000001E; HSM) ou que não deu
 	// para ler. Fica de fora, mas conta (reparse_skipped no /complete): antes
 	// saía calado, a sessão terminava "completa" e o painel lia a falta como
 	// arquivo removido na origem.
 	reparsePulado
+	// reparseLegivel: WOF ou dedup — conteúdo vem pela leitura normal. Entra
+	// como arquivo comum se abrir; se não abrir, vira reparsePulado.
+	reparseLegivel
 )
 
 // classificarReparse decide pela tag e pelos atributos do próprio reparse
@@ -61,8 +72,10 @@ const (
 // os.Stat, falhavam ao abrir, e todo plano com o perfil do usuário saía
 // "parcial", todo dia.
 //
-// Os demais reparse points que não dão em pasta (Azure File Sync, HSM, WOF,
-// filtros de terceiros) voltam reparsePulado: ficam de fora, mas o walker conta.
+// WOF e dedup voltam reparseLegivel: a leitura comum devolve o conteúdo, e o
+// walker os copia como arquivo comum. Os demais reparse points que não dão em
+// pasta (Azure File Sync, HSM, filtros de terceiros) voltam reparsePulado:
+// ficam de fora, mas o walker conta.
 //
 // Arquivo de nuvem só na nuvem (RECALL_ON_DATA_ACCESS, RECALL_ON_OPEN ou
 // OFFLINE) fica de fora: lê-lo faria o backup baixar o OneDrive inteiro para o
@@ -76,6 +89,8 @@ func classificarReparse(atributos, tag uint32) classeReparse {
 		switch tag {
 		case ioReparseTagAppExecLink, ioReparseTagSymlink, ioReparseTagMountPoint:
 			return reparseIgnorar
+		case ioReparseTagWof, ioReparseTagDedup:
+			return reparseLegivel
 		}
 		return reparsePulado
 	}

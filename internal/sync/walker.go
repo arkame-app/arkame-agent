@@ -235,6 +235,9 @@ func walk(ctx context.Context, hostRoot string, sourcePaths []string, excludeGlo
 	return out, errs
 }
 
+// abrirParaLer é o os.Open da checagem do WOF/dedup; os testes o trocam.
+var abrirParaLer = os.Open
+
 // classificarEntrada é irregularLegivel, numa variável para os testes do
 // walker simularem, fora do Windows, um arquivo que só está na nuvem.
 var classificarEntrada = irregularLegivel
@@ -255,7 +258,8 @@ var classificarEntrada = irregularLegivel
 // restauração), e o Go avisa que essas chaves de compatibilidade saem um dia.
 //
 // Só entra o que classificarReparse aceita pela tag (Cloud Files API) e que
-// tem o conteúdo no disco. O AppExecLink, link e junção ficam de fora calados;
+// tem o conteúdo no disco, e os arquivos WOF e dedup que abrem pela leitura
+// comum. O AppExecLink, link e junção ficam de fora calados;
 // os outros reparse points (Azure File Sync, HSM, filtros de terceiros) e os
 // que não deu para ler voltam reparsePulado, para o walker contar. O que é de
 // nuvem mas só está na nuvem volta reparseSoNaNuvem, para o walker contar sem
@@ -274,6 +278,19 @@ func irregularLegivel(windows bool, path string, modo fs.FileMode) (fs.FileInfo,
 		return nil, reparsePulado
 	}
 	classe := classificarReparse(atributos, tag)
+	if classe == reparseLegivel {
+		// WOF/dedup: entra se a leitura comum abre o arquivo. Se não abre,
+		// não é "removido na origem": conta como pulado.
+		f, err := abrirParaLer(path)
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil, reparseIgnorar
+			}
+			return nil, reparsePulado
+		}
+		_ = f.Close()
+		classe = reparseCopiar
+	}
 	if classe != reparseCopiar {
 		return nil, classe
 	}

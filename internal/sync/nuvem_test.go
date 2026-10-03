@@ -54,6 +54,8 @@ func TestRunContaOsReparsePointsPulados(t *testing.T) {
 			return 0x400 | 0x1000, 0x8000001E, nil // IO_REPARSE_TAG_STORAGE_SYNC
 		case strings.HasSuffix(p, ".hsm"):
 			return 0x400, 0xC0000004, nil // IO_REPARSE_TAG_HSM
+		case strings.HasSuffix(p, ".wof"):
+			return 0x400, 0x80000017, nil // IO_REPARSE_TAG_WOF: entra
 		case strings.HasSuffix(p, ".negado"):
 			return 0, 0, fs.ErrPermission
 		}
@@ -70,7 +72,7 @@ func TestRunContaOsReparsePointsPulados(t *testing.T) {
 	t.Cleanup(func() { classificarEntrada = antes })
 
 	dir := t.TempDir()
-	for _, n := range []string{"local.txt", "a.afs", "b.hsm", "c.negado"} {
+	for _, n := range []string{"local.txt", "a.afs", "b.hsm", "c.negado", "d.wof"} {
 		if err := os.WriteFile(filepath.Join(dir, n), []byte(n), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -80,8 +82,8 @@ func TestRunContaOsReparsePointsPulados(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reparse point de outro filtro não é falha: %v", err)
 	}
-	if len(r.VersionMap) != 1 || !strings.HasSuffix(r.VersionMap[0].Key, "local.txt") {
-		t.Fatalf("version_map = %+v, queria só local.txt", r.VersionMap)
+	if len(r.VersionMap) != 2 || !strings.HasSuffix(r.VersionMap[0].Key, "d.wof") || !strings.HasSuffix(r.VersionMap[1].Key, "local.txt") {
+		t.Fatalf("version_map = %+v, queria d.wof (WOF entra) e local.txt", r.VersionMap)
 	}
 	if r.ReparseSkipped != 3 {
 		t.Fatalf("ReparseSkipped = %d, queria 3 (Azure File Sync, HSM, ilegível)", r.ReparseSkipped)
