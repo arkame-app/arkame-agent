@@ -35,7 +35,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 ExecStart=%[2]s run --config %[3]s
-EnvironmentFile=%[3]s
+EnvironmentFile=%[4]s
 Restart=always
 RestartSec=10s
 User=root
@@ -44,7 +44,7 @@ Group=root
 # Hardening compatível com a função do agent (ler o disco para backup)
 NoNewPrivileges=true
 ProtectSystem=full
-ReadWritePaths=%[4]s
+ReadWritePaths=%[5]s
 
 [Install]
 WantedBy=multi-user.target
@@ -59,13 +59,37 @@ After=network-online.target
 [Service]
 Type=simple
 ExecStart=%[2]s run --config %[3]s
-EnvironmentFile=%[3]s
+EnvironmentFile=%[4]s
 Restart=always
 RestartSec=10s
 
 [Install]
 WantedBy=default.target
 `
+
+// textoDaUnit monta a unit. Os caminhos passam por argDaUnit: o --config
+// cru partia em dois argumentos um caminho com espaço (/srv/arkame cfg/…, ou
+// um $XDG_CONFIG_HOME com espaço no escopo user), e o serviço subia com o
+// arquivo errado e ficava reiniciando. O EnvironmentFile= não tira aspas (o
+// valor inteiro é o caminho): nele, só o % é escapado.
+func textoDaUnit(escopo Scope, nome, programa, configPath string, writable []string) string {
+	if escopo == ScopeSystem {
+		return fmt.Sprintf(systemUnitTmpl, nome, argDaUnit(programa), argDaUnit(configPath),
+			escaparPorcento(configPath), strings.Join(writable, " "))
+	}
+	return fmt.Sprintf(userUnitTmpl, nome, argDaUnit(programa), argDaUnit(configPath),
+		escaparPorcento(configPath))
+}
+
+// argDaUnit é o quoteArg com o % escapado: na unit, %h, %u… são
+// especificadores do systemd, e um % literal se escreve %%.
+func argDaUnit(s string) string {
+	return escaparPorcento(quoteArg(s))
+}
+
+func escaparPorcento(s string) string {
+	return strings.ReplaceAll(s, "%", "%%")
+}
 
 func defaultScope() Scope {
 	if os.Geteuid() == 0 {
@@ -110,7 +134,7 @@ func installSystemd(ctx context.Context, cfg *config.Config, opts Options) (*Ins
 				"instalar serviço de sistema exige root: repita com sudo, ou use --service-scope=user para instalar só para o seu usuário (sem sudo)")
 		}
 		unitPath = filepath.Join("/etc/systemd/system", opts.Name+".service")
-		unit = fmt.Sprintf(systemUnitTmpl, opts.Name, quoteArg(opts.BinaryPath), cfg.ConfigPath, strings.Join(writable, " "))
+		unit = textoDaUnit(ScopeSystem, opts.Name, opts.BinaryPath, cfg.ConfigPath, writable)
 		sysctl = []string{"systemctl"}
 
 	case ScopeUser:
@@ -126,7 +150,7 @@ func installSystemd(ctx context.Context, cfg *config.Config, opts Options) (*Ins
 			return nil, fmt.Errorf("criando %s: %w", dir, err)
 		}
 		unitPath = filepath.Join(dir, opts.Name+".service")
-		unit = fmt.Sprintf(userUnitTmpl, opts.Name, quoteArg(opts.BinaryPath), cfg.ConfigPath)
+		unit = textoDaUnit(ScopeUser, opts.Name, opts.BinaryPath, cfg.ConfigPath, nil)
 		sysctl = []string{"systemctl", "--user"}
 	}
 
@@ -251,7 +275,8 @@ func unitChamaPrograma(arquivo, exe string) bool {
 	for _, l := range strings.Split(string(b), "\n") {
 		if v, ok := strings.CutPrefix(strings.TrimSpace(l), "ExecStart="); ok {
 			// Prefixos do systemd (-, @, :, +, !) vêm antes do caminho.
-			if mesmoPrograma("linux", programaDaLinha(strings.TrimLeft(v, "-@:+!")), exe) {
+			v = strings.ReplaceAll(strings.TrimLeft(v, "-@:+!"), "%%", "%")
+			if mesmoPrograma("linux", programaDaLinha(v), exe) {
 				return true
 			}
 		}
@@ -306,7 +331,7 @@ func writablePaths(cfg *config.Config) []string {
 			continue
 		}
 		seen[d] = true
-		out = append(out, quoteArg(d))
+		out = append(out, argDaUnit(d))
 	}
 	if len(out) == 0 {
 		out = append(out, "/etc/arkame")

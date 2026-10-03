@@ -280,19 +280,54 @@ func ConfigDoServico(name string, scope Scope) (string, bool) {
 }
 
 // configDaUnit lê o env-file de uma unit do systemd gerada pelo agente
-// (EnvironmentFile=, ou o --config do ExecStart).
+// (EnvironmentFile=, ou o --config do ExecStart). O %% da unit é um %.
 func configDaUnit(conteudo string) string {
 	var doExec string
 	for _, l := range strings.Split(conteudo, "\n") {
 		l = strings.TrimSpace(l)
 		if v, ok := strings.CutPrefix(l, "EnvironmentFile="); ok {
-			return strings.Trim(strings.TrimPrefix(v, "-"), `"`)
+			return strings.ReplaceAll(strings.Trim(strings.TrimPrefix(v, "-"), `"`), "%%", "%")
 		}
 		if v, ok := strings.CutPrefix(l, "ExecStart="); ok {
-			doExec = configDosArgs(strings.Fields(v))
+			doExec = configDosArgs(camposDaLinha(v))
 		}
 	}
-	return strings.Trim(doExec, `"`)
+	return strings.ReplaceAll(doExec, "%%", "%")
+}
+
+// camposDaLinha parte uma linha de comando da unit em argumentos, com o
+// argumento entre aspas (o que o quoteArg gera) inteiro e sem as aspas.
+func camposDaLinha(linha string) []string {
+	var (
+		campos   []string
+		atual    strings.Builder
+		aspas    bool
+		temCampo bool
+	)
+	for i := 0; i < len(linha); i++ {
+		c := linha[i]
+		switch {
+		case c == '\\' && aspas && i+1 < len(linha) && linha[i+1] == '"':
+			atual.WriteByte('"')
+			i++
+		case c == '"':
+			aspas = !aspas
+			temCampo = true
+		case (c == ' ' || c == '\t') && !aspas:
+			if temCampo {
+				campos = append(campos, atual.String())
+				atual.Reset()
+				temCampo = false
+			}
+		default:
+			atual.WriteByte(c)
+			temCampo = true
+		}
+	}
+	if temCampo {
+		campos = append(campos, atual.String())
+	}
+	return campos
 }
 
 // configDoPlist lê o argumento depois de --config no ProgramArguments.

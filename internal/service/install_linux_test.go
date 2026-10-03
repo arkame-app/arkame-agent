@@ -55,3 +55,51 @@ func TestInstalarReiniciaAUnitAtiva(t *testing.T) {
 		t.Fatalf("comandos do systemctl:\n%s\nqueria:\n%s", strings.Join(systemctl, "\n"), strings.Join(querido, "\n"))
 	}
 }
+
+// --config com espaço ia cru no ExecStart: o systemd partia o caminho em dois
+// argumentos e o serviço subia com o arquivo errado. E % na unit é
+// especificador do systemd (%h, %u): um % do caminho tem de ir como %%.
+func TestUnitProtegeOConfigComEspacoEPorcento(t *testing.T) {
+	const (
+		programa = "/opt/meu agente/arkame-agent"
+		cfg      = "/srv/arkame cfg/100%.env"
+	)
+	for _, escopo := range []Scope{ScopeSystem, ScopeUser} {
+		unit := textoDaUnit(escopo, "arkame-agent", programa, cfg, writablePaths(&config.Config{TokenPath: "/srv/arkame cfg/token.jwt"}))
+		linhas := map[string]string{}
+		for _, l := range strings.Split(unit, "\n") {
+			if k, v, ok := strings.Cut(l, "="); ok {
+				linhas[k] = v
+			}
+		}
+		if q := `"/opt/meu agente/arkame-agent" run --config "/srv/arkame cfg/100%%.env"`; linhas["ExecStart"] != q {
+			t.Errorf("%s: ExecStart=%s\nqueria   %s", escopo, linhas["ExecStart"], q)
+		}
+		if q := "/srv/arkame cfg/100%%.env"; linhas["EnvironmentFile"] != q {
+			t.Errorf("%s: EnvironmentFile=%s, queria %s", escopo, linhas["EnvironmentFile"], q)
+		}
+		if escopo == ScopeSystem && linhas["ReadWritePaths"] != `"/srv/arkame cfg"` {
+			t.Errorf("ReadWritePaths=%s", linhas["ReadWritePaths"])
+		}
+		// O uninstall e o reconhecimento dos outros agentes leem a unit de volta.
+		if c := configDaUnit(unit); c != cfg {
+			t.Errorf("%s: configDaUnit = %q, queria %q", escopo, c, cfg)
+		}
+		if c := configDaUnit(strings.Replace(unit, "EnvironmentFile=", "#", 1)); c != cfg {
+			t.Errorf("%s: configDaUnit pelo ExecStart = %q, queria %q", escopo, c, cfg)
+		}
+		arq := filepath.Join(t.TempDir(), "x.service")
+		if err := os.WriteFile(arq, []byte(unit), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if !unitChamaPrograma(arq, programa) {
+			t.Errorf("%s: a unit não foi reconhecida como do programa %s", escopo, programa)
+		}
+	}
+
+	// Com %, sem espaço: sem aspas, mas escapado.
+	unit := textoDaUnit(ScopeUser, "arkame-agent", "/usr/local/bin/arkame-agent", "/etc/arkame/a%b.env", nil)
+	if !strings.Contains(unit, "ExecStart=/usr/local/bin/arkame-agent run --config /etc/arkame/a%%b.env\n") {
+		t.Errorf("unit:\n%s", unit)
+	}
+}
