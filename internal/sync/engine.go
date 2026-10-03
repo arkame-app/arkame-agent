@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"log/slog"
 	"os"
@@ -128,21 +129,37 @@ func processFile(ctx context.Context, o EngineOptions, fi FileInfo) (*api.FileEn
 	}
 	meta := map[string]string{"sha256": hash}
 
+	if antesDoEnvio != nil {
+		antesDoEnvio(fi.AbsolutePath)
+	}
+
+	// O hash foi calculado numa primeira leitura; o envio lê o arquivo de
+	// novo. Se ele mudou entre as duas (log, banco aberto, planilha salva no
+	// meio), o bucket guardaria um conteúdo e o índice outro sha256/tamanho —
+	// e a restauração falharia lá na frente com "sha256 mismatch". Por isso o
+	// que sobe é hasheado enquanto sobe e comparado com o hash registrado.
+	//
+	// Na diferença, o arquivo falha (não entra no version_map; a sessão fica
+	// parcial e o próximo backup tenta de novo). Registrar o hash do que subiu
+	// não serve: o metadado sha256 já foi enviado com o hash antigo, e o
+	// conteúdo pode ser uma mistura de antes e depois, que não é uma versão
+	// de verdade do arquivo.
 	var versionID string
 	if fi.Size >= MultipartThresholdBytes {
 		// Multipart manual: ContentLength explícito + corpo seekable por parte,
 		// sem ChecksumAlgorithm — evita o Content-Encoding aws-chunked que o
 		// s3/manager emite e que provedores S3-compat (OCI) não suportam (501).
-		versionID, err = uploadMultipart(ctx, o.S3, o.Bucket, key, f, meta, o.MaxMbps)
+		versionID, err = uploadMultipart(ctx, o.S3, o.Bucket, key, f, meta, o.MaxMbps, hash, fi.Size)
 		if err != nil {
 			return nil, false, fmt.Errorf("multipart put %s: %w", key, err)
 		}
 	} else {
 		size := fi.Size
+		lido := newLeitorComHash(f)
 		putOut, err := o.S3.PutObject(ctx, &s3.PutObjectInput{
 			Bucket:        &o.Bucket,
 			Key:           &key,
-			Body:          NewThrottledReader(f, o.MaxMbps),
+			Body:          NewThrottledReader(lido, o.MaxMbps),
 			Metadata:      meta,
 			ContentLength: &size, // S3-compat (OCI) exige Content-Length; sem isso o SDK manda chunked → 411
 		})
@@ -151,6 +168,14 @@ func processFile(ctx context.Context, o EngineOptions, fi FileInfo) (*api.FileEn
 		}
 		if putOut.VersionId != nil {
 			versionID = *putOut.VersionId
+		}
+		if !lido.confere(hash, size) {
+			// O objeto já está no bucket, com o metadado sha256 do conteúdo
+			// antigo. Deixá-lo lá envenenaria o dedup: se o arquivo voltar ao
+			// conteúdo antigo, o HeadObject acharia "mesmo hash" e o índice
+			// apontaria para o conteúdo errado. Sai a versão recém-criada.
+			removerEnvioInvalido(ctx, o.S3, o.Bucket, key, versionID)
+			return nil, false, fmt.Errorf("put %s: %w", key, ErrArquivoMudou)
 		}
 	}
 
@@ -169,7 +194,7 @@ func processFile(ctx context.Context, o EngineOptions, fi FileInfo) (*api.FileEn
 // Content-Encoding aws-chunked que o s3/manager emite — não suportado por
 // provedores S3-compat como a OCI (501 NotImplemented). Em qualquer falha,
 // aborta o multipart pra não deixar partes órfãs no bucket.
-func uploadMultipart(ctx context.Context, s3c *s3.Client, bucket, key string, f *os.File, meta map[string]string, maxMbps int) (string, error) {
+func uploadMultipart(ctx context.Context, s3c *s3.Client, bucket, key string, f *os.File, meta map[string]string, maxMbps int, hashEsperado string, tamanho int64) (string, error) {
 	const partSize = 16 * 1024 * 1024 // 16 MiB
 
 	create, err := s3c.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
@@ -190,9 +215,15 @@ func uploadMultipart(ctx context.Context, s3c *s3.Client, bucket, key string, f 
 
 	var parts []s3types.CompletedPart
 	buf := make([]byte, partSize)
+	// O que sobe é exatamente o que passa por buf (o SDK reenvia o mesmo
+	// buf nas novas tentativas): hasheado aqui, confere com o hash registrado.
+	enviado := sha256.New()
+	var bytesEnviados int64
 	for partNum := int32(1); ; partNum++ {
 		n, rerr := io.ReadFull(f, buf)
 		if n > 0 {
+			enviado.Write(buf[:n])
+			bytesEnviados += int64(n)
 			pn := partNum
 			cl := int64(n)
 			out, uerr := s3c.UploadPart(ctx, &s3.UploadPartInput{
@@ -222,6 +253,12 @@ func uploadMultipart(ctx context.Context, s3c *s3.Client, bucket, key string, f 
 		abort()
 		return "", fmt.Errorf("nenhuma parte para enviar")
 	}
+	if bytesEnviados != tamanho || hex.EncodeToString(enviado.Sum(nil)) != hashEsperado {
+		// Mudou durante o envio: aborta antes do Complete, e nada chega a
+		// existir no bucket.
+		abort()
+		return "", ErrArquivoMudou
+	}
 
 	comp, err := s3c.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
 		Bucket:          &bucket,
@@ -237,6 +274,81 @@ func uploadMultipart(ctx context.Context, s3c *s3.Client, bucket, key string, f 
 		return *comp.VersionId, nil
 	}
 	return "", nil
+}
+
+// ErrArquivoMudou: o conteúdo enviado não é o que foi hasheado — o arquivo foi
+// alterado durante o backup. O arquivo falha nesta sessão e volta na próxima.
+var ErrArquivoMudou = errors.New("arquivo mudou durante o envio (o conteúdo enviado não confere com o sha256 calculado); fica para o próximo backup")
+
+// antesDoEnvio é um gancho só para teste: roda entre o hash e o envio, o
+// intervalo em que um arquivo alterado no lugar fazia subir conteúdo diferente
+// do registrado.
+var antesDoEnvio func(path string)
+
+// leitorComHash hasheia o que o SDK lê para enviar. O SDK pode ler o corpo
+// mais de uma vez (assinatura do payload, nova tentativa), sempre voltando ao
+// início com Seek: a volta ao zero recomeça o hash, e vale a última leitura
+// completa — a que foi enviada. Um Seek para o meio invalida a conferência
+// até a próxima volta ao zero.
+type leitorComHash struct {
+	r        io.ReadSeeker
+	h        hash.Hash
+	n        int64
+	pos      int64
+	desviado bool
+}
+
+func newLeitorComHash(r io.ReadSeeker) *leitorComHash {
+	return &leitorComHash{r: r, h: sha256.New()}
+}
+
+func (l *leitorComHash) Read(p []byte) (int, error) {
+	n, err := l.r.Read(p)
+	if n > 0 {
+		l.h.Write(p[:n])
+		l.n += int64(n)
+		l.pos += int64(n)
+	}
+	return n, err
+}
+
+func (l *leitorComHash) Seek(offset int64, whence int) (int64, error) {
+	pos, err := l.r.Seek(offset, whence)
+	if err != nil {
+		return pos, err
+	}
+	switch {
+	case pos == 0:
+		l.h.Reset()
+		l.n = 0
+		l.desviado = false
+	case pos != l.pos:
+		l.desviado = true
+	}
+	l.pos = pos
+	return pos, nil
+}
+
+// confere diz se a última leitura completa tem o hash e o tamanho esperados.
+func (l *leitorComHash) confere(hashEsperado string, tamanho int64) bool {
+	return !l.desviado && l.n == tamanho && hex.EncodeToString(l.h.Sum(nil)) == hashEsperado
+}
+
+// removerEnvioInvalido apaga a versão que acabou de subir com conteúdo que não
+// confere. Com o contexto desligado do cancelamento: o serviço parando no meio
+// não pode deixar o objeto envenenado para trás. Sem VersionId (bucket sem
+// versionamento) o objeto atual é o recém-enviado, que já sobrescreveu o
+// anterior — apagá-lo é melhor que deixar um conteúdo com hash errado.
+func removerEnvioInvalido(ctx context.Context, s3c *s3.Client, bucket, key, versionID string) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	in := &s3.DeleteObjectInput{Bucket: &bucket, Key: &key}
+	if versionID != "" {
+		in.VersionId = &versionID
+	}
+	if _, err := s3c.DeleteObject(ctx, in); err != nil {
+		slog.Warn("não consegui apagar o envio que não confere", "key", key, "version_id", versionID, "err", err)
+	}
 }
 
 // checkDedup retorna (entry, true) se o objeto já existe no bucket com o
