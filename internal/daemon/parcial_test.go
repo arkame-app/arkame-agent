@@ -57,3 +57,23 @@ func TestCausaDoParcialCorta(t *testing.T) {
 		t.Fatalf("len=%d válido=%v começo=%q", len(m), utf8.ValidString(m), m[:60])
 	}
 }
+
+// Falha total: o /fail levava só "todos os arquivos falharam no upload", sem
+// dizer qual arquivo nem por quê.
+func TestFalhaTotalLevaACausa(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "unico.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	painel, c := novoPainel(t)
+	plan := api.Plan{ID: "p1", Kind: "backup", SourcePaths: []string{dir}, StorageRef: api.StorageRef{Bucket: "b"}}
+	cfg := &config.Config{AgentID: "a1", HostRoot: "/"}
+	if err := executePlan(context.Background(), c, s3SemUso(t), cfg, plan); err == nil {
+		t.Fatal("esperava erro: nenhum arquivo subiu")
+	}
+	corpo := painel.corpo("/api/agents/a1/sessions/s1/fail")
+	if !strings.Contains(corpo, `"error_code":"sync_failed"`) ||
+		!strings.Contains(corpo, "1 arquivo(s) não subiram (ex.: ") || !strings.Contains(corpo, "unico.txt") {
+		t.Fatalf("o /fail não leva a causa da falha total: %s", corpo)
+	}
+}

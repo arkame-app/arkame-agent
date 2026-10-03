@@ -340,8 +340,15 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 
 	totalFailure, completeStatus := avaliarSessao(result, syncErr)
 	if totalFailure {
+		// A causa vai ao painel como no parcial: o primeiro arquivo que
+		// falhou e o erro dele. Era só "todos os arquivos falharam no
+		// upload", e ninguém sabia por quê.
 		msg := "todos os arquivos falharam no upload"
-		if syncErr != nil {
+		if result != nil {
+			if causa := causaDoParcial(result, syncErr); causa != "" {
+				msg = causa
+			}
+		} else if syncErr != nil {
 			msg = syncErr.Error()
 		}
 		failBody := struct {
