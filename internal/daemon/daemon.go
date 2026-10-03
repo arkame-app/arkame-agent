@@ -273,7 +273,6 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 	// adiante salvaria o dump da véspera achando que salvou o de hoje — pior
 	// que não salvar, porque ninguém procura o que parece estar lá.
 	prazo := time.Duration(plan.HookTimeoutSeconds) * time.Second
-	var saidaDosHooks strings.Builder
 	if r, err := hooks.Run(ctx, plan.PreHook, prazo); err != nil {
 		slog.Error("comando de antes falhou; backup abortado",
 			"plan_id", plan.ID, "exit_code", r.ExitCode, "timed_out", r.TimedOut)
@@ -291,8 +290,6 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 		return fmt.Errorf("%s", msg)
 	} else if r.Ran {
 		slog.Info("comando de antes concluído", "plan_id", plan.ID, "duracao", r.Duration)
-		saidaDosHooks.WriteString("$ antes do backup\n")
-		saidaDosHooks.WriteString(r.Output)
 	}
 
 	result, syncErr := syncengine.Run(ctx, syncengine.EngineOptions{
@@ -314,15 +311,13 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 	hctx, hcancel := contextoDeFinalizacao(ctx)
 	r, err := hooks.Run(hctx, plan.PostHook, prazo)
 	hcancel()
+	// Falha aqui não invalida o backup: os arquivos já subiram. Mas vai ao
+	// painel (post_hook_failed), para quem for investigar o disco cheio
+	// depois — a saída era montada e jogada fora.
+	falhaDoDepois := ""
 	if err != nil {
-		// Falha aqui não invalida o backup: os arquivos já subiram. Fica
-		// registrado para quem for investigar o disco cheio depois.
 		slog.Warn("comando de depois falhou", "plan_id", plan.ID, "err", err)
-		saidaDosHooks.WriteString("\n$ depois do backup (falhou)\n")
-		saidaDosHooks.WriteString(r.Output)
-	} else if r.Ran {
-		saidaDosHooks.WriteString("\n$ depois do backup\n")
-		saidaDosHooks.WriteString(r.Output)
+		falhaDoDepois = mensagemDoDepois(err, r.Output)
 	}
 
 	if errors.Is(syncErr, syncengine.ErrBucketSemVersionamento) {
@@ -350,6 +345,9 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 			}
 		} else if syncErr != nil {
 			msg = syncErr.Error()
+		}
+		if falhaDoDepois != "" {
+			msg += notaDoDepois
 		}
 		failBody := struct {
 			ErrorCode    string `json:"error_code"`
@@ -407,8 +405,15 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 		// por arquivo.
 		completeBody.ErrorCode = "sync_partial"
 		completeBody.ErrorMessage = causaDoParcial(result, syncErr)
+		if falhaDoDepois != "" {
+			completeBody.ErrorMessage += notaDoDepois
+		}
 		slog.Warn("backup parcial", "plan_id", plan.ID, "session_id", startResp.SessionID,
 			"arquivos_com_falha", result.FilesFailed, "err", syncErr, "causa", completeBody.ErrorMessage)
+	}
+	if completeStatus == "complete" && falhaDoDepois != "" {
+		completeBody.ErrorCode = "post_hook_failed"
+		completeBody.ErrorMessage = falhaDoDepois
 	}
 	var completeResp struct {
 		// Ponteiro: ausente (resposta de "not_running", painel antigo) não é
@@ -564,6 +569,24 @@ func causaDoParcial(result *syncengine.Result, syncErr error) string {
 	msg := strings.Join(partes, "; ")
 	if len(msg) > 4000 {
 		msg = strings.ToValidUTF8(msg[:4000], "")
+	}
+	return msg
+}
+
+// notaDoDepois vai ao fim da causa de uma sessão parcial ou falha quando o
+// comando de depois também falhou: a causa principal é a do backup.
+const notaDoDepois = "; comando de depois falhou"
+
+// mensagemDoDepois é o error_message de post_hook_failed: o erro do comando
+// (código de saída ou prazo) e a saída dele, até hooks.MaxOutputBytes, sem
+// cortar um caractere ao meio.
+func mensagemDoDepois(err error, saida string) string {
+	msg := "comando de depois do backup falhou: " + err.Error()
+	if s := strings.TrimSpace(saida); s != "" {
+		msg += "\n" + s
+	}
+	if len(msg) > hooks.MaxOutputBytes {
+		msg = strings.ToValidUTF8(msg[:hooks.MaxOutputBytes], "")
 	}
 	return msg
 }
