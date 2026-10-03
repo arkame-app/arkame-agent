@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -113,5 +115,39 @@ func TestNomeDoAntigo(t *testing.T) {
 	}
 	if a == b {
 		t.Fatalf("dois nomes iguais: %s", a)
+	}
+}
+
+// Depois da troca do exe no setup, os outros serviços que o rodavam (um
+// segundo agente) seguiam no .old. Agora são reiniciados — menos o do
+// install, que o re-registra —, e os que falham saem num aviso.
+func TestReiniciarOutrosDoPrograma(t *testing.T) {
+	var reiniciados []string
+	reiniciar := func(n string) error {
+		reiniciados = append(reiniciados, n)
+		if n == "arkame-agent-falha" {
+			return errors.New("acesso negado")
+		}
+		return nil
+	}
+	var out bytes.Buffer
+	falharam := reiniciarOutrosDoPrograma(&out,
+		[]string{"Arkame-Agent", "arkame-agent-oci", "backup-oci", "arkame-agent-falha"},
+		"arkame-agent", reiniciar)
+
+	if got := strings.Join(reiniciados, ","); got != "arkame-agent-oci,backup-oci,arkame-agent-falha" {
+		t.Fatalf("reiniciados = %s (o do install não pode entrar; os outros, todos)", got)
+	}
+	if len(falharam) != 1 || falharam[0] != "arkame-agent-falha" {
+		t.Fatalf("falharam = %v", falharam)
+	}
+	if !strings.Contains(out.String(), "Continuam na versão antiga: arkame-agent-falha") {
+		t.Fatalf("sem o aviso dos que ficaram na versão antiga:\n%s", out.String())
+	}
+
+	out.Reset()
+	reiniciados = nil
+	if f := reiniciarOutrosDoPrograma(&out, []string{"arkame-agent"}, "arkame-agent", reiniciar); f != nil || reiniciados != nil || out.Len() != 0 {
+		t.Fatalf("só o do install: reiniciou %v, falharam %v, saída %q", reiniciados, f, out.String())
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/arkame-app/agent/internal/aplicativos"
+	"github.com/arkame-app/agent/internal/service"
 	"github.com/arkame-app/agent/pkg/version"
 	"github.com/spf13/cobra"
 )
@@ -70,11 +71,15 @@ func newSetupCmd() *cobra.Command {
 					return err
 				}
 				// O serviço segue rodando o programa antigo até o `install`
-				// recriá-lo; se algo falhar aqui, ele continua de pé.
+				// recriá-lo; se algo falhar aqui, ele continua de pé. Os
+				// outros que rodam o mesmo exe (um segundo agente) são
+				// anotados antes da troca, para reiniciar depois dela.
+				rodando := service.RodandoOPrograma(destino)
 				if err := copiarPrograma(exe, destino); err != nil {
 					return fmt.Errorf("copiando o programa para %s: %w", destino, err)
 				}
 				fmt.Fprintln(os.Stderr, "  ✓ Programa em", destino)
+				reiniciarOutrosDoPrograma(os.Stderr, rodando, service.DefaultName, service.Reiniciar)
 			}
 			// Copiado agora ou já no lugar: a pasta e o programa passam aos
 			// Administradores. Do administrador do primeiro setup, outro
@@ -116,6 +121,31 @@ func newSetupCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&elevado, "elevado", false, "")
 	_ = cmd.Flags().MarkHidden("elevado")
 	return cmd
+}
+
+// reiniciarOutrosDoPrograma reinicia os serviços que estavam rodando o
+// programa trocado, menos o proprio: o `install` que o setup abre o
+// re-registra e inicia (sempre com o nome padrão). Sem isso, um segundo
+// agente no mesmo exe (arkame-agent-oci) seguia rodando o .old, sem aviso,
+// até o próximo boot. Devolve os que não reiniciaram, que saem num aviso.
+func reiniciarOutrosDoPrograma(w io.Writer, rodando []string, proprio string, reiniciar func(string) error) []string {
+	var falharam []string
+	for _, nome := range rodando {
+		if strings.EqualFold(nome, proprio) {
+			continue
+		}
+		if err := reiniciar(nome); err != nil {
+			fmt.Fprintf(w, "  ! não consegui reiniciar o serviço %s: %v\n", nome, err)
+			falharam = append(falharam, nome)
+			continue
+		}
+		fmt.Fprintln(w, "  ✓ Serviço", nome, "reiniciado com a versão nova")
+	}
+	if len(falharam) > 0 {
+		fmt.Fprintln(w, "  ! Continuam na versão antiga:", strings.Join(falharam, ", "))
+		fmt.Fprintln(w, "    Reinicie-os (services.msc) para a versão nova valer.")
+	}
+	return falharam
 }
 
 func discoDoSistema() string {

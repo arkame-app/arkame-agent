@@ -102,7 +102,11 @@ Binário Linux rodando local contra o painel em produção (`save.arkame.app`) +
 > `-ServiceName` e um segundo agente, como `arkame-agent-oci`, achados pelo `PathName`
 > do Win32_Service) são reiniciados já com a versão nova; os que não reiniciarem saem
 > num aviso como ainda na versão antiga. Antes só o `-ServiceName` reiniciava, e o
-> outro seguia no `.old` sem aviso até o próximo boot.
+> outro seguia no `.old` sem aviso até o próximo boot. O mesmo vale para a instalação
+> com código: o `setup` reinicia, logo depois de trocar o exe, os outros serviços que o
+> rodavam (menos o `arkame-agent`, que o `install` re-registra), e o `install.ps1
+> -Token` faz isso depois do `install` (menos o `-ServiceName`, salvo com `-NoService`);
+> os que falham saem num aviso.
 >
 > O `install.sh` não apaga mais o programa antes de copiar o novo: copia para
 > `.arkame-agent.novo.<pid>` na mesma pasta e troca por `mv -f`. Se a cópia falha (disco

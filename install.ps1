@@ -85,6 +85,26 @@ function Get-ProgramaDaLinha {
     return $l
 }
 
+# Reinicia os serviços Nomes (rodavam o exe antigo, agora .old) para a
+# versão nova valer, e avisa quais ficaram na antiga.
+function Restart-ServicosDoExe {
+    param([string[]]$Nomes)
+    $falharam = @()
+    foreach ($nome in $Nomes) {
+        try {
+            Restart-Service -Name $nome -Force -ErrorAction Stop
+            Write-Ok "Servico $nome reiniciado com a versao nova"
+        } catch {
+            Write-Warn "Nao consegui reiniciar o servico ${nome}: $($_.Exception.Message)"
+            $falharam += $nome
+        }
+    }
+    if ($falharam.Count -gt 0) {
+        Write-Warn "Continuam na versao antiga: $($falharam -join ', ')"
+        Write-Warn "Reinicie-os (services.msc) para a versao nova valer."
+    }
+}
+
 function Test-Administrator {
     $identity  = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = New-Object Security.Principal.WindowsPrincipal($identity)
@@ -272,22 +292,9 @@ try {
     if (-not $Token) {
         # Só o binário: os serviços seguem rodando o exe antigo (.old) até
         # reiniciar. Reinicia agora todos os que estavam rodando este exe, já
-        # com o novo no lugar, para a atualização valer. Com -Token, o
-        # install do agente reinicia.
-        $falharam = @()
-        foreach ($nome in $paraReiniciar) {
-            try {
-                Restart-Service -Name $nome -Force -ErrorAction Stop
-                Write-Ok "Servico $nome reiniciado com a versao nova"
-            } catch {
-                Write-Warn "Nao consegui reiniciar o servico ${nome}: $($_.Exception.Message)"
-                $falharam += $nome
-            }
-        }
-        if ($falharam.Count -gt 0) {
-            Write-Warn "Continuam na versao antiga: $($falharam -join ', ')"
-            Write-Warn "Reinicie-os (services.msc) para a versao nova valer."
-        }
+        # com o novo no lugar, para a atualização valer. Com -Token, mais
+        # abaixo, depois do install.
+        Restart-ServicosDoExe -Nomes $paraReiniciar
         Write-Host ""
         Write-Info "Proximo passo - registre este servidor no painel:"
         Write-Host ""
@@ -306,8 +313,15 @@ try {
     if ($NoService) { $agentArgs += '--install-service=false' }
 
     & $exePath @agentArgs
-    if ($LASTEXITCODE -ne 0) {
-        Stop-WithError "a instalacao nao terminou (codigo $LASTEXITCODE). Veja a mensagem acima."
+    $codigoDoInstall = $LASTEXITCODE
+    # O install re-registra e inicia só o $ServiceName (com -NoService, nem
+    # ele); os outros que rodavam o exe (um segundo agente) seguem no .old
+    # até reiniciar. Reinicia-os, tenha o install terminado ou não: a troca
+    # do exe já aconteceu.
+    $outros = @($paraReiniciar | Where-Object { $NoService -or ($_ -ine $ServiceName) })
+    Restart-ServicosDoExe -Nomes $outros
+    if ($codigoDoInstall -ne 0) {
+        Stop-WithError "a instalacao nao terminou (codigo $codigoDoInstall). Veja a mensagem acima."
     }
     Write-Host ""
     Write-Ok "Pronto. O painel mostra o servidor e o teste do bucket."
