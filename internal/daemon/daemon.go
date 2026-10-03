@@ -114,28 +114,37 @@ func enviarHeartbeat(ctx context.Context, c *api.Client, cfg *config.Config, svc
 	token.tratarRespostaDoHeartbeat(c, cfg, resp)
 }
 
-// corpoProbe é o POST /api/agents/{id}/probe.
+// corpoProbe é o POST /api/agents/{id}/probe. Os campos seguem os de
+// api.ProbeReport (ver lá o significado de cada um).
 type corpoProbe struct {
-	StorageID   string          `json:"storage_id"`
-	Versioning  string          `json:"versioning"`
-	ObjectLock  *api.ObjectLock `json:"object_lock,omitempty"`
-	Lifecycle   []api.Lifecycle `json:"lifecycle,omitempty"`
-	UsedBytes   *int64          `json:"used_bytes,omitempty"`
-	ObjectCount *int64          `json:"object_count,omitempty"`
-	Error       string          `json:"error,omitempty"`
+	StorageID                string          `json:"storage_id"`
+	Versioning               string          `json:"versioning"`
+	ObjectLock               *api.ObjectLock `json:"object_lock,omitempty"`
+	Lifecycle                []api.Lifecycle `json:"lifecycle,omitempty"`
+	NoncurrentExpirationDays *int            `json:"noncurrent_expiration_days,omitempty"`
+	NoncurrentTransitions    []string        `json:"noncurrent_transitions,omitempty"`
+	UsedBytes                *int64          `json:"used_bytes,omitempty"`
+	ObjectCount              *int64          `json:"object_count,omitempty"`
+	Error                    string          `json:"error,omitempty"`
+	LifecycleError           string          `json:"lifecycle_error,omitempty"`
+	ObjectLockError          string          `json:"object_lock_error,omitempty"`
 }
 
 // corpoDoProbe monta o relato. Ocupação que não pôde ser medida vai ausente:
 // o painel guarda só número e mostra "—", em vez de "0 B".
 func corpoDoProbe(r api.ProbeReport) corpoProbe {
 	return corpoProbe{
-		StorageID:   r.StorageID,
-		Versioning:  r.Versioning,
-		ObjectLock:  r.ObjectLock,
-		Lifecycle:   r.Lifecycle,
-		UsedBytes:   r.UsedBytes,
-		ObjectCount: r.ObjectCount,
-		Error:       r.Error,
+		StorageID:                r.StorageID,
+		Versioning:               r.Versioning,
+		ObjectLock:               r.ObjectLock,
+		Lifecycle:                r.Lifecycle,
+		NoncurrentExpirationDays: r.NoncurrentExpirationDays,
+		NoncurrentTransitions:    r.NoncurrentTransitions,
+		UsedBytes:                r.UsedBytes,
+		ObjectCount:              r.ObjectCount,
+		Error:                    r.Error,
+		LifecycleError:           r.LifecycleError,
+		ObjectLockError:          r.ObjectLockError,
 	}
 }
 
@@ -171,6 +180,11 @@ func probeLoop(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config.C
 			"lifecycle_rules", len(report.Lifecycle),
 			"used_bytes", valorOuNada(report.UsedBytes),
 			"objects", valorOuNada(report.ObjectCount))
+		if report.LifecycleError != "" || report.ObjectLockError != "" {
+			slog.Warn("a sondagem não conseguiu ler a configuração do bucket",
+				"lifecycle_error", report.LifecycleError,
+				"object_lock_error", report.ObjectLockError)
+		}
 	}
 
 	// Verifica se há probe on-demand pendente para o storage deste agent.
