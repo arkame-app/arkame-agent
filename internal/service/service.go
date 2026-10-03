@@ -114,11 +114,79 @@ func RestartCommand(name string, scope Scope) string {
 	return strings.TrimPrefix(cmd, "powershell -NoProfile -Command ")
 }
 
+// ValidarNome confere o nome de um serviço novo. Além da forma aceita pelo
+// SO, exige o prefixo arkame-agent: é por ele que o uninstall reconhece os
+// outros agentes da máquina — e um agente que ele não reconhece perde o
+// programa que divide com os outros.
+func ValidarNome(name string) error {
+	if !nameRe.MatchString(name) {
+		return fmt.Errorf(
+			"nome de serviço inválido %q: use minúsculas, números, ponto, hífen ou underscore (até 63 caracteres)",
+			name)
+	}
+	if !strings.HasPrefix(name, DefaultName) {
+		return fmt.Errorf(
+			"nome de serviço %q não começa com %q: use, por exemplo, %s-%s (é por esse prefixo que o agente reconhece os outros agentes desta máquina)",
+			name, DefaultName, DefaultName, strings.TrimPrefix(name, "arkame-"))
+	}
+	return nil
+}
+
 // OutrosAgentes lista os outros serviços do agente nesta máquina (um por
 // credencial de storage, com --service-name). Eles usam o mesmo programa:
 // desinstalar um não pode apagá-lo.
+//
+// Conta tanto os serviços com o prefixo arkame-agent quanto os que chamam
+// este mesmo programa com outro nome: até a v0.4.3 o install aceitava
+// qualquer nome (backup-oci), e o uninstall de outro agente apagava o
+// programa de que esse serviço depende.
 func OutrosAgentes(name string) []string {
-	return outrosEntre(runtime.GOOS, servicosDoAgente(), name)
+	return outrosEntre(runtime.GOOS, servicosDoAgente(programaAtual()), name)
+}
+
+// programaAtual é o executável deste processo, com links resolvidos. Vazio
+// quando o SO não diz.
+func programaAtual() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	if r, err := filepath.EvalSymlinks(exe); err == nil {
+		return r
+	}
+	return exe
+}
+
+// programaDaLinha devolve o executável de uma linha de comando registrada
+// (ExecStart do systemd, BinaryPathName do SCM): o primeiro argumento, com
+// ou sem aspas.
+func programaDaLinha(linha string) string {
+	linha = strings.TrimSpace(linha)
+	if strings.HasPrefix(linha, `"`) {
+		if i := strings.Index(linha[1:], `"`); i >= 0 {
+			return linha[1 : 1+i]
+		}
+		return linha[1:]
+	}
+	if i := strings.IndexAny(linha, " \t"); i >= 0 {
+		return linha[:i]
+	}
+	return linha
+}
+
+// mesmoPrograma diz se o caminho registrado num serviço é o programa exe
+// (já resolvido). No Windows o caminho não distingue maiúsculas.
+func mesmoPrograma(goos, registrado, exe string) bool {
+	if registrado == "" || exe == "" {
+		return false
+	}
+	if r, err := filepath.EvalSymlinks(registrado); err == nil {
+		registrado = r
+	}
+	if goos == "windows" {
+		return strings.EqualFold(registrado, exe)
+	}
+	return filepath.Clean(registrado) == filepath.Clean(exe)
 }
 
 // outrosEntre tira name da lista de serviços do agente. A comparação é pela
@@ -244,10 +312,8 @@ func Install(ctx context.Context, cfg *config.Config, opts Options) (*Installed,
 	if opts.Name == "" {
 		opts.Name = DefaultName
 	}
-	if !nameRe.MatchString(opts.Name) {
-		return nil, fmt.Errorf(
-			"nome de serviço inválido %q: use minúsculas, números, ponto, hífen ou underscore (até 63 caracteres)",
-			opts.Name)
+	if err := ValidarNome(opts.Name); err != nil {
+		return nil, err
 	}
 	if opts.Scope == "" {
 		opts.Scope = defaultScope()

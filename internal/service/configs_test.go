@@ -1,6 +1,9 @@
 package service
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // O uninstall precisa saber que arquivos os outros agentes usam; o caminho
 // vem do registro do serviço de cada um.
@@ -45,5 +48,48 @@ func TestOutrosAgentesReconheceOProprioPeloLabel(t *testing.T) {
 	}
 	if o := outrosEntre("linux", todos, ""); len(o) != 1 || o[0] != "arkame-agent-aws" {
 		t.Errorf("linux, nome vazio: outros = %v", o)
+	}
+}
+
+// O uninstall reconhece os outros agentes pelo prefixo arkame-agent; um
+// serviço com outro nome perderia o programa. O install exige o prefixo.
+func TestValidarNomeExigePrefixo(t *testing.T) {
+	for _, n := range []string{"arkame-agent", "arkame-agent-aws", "arkame-agent.oci"} {
+		if err := ValidarNome(n); err != nil {
+			t.Errorf("%s: %v", n, err)
+		}
+	}
+	for _, n := range []string{"backup-oci", "arkame-oci", "agent-arkame-agent", "Arkame-Agent", ""} {
+		if err := ValidarNome(n); err == nil {
+			t.Errorf("%q deveria ser recusado", n)
+		}
+	}
+	if err := ValidarNome("backup-oci"); err == nil || !strings.Contains(err.Error(), "arkame-agent-backup-oci") {
+		t.Errorf("a recusa deveria sugerir o nome: %v", err)
+	}
+}
+
+// A linha de comando registrada (ExecStart, BinaryPathName) diz qual programa
+// o serviço chama.
+func TestProgramaDaLinha(t *testing.T) {
+	casos := map[string]string{
+		`"C:\Program Files\Arkame\arkame-agent.exe" run --config C:\etc\arkame\a.env`: `C:\Program Files\Arkame\arkame-agent.exe`,
+		`/usr/local/bin/arkame-agent run --config /etc/arkame/agent.env`:              "/usr/local/bin/arkame-agent",
+		`  /bin/x`:  "/bin/x",
+		`"/sem/fim`: "/sem/fim",
+	}
+	for linha, quer := range casos {
+		if p := programaDaLinha(linha); p != quer {
+			t.Errorf("%q: %q, queria %q", linha, p, quer)
+		}
+	}
+	if !mesmoPrograma("windows", `c:\program files\arkame\ARKAME-AGENT.exe`, `C:\Program Files\Arkame\arkame-agent.exe`) {
+		t.Error("no Windows o caminho não distingue maiúsculas")
+	}
+	if mesmoPrograma("linux", "/usr/local/bin/Arkame-agent", "/usr/local/bin/arkame-agent") {
+		t.Error("no Linux distingue")
+	}
+	if mesmoPrograma("linux", "", "") {
+		t.Error("vazio não é o mesmo programa")
 	}
 }

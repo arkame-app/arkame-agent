@@ -76,6 +76,13 @@ agent_id existente, preservando histórico e path no bucket.`,
 			if !waitApproval {
 				return errSemEspera
 			}
+			// Nome do serviço conferido antes do registro: recusado só no fim,
+			// depois da aprovação, deixaria um servidor aprovado sem serviço.
+			if installService {
+				if err := service.ValidarNome(serviceName); err != nil {
+					return err
+				}
+			}
 			ctx := cmd.Context()
 			// Caminho absoluto: no Windows o padrão (/etc/arkame/agent.env) não
 			// tem unidade, e o serviço recebe exatamente este texto.

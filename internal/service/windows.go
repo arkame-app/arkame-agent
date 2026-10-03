@@ -81,8 +81,9 @@ func installPlatform(_ context.Context, cfg *config.Config, opts Options) (*Inst
 	}, nil
 }
 
-// servicosDoAgente: os serviços arkame-agent* registrados no SCM.
-func servicosDoAgente() []string {
+// servicosDoAgente: os serviços do agente registrados no SCM — os
+// arkame-agent* e os que chamam o programa exe com outro nome.
+func servicosDoAgente(exe string) []string {
 	m, err := mgr.Connect()
 	if err != nil {
 		return nil
@@ -94,11 +95,35 @@ func servicosDoAgente() []string {
 	}
 	var nomes []string
 	for _, n := range todos {
-		if strings.HasPrefix(strings.ToLower(n), "arkame-agent") {
+		if strings.HasPrefix(strings.ToLower(n), DefaultName) || servicoChamaPrograma(m, n, exe) {
 			nomes = append(nomes, n)
 		}
 	}
 	return nomes
+}
+
+// servicoChamaPrograma diz se o BinaryPathName do serviço roda o programa
+// exe. Abre só com SERVICE_QUERY_CONFIG: o mgr.OpenService pede acesso total,
+// que serviços do sistema negam.
+func servicoChamaPrograma(m *mgr.Mgr, nome, exe string) bool {
+	if exe == "" {
+		return false
+	}
+	p, err := windows.UTF16PtrFromString(nome)
+	if err != nil {
+		return false
+	}
+	h, err := windows.OpenService(m.Handle, p, windows.SERVICE_QUERY_CONFIG)
+	if err != nil {
+		return false
+	}
+	s := &mgr.Service{Name: nome, Handle: h}
+	defer s.Close()
+	c, err := s.Config()
+	if err != nil {
+		return false
+	}
+	return mesmoPrograma("windows", programaDaLinha(c.BinaryPathName), exe)
 }
 
 // configDoServico lê o --config da linha de comando registrada no SCM. O SCM

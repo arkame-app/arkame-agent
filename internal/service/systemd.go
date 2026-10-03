@@ -189,20 +189,54 @@ func installSystemd(ctx context.Context, cfg *config.Config, opts Options) (*Ins
 	return inst, nil
 }
 
-// servicosDoAgente: as units arkame-agent* do sistema e do usuário.
-func servicosDoAgente() []string {
+// servicosDoAgente: as units do sistema e do usuário que são do agente — as
+// arkame-agent* e as que chamam o programa exe com outro nome.
+func servicosDoAgente(exe string) []string {
 	dirs := []string{"/etc/systemd/system"}
 	if d, err := userUnitDir(); err == nil {
 		dirs = append(dirs, d)
 	}
+	return unitsDoAgente(dirs, exe)
+}
+
+// unitsDoAgente procura nas pastas de units as do agente.
+func unitsDoAgente(dirs []string, exe string) []string {
 	var nomes []string
+	visto := map[string]bool{}
 	for _, d := range dirs {
-		m, _ := filepath.Glob(filepath.Join(d, "arkame-agent*.service"))
+		m, _ := filepath.Glob(filepath.Join(d, "*.service"))
 		for _, f := range m {
-			nomes = append(nomes, strings.TrimSuffix(filepath.Base(f), ".service"))
+			nome := strings.TrimSuffix(filepath.Base(f), ".service")
+			if visto[nome] {
+				continue
+			}
+			if strings.HasPrefix(nome, DefaultName) || unitChamaPrograma(f, exe) {
+				visto[nome] = true
+				nomes = append(nomes, nome)
+			}
 		}
 	}
 	return nomes
+}
+
+// unitChamaPrograma diz se o ExecStart da unit roda o programa exe.
+func unitChamaPrograma(arquivo, exe string) bool {
+	if exe == "" {
+		return false
+	}
+	b, err := os.ReadFile(arquivo)
+	if err != nil {
+		return false
+	}
+	for _, l := range strings.Split(string(b), "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(l), "ExecStart="); ok {
+			// Prefixos do systemd (-, @, :, +, !) vêm antes do caminho.
+			if mesmoPrograma("linux", programaDaLinha(strings.TrimLeft(v, "-@:+!")), exe) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // configDoServico lê o env-file da unit de um agente no escopo dado.

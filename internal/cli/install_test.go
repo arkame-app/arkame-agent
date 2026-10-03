@@ -104,3 +104,31 @@ func TestInstallAprovadoInstalaServicoComToken(t *testing.T) {
 		t.Fatal("o serviço foi instalado sem o token no disco")
 	}
 }
+
+// Serviço com nome fora do prefixo arkame-agent não é reconhecido pelo
+// uninstall dos outros agentes, que apagaria o programa dele. A recusa vem
+// antes de falar com o painel: depois da aprovação, sobraria um servidor
+// aprovado sem serviço.
+func TestInstallRecusaNomeSemPrefixoAntesDoRegistro(t *testing.T) {
+	limparAmbienteDaIdentidade(t)
+	var chamadas atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		chamadas.Add(1)
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+	servico := trocarInstalarServico(t)
+
+	cmd := newInstallCmd()
+	cmd.SetArgs([]string{"--config", filepath.Join(t.TempDir(), "agent-x.env"), "--token", "atk_x",
+		"--panel-url", srv.URL, "--check-storage=false", "--service-name", "backup-oci"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "arkame-agent-backup-oci") {
+		t.Fatalf("esperava a recusa do nome com sugestão, veio %v", err)
+	}
+	if chamadas.Load() != 0 || servico.Load() != 0 {
+		t.Fatalf("painel=%d serviço=%d: nada deveria ter sido feito", chamadas.Load(), servico.Load())
+	}
+}

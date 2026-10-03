@@ -85,8 +85,10 @@ func installPlatform(ctx context.Context, cfg *config.Config, opts Options) (*In
 }
 
 // servicosDoAgente: os jobs app.arkame.* do sistema e do usuário, pelo nome
-// de serviço que os gerou (app.arkame.agent-aws → arkame-agent-aws).
-func servicosDoAgente() []string {
+// de serviço que os gerou (app.arkame.agent-aws → arkame-agent-aws). Todo
+// plist do agente tem o label app.arkame.*, qualquer que seja o nome dado no
+// install: o programa não precisa ser conferido.
+func servicosDoAgente(string) []string {
 	var nomes []string
 	dirs := []string{"/Library/LaunchDaemons"}
 	if h, err := os.UserHomeDir(); err == nil {
