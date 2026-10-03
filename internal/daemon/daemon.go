@@ -318,6 +318,19 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 		saidaDosHooks.WriteString(r.Output)
 	}
 
+	if errors.Is(syncErr, syncengine.ErrBucketSemVersionamento) {
+		// Nem "partial": o que subiu não tem VersionId, o painel não indexa
+		// nada, e "complete" com zero arquivos é um backup que não restaura.
+		marcarFalha(ctx, c, cfg, startResp.SessionID, struct {
+			ErrorCode    string `json:"error_code"`
+			ErrorMessage string `json:"error_message"`
+		}{
+			ErrorCode:    "bucket_unversioned",
+			ErrorMessage: syncErr.Error(),
+		})
+		return syncErr
+	}
+
 	totalFailure, completeStatus := avaliarSessao(result, syncErr)
 	if totalFailure {
 		msg := "todos os arquivos falharam no upload"
@@ -373,7 +386,9 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 		VersionMap: versionMap,
 	}
 	var completeResp struct {
-		FilesIndexed int `json:"files_indexed"`
+		// Ponteiro: ausente (resposta de "not_running", painel antigo) não é
+		// zero indexado.
+		FilesIndexed *int `json:"files_indexed"`
 	}
 	// O /complete carrega o version_map inteiro — é o que torna o backup
 	// restaurável. Perdê-lo num erro passageiro jogava fora o trabalho todo
@@ -404,11 +419,24 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 		}
 		return fmt.Errorf("session complete: %w", err)
 	}
+	indexados := -1
+	if completeResp.FilesIndexed != nil {
+		indexados = *completeResp.FilesIndexed
+		if indexados < len(versionMap) {
+			// O painel descartou entradas (sem version_id, sha256 ou data
+			// inválidos): esses arquivos subiram e não são restauráveis pelo
+			// painel. A sessão fica como o painel a gravou.
+			slog.Error("o painel indexou menos arquivos do que o agente enviou",
+				"session_id", startResp.SessionID,
+				"enviados", len(versionMap),
+				"files_indexed", indexados)
+		}
+	}
 	slog.Info("session concluída",
 		"session_id", startResp.SessionID,
 		"status", completeStatus,
 		"files_uploaded", result.Stats.FilesUploaded,
-		"files_indexed", completeResp.FilesIndexed)
+		"files_indexed", indexados)
 	return nil
 }
 

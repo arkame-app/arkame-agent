@@ -33,6 +33,9 @@ type s3Falso struct {
 	antes func(r *http.Request)
 	// falhar, se devolver true, responde 500 à requisição.
 	falhar func(r *http.Request) bool
+	// semVersao simula bucket sem versionamento: nenhuma resposta traz
+	// x-amz-version-id.
+	semVersao bool
 }
 
 type objetoFalso struct {
@@ -84,7 +87,9 @@ func (f *s3Falso) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("x-amz-meta-sha256", o.sha256)
-		w.Header().Set("x-amz-version-id", o.versao)
+		if !f.semVersao {
+			w.Header().Set("x-amz-version-id", o.versao)
+		}
 		w.Header().Set("Content-Length", strconv.Itoa(len(o.dados)))
 		w.WriteHeader(http.StatusOK)
 	case r.Method == http.MethodPut && q.Get("uploadId") != "":
@@ -98,7 +103,9 @@ func (f *s3Falso) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.versao++
 		v := fmt.Sprintf("v%d", f.versao)
 		f.objetos[chave] = objetoFalso{dados: b, sha256: r.Header.Get("x-amz-meta-sha256"), versao: v}
-		w.Header().Set("x-amz-version-id", v)
+		if !f.semVersao {
+			w.Header().Set("x-amz-version-id", v)
+		}
 		w.WriteHeader(http.StatusOK)
 	case r.Method == http.MethodPost && q.Has("uploads"):
 		id := fmt.Sprintf("up%d", len(f.partes)+1)
@@ -120,7 +127,9 @@ func (f *s3Falso) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		v := fmt.Sprintf("v%d", f.versao)
 		f.objetos[chave] = objetoFalso{dados: dados, versao: v}
 		f.completos++
-		w.Header().Set("x-amz-version-id", v)
+		if !f.semVersao {
+			w.Header().Set("x-amz-version-id", v)
+		}
 		fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?><CompleteMultipartUploadResult><Key>%s</Key><ETag>"x"</ETag></CompleteMultipartUploadResult>`, chave)
 	case r.Method == http.MethodDelete && q.Get("uploadId") != "":
 		delete(f.partes, q.Get("uploadId"))

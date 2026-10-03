@@ -27,11 +27,17 @@ type painelFalso struct {
 	// resposta, se definida, decide o status de cada chamada a um caminho.
 	resposta func(path string, n int) (int, string)
 	contagem map[string]int
+	// corpos guarda o último corpo recebido em cada caminho.
+	corpos map[string]string
 }
 
 func (p *painelFalso) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	_, _ = io.Copy(io.Discard, r.Body)
+	corpo, _ := io.ReadAll(r.Body)
 	p.mu.Lock()
+	if p.corpos == nil {
+		p.corpos = map[string]string{}
+	}
+	p.corpos[r.URL.Path] = string(corpo)
 	p.chamadas = append(p.chamadas, r.Method+" "+r.URL.Path)
 	if p.contagem == nil {
 		p.contagem = map[string]int{}
@@ -63,6 +69,12 @@ func (p *painelFalso) recebeu(sufixo string) int {
 		}
 	}
 	return n
+}
+
+func (p *painelFalso) corpo(path string) string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.corpos[path]
 }
 
 func novoPainel(t *testing.T) (*painelFalso, *api.Client) {

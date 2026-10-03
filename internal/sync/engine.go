@@ -57,6 +57,10 @@ type Result struct {
 // simplificado (single-part). Para arquivos grandes, trocar por
 // CreateMultipartUpload + UploadPart (em TODO abaixo).
 func Run(ctx context.Context, o EngineOptions) (*Result, error) {
+	// Cancelado na saída: um retorno antecipado (bucket sem versionamento)
+	// não pode deixar o walker bloqueado no canal.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	fileCh, errCh := Walk(ctx, o.HostRoot, o.SourcePaths, o.ExcludeGlobs)
 	result := &Result{}
 
@@ -66,6 +70,11 @@ func Run(ctx context.Context, o EngineOptions) (*Result, error) {
 		}
 
 		entry, dedupHit, err := processFile(ctx, o, fi)
+		if errors.Is(err, ErrBucketSemVersionamento) {
+			// Não é falha deste arquivo: é do bucket, e vale para todos.
+			// Seguir subiria tudo de novo só para nada ser indexado.
+			return result, err
+		}
 		if err != nil {
 			slog.Warn("arquivo falhou, pulando",
 				"path", fi.RelativePath,
@@ -127,6 +136,9 @@ func processFile(ctx context.Context, o EngineOptions, fi FileInfo) (*api.FileEn
 
 	// 2. Dedup: HeadObject pra ver se o arquivo já existe com mesmo hash
 	if existing, ok := checkDedup(ctx, o.S3, o.Bucket, key, hash); ok {
+		if existing.VersionID == "" {
+			return nil, false, ErrBucketSemVersionamento
+		}
 		slog.Debug("dedup hit, pulando upload",
 			"key", key, "sha256", hash[:8], "size", fi.Size)
 		return existing, true, nil
@@ -186,6 +198,13 @@ func processFile(ctx context.Context, o EngineOptions, fi FileInfo) (*api.FileEn
 			removerEnvioInvalido(ctx, o.S3, o.Bucket, key, versionID)
 			return nil, false, fmt.Errorf("put %s: %w", key, ErrArquivoMudou)
 		}
+	}
+
+	if versionID == "" {
+		// O objeto subiu, mas sem VersionId: o bucket não versiona. O painel
+		// descarta entrada sem version_id, e a sessão terminaria "complete"
+		// com zero arquivos indexados — um backup que não restaura nada.
+		return nil, false, ErrBucketSemVersionamento
 	}
 
 	return &api.FileEntry{
@@ -317,6 +336,11 @@ func tamanhoDaParte(tamanho int64) int64 {
 // ErrArquivoMudou: o conteúdo enviado não é o que foi hasheado — o arquivo foi
 // alterado durante o backup. O arquivo falha nesta sessão e volta na próxima.
 var ErrArquivoMudou = errors.New("arquivo mudou durante o envio (o conteúdo enviado não confere com o sha256 calculado); fica para o próximo backup")
+
+// ErrBucketSemVersionamento: o bucket devolveu objeto sem VersionId. Sem
+// versão não há o que indexar nem restaurar; a sessão inteira falha com este
+// erro em vez de terminar "complete" sem nada indexado.
+var ErrBucketSemVersionamento = errors.New("bucket sem versionamento: ative o versionamento do bucket (o objeto subiu sem VersionId e o backup não seria restaurável)")
 
 // antesDoEnvio é um gancho só para teste: roda entre o hash e o envio, o
 // intervalo em que um arquivo alterado no lugar fazia subir conteúdo diferente
