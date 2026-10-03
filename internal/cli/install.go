@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -39,11 +40,15 @@ func newInstallCmd() *cobra.Command {
   1. Gera um keypair Ed25519 local
   2. Envia public_key + fingerprint ao painel com o --token (enrollment_token)
   3. Imprime fingerprint e link do painel para o usuário aprovar
-  4. (default) Faz long-poll aguardando aprovação e recebe um JWT bearer
+  4. Faz long-poll aguardando aprovação e recebe um JWT bearer
   5. Aprovado, grava a identidade nova de uma vez: a chave privada, o
      agent.id, o AGENT_ID no env-file e o JWT em /etc/arkame/token.jwt (0600).
-     Sem aprovação (ou com --wait=false), nada disso muda no disco
-  6. Opcionalmente instala como serviço do SO (--install-service, default: true)
+     Sem aprovação, nada disso muda no disco
+  6. Com o token gravado, instala como serviço do SO (--install-service,
+     default: true)
+
+A espera pela aprovação faz parte do install: a identidade nova só existe em
+memória até lá, e não há como concluí-la depois noutro processo.
 
 Um host pode rodar mais de um agent — um por conjunto de credenciais de
 storage. Nesse caso dê um nome a cada um com --service-name (arkame-agent-aws,
@@ -62,6 +67,14 @@ agent_id existente, preservando histórico e path no bucket.`,
 					}
 					esperarEnter(&err)
 				}()
+			}
+			// --wait=false deixava um enrollment que nada concluía (a identidade
+			// nova só existe em memória até a aprovação) e, com o serviço,
+			// subia um daemon sem token, em laço de "não aprovado". Numa
+			// reinstalação, aprovar esse código revogava o token antigo e
+			// derrubava o agente em execução.
+			if !waitApproval {
+				return errSemEspera
 			}
 			ctx := cmd.Context()
 			// Caminho absoluto: no Windows o padrão (/etc/arkame/agent.env) não
@@ -135,21 +148,23 @@ agent_id existente, preservando histórico e path no bucket.`,
 			fmt.Fprintln(os.Stderr, "  Aprove em", cfg.PanelURL+"/agents")
 			fmt.Fprintln(os.Stderr, "")
 
-			if waitApproval {
-				fmt.Fprintln(os.Stderr, "  Aguardando aprovação (Ctrl-C cancela)...")
-				tok, err := enrollment.WaitForApproval(ctx, cfg, result)
-				if err != nil {
-					return fmt.Errorf("aguardando aprovação: %w", err)
-				}
-				if err := enrollment.Concluir(cfg, result, tok.AgentToken); err != nil {
-					return err
-				}
-				slog.Info("aprovado — token persistido", "expires_at", tok.ExpiresAt)
-				fmt.Fprintln(os.Stderr, "  ✓ Aprovado. Token válido até", tok.ExpiresAt.Format("2006-01-02"))
+			fmt.Fprintln(os.Stderr, "  Aguardando aprovação (Ctrl-C cancela)...")
+			tok, err := enrollment.WaitForApproval(ctx, cfg, result)
+			if err != nil {
+				return fmt.Errorf("aguardando aprovação: %w", err)
 			}
+			if err := enrollment.Concluir(cfg, result, tok.AgentToken); err != nil {
+				return err
+			}
+			slog.Info("aprovado — token persistido", "expires_at", tok.ExpiresAt)
+			fmt.Fprintln(os.Stderr, "  ✓ Aprovado. Token válido até", tok.ExpiresAt.Format("2006-01-02"))
 
 			if installService {
-				inst, err := service.Install(ctx, cfg, service.Options{
+				// Serviço sem token só gira em "não aprovado": não instala.
+				if !cfg.TokenExists() {
+					return fmt.Errorf("sem token em %s: o serviço não foi instalado", cfg.TokenPath)
+				}
+				inst, err := instalarServico(ctx, cfg, service.Options{
 					Name:  serviceName,
 					Scope: service.Scope(serviceScope),
 					Start: true,
@@ -203,7 +218,10 @@ agent_id existente, preservando histórico e path no bucket.`,
 	cmd.Flags().StringVar(&hostName, "hostname", "", "hostname reportado (default: hostname do sistema)")
 	cmd.Flags().BoolVar(&pausar, "pause", false, "esperar um Enter antes de sair (janela aberta pelo setup no Windows)")
 	cmd.Flags().BoolVar(&checkStorage, "check-storage", true, "testar a chave do bucket antes de registrar (sem chave no arquivo, pergunta no terminal)")
-	cmd.Flags().BoolVar(&waitApproval, "wait", true, "aguardar aprovação humana (long-poll). --wait=false retorna logo após enrollment, sem gravar a identidade nova")
+	// Escondida: o install sempre espera a aprovação. Fica só para que
+	// --wait=false pare com a explicação em vez de "unknown flag".
+	cmd.Flags().BoolVar(&waitApproval, "wait", true, "(sem efeito) o install sempre aguarda a aprovação; --wait=false não é aceito")
+	_ = cmd.Flags().MarkHidden("wait")
 
 	// Mantém alias antigo para compatibilidade com docs.
 	cmd.Flags().StringVar(&enrollmentToken, "enrollment-token", "", "(alias) enrollment_token")
@@ -242,6 +260,13 @@ func identidadePropria(configFile string, cfg *config.Config) (bool, error) {
 	}
 	return true, nil
 }
+
+// errSemEspera: --wait=false não é aceito.
+var errSemEspera = errors.New("--wait=false não é aceito: a identidade nova só vai ao disco com a aprovação, " +
+	"e nada a concluiria depois. Rode o install sem --wait e aprove o servidor no painel enquanto ele espera")
+
+// instalarServico é o service.Install; os testes o trocam.
+var instalarServico = service.Install
 
 // mantém contexto disponível para testes
 var _ = context.Background
