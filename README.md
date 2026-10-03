@@ -230,6 +230,10 @@ Mesmo comando na nova máquina, com um **código novo** gerado no painel em
 "Reinstalar" (`/agents/:id`). O painel identifica que o código está amarrado a um
 `agent_id` existente e preserva o histórico ao aprovar a nova fingerprint. O
 instalador pergunta a chave do bucket que o servidor já usava.
+Com a chave já no arquivo, o `install` confere no painel o armazenamento do
+código: se for outro (bucket, região ou endereço), testa a chave nele e grava o
+armazenamento novo inteiro; recusada, pergunta outra — sem terminal, para com a
+causa e não mexe no arquivo.
 
 ### Rodar daemon
 

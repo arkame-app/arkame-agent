@@ -47,6 +47,10 @@ var ErrSemChave = errors.New("saída sem a chave do bucket: nada foi gravado. Se
 // ErrCodigoInvalido: código expirado, já usado ou digitado errado.
 var ErrCodigoInvalido = errors.New("o painel não reconheceu o código de instalação: ele expira em 24 horas e vale uma vez. Gere outro no painel, em Servidores → Novo servidor")
 
+// ErrSemArmazenamento: o código de instalação não está amarrado a um
+// armazenamento.
+var ErrSemArmazenamento = errors.New("o painel não sabe qual armazenamento este servidor vai usar: gere o comando pela tela Novo servidor, escolhendo o armazenamento")
+
 // BuscarNoPainel pergunta ao painel qual bucket este servidor vai usar.
 func BuscarNoPainel(ctx context.Context, panelURL, codigo string) (*DoPainel, error) {
 	c, err := api.New(api.Options{BaseURL: strings.TrimRight(panelURL, "/"), Timeout: 20 * time.Second})
@@ -62,7 +66,7 @@ func BuscarNoPainel(ctx context.Context, panelURL, codigo string) (*DoPainel, er
 		return nil, fmt.Errorf("consultando o painel em %s: %w", panelURL, err)
 	}
 	if r.Armazenamento == nil {
-		return nil, errors.New("o painel não sabe qual armazenamento este servidor vai usar: gere o comando pela tela Novo servidor, escolhendo o armazenamento")
+		return nil, ErrSemArmazenamento
 	}
 	// Cada valor vira uma linha do arquivo: quebra de linha escreveria outra
 	// chave nele (PANEL_URL=…). O painel já recusa no cadastro; aqui é a
@@ -95,6 +99,28 @@ func Linhas(p *DoPainel, panelURL string) []string {
 		l = append(l, "STORAGE_ENDPOINT="+*a.Endpoint)
 	}
 	return l
+}
+
+// LinhasDoArmazenamento são as linhas do armazenamento que o painel indicou,
+// para trocar o de um arquivo que já existe. Região e endereço vão sempre,
+// vazios quando o painel não os diz (vazio é o padrão, como em config.Load):
+// sem isso, a região e o endereço do armazenamento antigo sobravam no arquivo
+// junto do bucket novo.
+func LinhasDoArmazenamento(p *DoPainel) []string {
+	a := p.Armazenamento
+	regiao, endereco := "", ""
+	if a.Region != nil {
+		regiao = *a.Region
+	}
+	if a.Endpoint != nil {
+		endereco = *a.Endpoint
+	}
+	return []string{
+		"STORAGE_ID=" + a.ID,
+		"STORAGE_BUCKET=" + a.Bucket,
+		"STORAGE_REGION=" + regiao,
+		"STORAGE_ENDPOINT=" + endereco,
+	}
 }
 
 // NaConfig devolve a configuração com o bucket que o painel indicou, pelos

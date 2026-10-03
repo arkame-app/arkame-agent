@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -21,31 +22,59 @@ import (
 //
 //   - Sem chave no arquivo: pergunta ao painel qual bucket (pelo código de
 //     instalação), pede a chave no terminal, testa e grava.
-//   - Com chave: testa; recusada, pede de novo (havendo terminal) ou para com
-//     a causa.
+//   - Com chave: pergunta ao painel também. Se o código aponta para outro
+//     armazenamento (bucket, região ou endereço), testa a chave do arquivo no
+//     armazenamento novo e grava o armazenamento novo inteiro; senão, testa no
+//     do arquivo. Recusada, pede de novo (havendo terminal) ou para com a
+//     causa.
+//
+// Antes, com chave, só o bucket do arquivo era testado; aprovado o servidor,
+// o enrollment gravava o STORAGE_ID/STORAGE_BUCKET novos por cima, com a
+// região, o endereço e a chave do armazenamento antigo — o primeiro backup
+// falhava.
 //
 // Devolve se o arquivo mudou, para o chamador reler só nesse caso.
 func garantirCredencial(ctx context.Context, cfg *config.Config, caminho string) (bool, error) {
 	semChave := cfg.StorageAccessKey == "" || cfg.StorageSecretKey == ""
 
 	if !semChave {
-		err := storage.Check(ctx, cfg)
-		if err == nil {
-			fmt.Fprintln(os.Stderr, "  ✓ O bucket", cfg.StorageBucket, "aceitou a chave de", caminho)
-			return false, nil
-		}
-		t, terr := terminal.Open()
-		if terr != nil || storage.Classe(err) != "chave" {
-			// Sem terminal, ou problema que outra chave não resolve.
-			return false, fmt.Errorf("%s (%v). Arquivo: %s", storage.Causa(err), err, caminho)
-		}
-		defer t.Close()
-		fmt.Fprintf(os.Stderr, "\n  ✗ A chave de %s não funciona: %s.\n", caminho, storage.Causa(err))
-		ak, sk, err := setup.PerguntarETestar(ctx, t, cfg)
+		alvo, linhas, err := armazenamentoDoCodigo(ctx, cfg)
 		if err != nil {
 			return false, err
 		}
-		return true, setup.Gravar(caminho, setup.Chaves(ak, sk))
+		if linhas != nil {
+			if err := setup.PodeGravar(caminho); err != nil {
+				return false, err
+			}
+		}
+		err = storage.Check(ctx, alvo)
+		if err == nil {
+			fmt.Fprintln(os.Stderr, "  ✓ O bucket", alvo.StorageBucket, "aceitou a chave de", caminho)
+			if linhas == nil {
+				return false, nil
+			}
+			if err := setup.Gravar(caminho, linhas); err != nil {
+				return false, err
+			}
+			fmt.Fprintln(os.Stderr, "  ✓ Armazenamento novo gravado em", caminho)
+			return true, nil
+		}
+		t, terr := abrirTerminal()
+		if terr != nil || storage.Classe(err) != "chave" {
+			// Sem terminal, ou problema que outra chave não resolve.
+			if linhas != nil {
+				return false, fmt.Errorf("a chave de %s não serve para o bucket %s, que o código de instalação indica: %s (%v). "+
+					"Rode o comando num terminal para digitar a chave desse bucket, ou grave-a em %s antes", caminho, alvo.StorageBucket, storage.Causa(err), err, caminho)
+			}
+			return false, fmt.Errorf("%s (%v). Arquivo: %s", storage.Causa(err), err, caminho)
+		}
+		defer t.Close()
+		fmt.Fprintf(os.Stderr, "\n  ✗ A chave de %s não funciona no bucket %s: %s.\n", caminho, alvo.StorageBucket, storage.Causa(err))
+		ak, sk, err := setup.PerguntarETestar(ctx, t, alvo)
+		if err != nil {
+			return false, err
+		}
+		return true, setup.Gravar(caminho, append(linhas, setup.Chaves(ak, sk)...))
 	}
 
 	if cfg.EnrollmentToken == "" {
@@ -54,7 +83,7 @@ func garantirCredencial(ctx context.Context, cfg *config.Config, caminho string)
 	if err := setup.PodeGravar(caminho); err != nil {
 		return false, err
 	}
-	t, err := terminal.Open()
+	t, err := abrirTerminal()
 	if err != nil {
 		return false, fmt.Errorf("sem chave do bucket em %s e sem terminal para perguntar: rode o comando num terminal interativo (no Docker, com -it)", caminho)
 	}
@@ -75,6 +104,42 @@ func garantirCredencial(ctx context.Context, cfg *config.Config, caminho string)
 	}
 	fmt.Fprintln(os.Stderr, "  ✓ Gravado em", caminho)
 	return true, nil
+}
+
+// abrirTerminal é o terminal.Open; os testes o trocam.
+var abrirTerminal = terminal.Open
+
+// armazenamentoDoCodigo decide em que armazenamento testar a chave que já está
+// no arquivo: no que o código de instalação indica, quando é outro (com as
+// linhas para gravá-lo), ou no do arquivo (linhas nil). O AGENT_ID não vai
+// junto: a identidade só muda com a aprovação (enrollment.Concluir).
+func armazenamentoDoCodigo(ctx context.Context, cfg *config.Config) (*config.Config, []string, error) {
+	if cfg.EnrollmentToken == "" {
+		return cfg, nil, nil
+	}
+	p, err := setup.BuscarNoPainel(ctx, cfg.PanelURL, cfg.EnrollmentToken)
+	if errors.Is(err, setup.ErrSemArmazenamento) {
+		// Código sem armazenamento: vale o do arquivo.
+		return cfg, nil, nil
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	novo := setup.NaConfig(p, cfg)
+	if mesmoArmazenamento(cfg, novo) {
+		return cfg, nil, nil
+	}
+	fmt.Fprintf(os.Stderr, "\n  O código de instalação aponta para o armazenamento %s (bucket %s); o arquivo tinha o bucket %s.\n",
+		p.Armazenamento.DisplayName, novo.StorageBucket, orNA(cfg.StorageBucket))
+	return novo, setup.LinhasDoArmazenamento(p), nil
+}
+
+// mesmoArmazenamento compara onde as duas configurações chegam: bucket,
+// região e endereço.
+func mesmoArmazenamento(a, b *config.Config) bool {
+	return a.StorageBucket == b.StorageBucket &&
+		a.StorageRegion == b.StorageRegion &&
+		strings.TrimRight(a.StorageEndpoint, "/") == strings.TrimRight(b.StorageEndpoint, "/")
 }
 
 func newCheckStorageCmd() *cobra.Command {
