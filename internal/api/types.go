@@ -27,6 +27,11 @@ type EnrollResponse struct {
 	EnrollmentID string    `json:"enrollment_id"`
 	WaitURL      string    `json:"wait_url"` // long-poll URL para aguardar approval
 	ExpiresAt    time.Time `json:"expires_at"`
+	// Armazenamento a que o código de instalação amarra o servidor. Opcionais:
+	// painel que não os manda deixa STORAGE_ID/STORAGE_BUCKET do arquivo como
+	// estão.
+	StorageID     string `json:"storage_id,omitempty"`
+	StorageBucket string `json:"storage_bucket,omitempty"`
 }
 
 // TokenResponse é retornado quando o agent faz long-poll na WaitURL e a approval chega.

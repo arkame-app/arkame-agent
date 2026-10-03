@@ -32,6 +32,7 @@ import (
 	"github.com/arkame-app/agent/internal/config"
 	"github.com/arkame-app/agent/internal/crypto"
 	"github.com/arkame-app/agent/internal/segredo"
+	"github.com/arkame-app/agent/internal/setup"
 	"github.com/arkame-app/agent/pkg/version"
 )
 
@@ -110,6 +111,9 @@ func Run(ctx context.Context, cfg *config.Config, o Options) (*Result, error) {
 	if err := persistAgentID(cfg, resp.AgentID); err != nil {
 		return nil, fmt.Errorf("persistindo agent_id: %w", err)
 	}
+	if err := persistirNoArquivo(cfg, resp); err != nil {
+		return nil, fmt.Errorf("gravando a identidade nova em %s: %w", cfg.ConfigPath, err)
+	}
 
 	return &Result{
 		AgentID:     resp.AgentID,
@@ -180,6 +184,37 @@ func WaitForApproval(ctx context.Context, cfg *config.Config, waitURL string) (*
 			}
 		}
 	}
+}
+
+// persistirNoArquivo grava a identidade que o enrollment devolveu no
+// env-file. O AGENT_ID do arquivo vence o agent.id (config.Load); numa
+// reinstalação com código novo a chave antiga ainda funcionava, o arquivo não
+// era reescrito, e o daemon subia com o AGENT_ID velho, assinando com a chave
+// nova: 403 para sempre. Agora o enrollment bem-sucedido sempre reescreve o
+// AGENT_ID (e o armazenamento, quando o painel o informa).
+func persistirNoArquivo(cfg *config.Config, resp api.EnrollResponse) error {
+	if resp.AgentID != "" {
+		cfg.AgentID = resp.AgentID
+	}
+	if cfg.ConfigPath == "" || resp.AgentID == "" {
+		return nil
+	}
+	linhas := []string{"AGENT_ID=" + resp.AgentID}
+	if resp.StorageID != "" {
+		linhas = append(linhas, "STORAGE_ID="+resp.StorageID)
+		cfg.StorageID = resp.StorageID
+	}
+	if resp.StorageBucket != "" {
+		linhas = append(linhas, "STORAGE_BUCKET="+resp.StorageBucket)
+		cfg.StorageBucket = resp.StorageBucket
+	}
+	for _, l := range linhas {
+		// Cada valor é uma linha: uma quebra escreveria outra chave no arquivo.
+		if strings.ContainsAny(l, "\r\n") {
+			return errors.New("o painel respondeu um valor com quebra de linha")
+		}
+	}
+	return setup.Gravar(cfg.ConfigPath, linhas)
 }
 
 func persistAgentID(cfg *config.Config, id string) error {
