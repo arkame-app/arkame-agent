@@ -55,6 +55,12 @@ func (e *ErrWarmingInProgress) Error() string {
 	return fmt.Sprintf("warming in progress: %s/%s (class=%s)", e.Bucket, e.Key, e.StorageClass)
 }
 
+// ErrPulado: a estratégia de conflito é "skip" e o destino já tem um arquivo
+// com o nome (com outro conteúdo). Nada foi gravado. O daemon relata o item
+// como "skipped": antes ele ia "complete", e o painel dizia restaurado um
+// arquivo que não foi escrito.
+var ErrPulado = errors.New("destino já existe; pulado pela estratégia skip")
+
 // Options configura o executor.
 type Options struct {
 	S3       *s3.Client
@@ -68,7 +74,7 @@ type Options struct {
 // Estratégia de conflito (item.ConflictStrategy):
 //   - "suffix-version": se o arquivo existe, escreve como "<name>.v<versionId8>.<ext>"
 //   - "overwrite": sobrescreve sem aviso
-//   - "skip": não escreve, retorna nil
+//   - "skip": se o arquivo existe, não escreve e devolve ErrPulado
 //
 // Em qualquer estratégia, a escrita é atômica: baixa pra arquivo temp no mesmo
 // diretório e renomeia ao final. Se falhar no meio, o temp é removido.
@@ -117,8 +123,8 @@ func Run(ctx context.Context, opts Options, item api.RestoreItem) error {
 		return err
 	}
 	if finalName == "" {
-		// skip
-		return nil
+		// skip: nada foi gravado, e o painel tem de saber disso.
+		return ErrPulado
 	}
 	finalPath := filepath.Join(rootedDir, finalName)
 

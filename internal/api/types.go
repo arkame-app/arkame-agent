@@ -215,7 +215,7 @@ type ListRestoreItemsResponse struct {
 
 // RestoreItemUpdate é o body de PATCH /api/agents/<id>/restore-items/<itemId>.
 type RestoreItemUpdate struct {
-	Status       string `json:"status"` // running | complete | failed
+	Status       string `json:"status"` // running | complete | skipped | failed
 	ErrorMessage string `json:"error_message,omitempty"`
 	// ErrorCode estruturado; "not_found" sinaliza ao painel que o objeto sumiu do
 	// bucket — o índice é reconciliado (versão marcada como indisponível).

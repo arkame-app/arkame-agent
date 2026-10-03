@@ -781,6 +781,14 @@ func processarFilaDeRestore(ctx context.Context, c *api.Client, s3c *s3.Client, 
 			slog.Info("restore item OK",
 				"item_id", item.ItemID, "key", item.SourceKey,
 				"dest", item.DestPath+"/"+item.DestFilename)
+		case errors.Is(err, restore.ErrPulado):
+			// Conflito com "skip": o arquivo do destino ficou como estava.
+			delete(aquecendo, item.ItemID)
+			err = nil
+			update.Status = "skipped"
+			slog.Info("restore item pulado: o destino já existe (estratégia skip)",
+				"item_id", item.ItemID, "key", item.SourceKey,
+				"dest", item.DestPath+"/"+item.DestFilename)
 		case errors.As(err, &warmReq):
 			// Objeto em cold storage. Mantém status=running, próximo poll re-tenta.
 			slog.Info("warming requested",
