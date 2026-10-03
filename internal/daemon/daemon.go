@@ -385,13 +385,23 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 		"/api/agents/"+cfg.AgentID+"/sessions/"+startResp.SessionID+"/complete",
 		completeBody, &completeResp,
 	); err != nil {
-		marcarFalha(ctx, c, cfg, startResp.SessionID, struct {
-			ErrorCode    string `json:"error_code"`
-			ErrorMessage string `json:"error_message"`
-		}{
-			ErrorCode:    "complete_failed",
-			ErrorMessage: fmt.Sprintf("os arquivos subiram, mas não consegui registrar a conclusão no painel: %v", err),
-		})
+		// Só uma recusa definitiva do painel (4xx) diz que a sessão não foi
+		// concluída. Prazo, rede ou cancelamento não dizem nada: o /complete
+		// pode ter chegado e só a resposta se perdido — um /fail aqui
+		// sobrescreveria um "complete" já gravado. Nesses casos a sessão fica
+		// como está. Com 410 o agente foi arquivado: o /fail também levaria 410.
+		if recusaDefinitiva(err) && !errors.Is(err, api.ErrGone) {
+			marcarFalha(ctx, c, cfg, startResp.SessionID, struct {
+				ErrorCode    string `json:"error_code"`
+				ErrorMessage string `json:"error_message"`
+			}{
+				ErrorCode:    "complete_failed",
+				ErrorMessage: fmt.Sprintf("os arquivos subiram, mas o painel recusou a conclusão: %v", err),
+			})
+		} else {
+			slog.Warn("/complete sem resposta definitiva; a sessão fica como está no painel",
+				"session_id", startResp.SessionID, "err", err)
+		}
 		return fmt.Errorf("session complete: %w", err)
 	}
 	slog.Info("session concluída",
@@ -440,9 +450,21 @@ var (
 	prazoDoComplete  = 5 * time.Minute
 )
 
+// recusaDefinitiva diz se o painel respondeu e recusou de vez: 4xx que não
+// melhora tentando de novo (408 e 429 melhoram), ou 410 (agente arquivado).
+// Erro de rede, prazo ou cancelamento não é recusa: o pedido pode ter chegado.
+func recusaDefinitiva(err error) bool {
+	if errors.Is(err, api.ErrGone) {
+		return true
+	}
+	var he *api.HTTPError
+	return errors.As(err, &he) && he.Status >= 400 && he.Status < 500 &&
+		he.Status != 408 && he.Status != 429
+}
+
 // concluirSessao envia o /complete com novas tentativas em erro passageiro
-// (rede, prazo, 5xx, 408, 429). Erro 4xx do painel não melhora tentando de
-// novo; e "not_running" quer dizer que uma tentativa anterior chegou e só a
+// (rede, prazo, 5xx, 408, 429). Erro 4xx do painel (410 incluído) não melhora
+// tentando de novo; e "not_running" quer dizer que uma tentativa anterior chegou e só a
 // resposta se perdeu — a sessão já está concluída.
 func concluirSessao(ctx context.Context, c *api.Client, path string, body, out any) error {
 	longo := c.ComPrazo(prazoDoComplete)
@@ -452,10 +474,9 @@ func concluirSessao(ctx context.Context, c *api.Client, path string, body, out a
 		if err == nil {
 			return nil
 		}
-		var he *api.HTTPError
-		if errors.As(err, &he) && he.Status >= 400 && he.Status < 500 &&
-			he.Status != 408 && he.Status != 429 {
-			if strings.Contains(he.Body, "not_running") {
+		if recusaDefinitiva(err) {
+			var he *api.HTTPError
+			if errors.As(err, &he) && strings.Contains(he.Body, "not_running") {
 				slog.Info("o painel já tinha a sessão concluída (resposta anterior perdida)", "path", path)
 				return nil
 			}
