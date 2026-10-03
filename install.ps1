@@ -68,6 +68,23 @@ function Stop-WithError {
     exit 1
 }
 
+# O programa da linha de comando de um serviço (PathName do Win32_Service):
+# entre aspas, o que está dentro delas; sem aspas, até o primeiro espaço.
+# Mesma regra do programaDaLinha do agente.
+function Get-ProgramaDaLinha {
+    param([string]$Linha)
+    if (-not $Linha) { return '' }
+    $l = $Linha.Trim()
+    if ($l.StartsWith('"')) {
+        $fim = $l.IndexOf('"', 1)
+        if ($fim -lt 0) { return $l.Substring(1) }
+        return $l.Substring(1, $fim - 1)
+    }
+    $espaco = $l.IndexOfAny([char[]]@(' ', "`t"))
+    if ($espaco -ge 0) { return $l.Substring(0, $espaco) }
+    return $l
+}
+
 function Test-Administrator {
     $identity  = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = New-Object Security.Principal.WindowsPrincipal($identity)
@@ -198,8 +215,22 @@ try {
     # (abaixo). Parar aqui deixava o serviço parado quando o script terminava
     # sem -Token (o jeito de atualizar) ou quando a cópia falhava — backups
     # parados sem aviso até o próximo boot.
-    $existing = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
-    $wasRunning = $existing -and $existing.Status -eq 'Running'
+    #
+    # Os serviços rodando este exe (o $ServiceName e um segundo agente, como
+    # arkame-agent-oci) são anotados antes da troca: sem -Token, todos são
+    # reiniciados no fim para a versão nova valer. Reiniciar só o
+    # $ServiceName deixava o outro no .old, sem aviso, até o próximo boot.
+    $paraReiniciar = @()
+    try {
+        $paraReiniciar = @(Get-CimInstance -ClassName Win32_Service -ErrorAction Stop |
+            Where-Object { $_.State -eq 'Running' -and ((Get-ProgramaDaLinha $_.PathName) -ieq $exePath) } |
+            ForEach-Object { $_.Name })
+    } catch {
+        # Sem a lista: ao menos o $ServiceName, se estava rodando.
+        Write-Warn "Nao consegui listar os servicos que rodam $exePath ($($_.Exception.Message)); so $ServiceName sera reiniciado."
+        $existing = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+        if ($existing -and $existing.Status -eq 'Running') { $paraReiniciar = @($ServiceName) }
+    }
 
     # Outro serviço (um segundo agente, -ServiceName arkame-agent-oci) pode
     # estar rodando o mesmo exe: o Windows não deixa sobrescrever um exe em
@@ -239,17 +270,23 @@ try {
     }
 
     if (-not $Token) {
-        # Só o binário: o serviço segue rodando o exe antigo (.old) até
-        # reiniciar. Reinicia agora, já com o novo no lugar, para a
-        # atualização valer. Com -Token, o install do agente reinicia.
-        if ($wasRunning) {
+        # Só o binário: os serviços seguem rodando o exe antigo (.old) até
+        # reiniciar. Reinicia agora todos os que estavam rodando este exe, já
+        # com o novo no lugar, para a atualização valer. Com -Token, o
+        # install do agente reinicia.
+        $falharam = @()
+        foreach ($nome in $paraReiniciar) {
             try {
-                Restart-Service -Name $ServiceName -Force
-                Write-Ok "Servico $ServiceName reiniciado com a versao nova"
+                Restart-Service -Name $nome -Force -ErrorAction Stop
+                Write-Ok "Servico $nome reiniciado com a versao nova"
             } catch {
-                Write-Warn "Nao consegui reiniciar o servico ${ServiceName}: $($_.Exception.Message)"
-                Write-Warn "Reinicie-o (services.msc) para a versao nova valer."
+                Write-Warn "Nao consegui reiniciar o servico ${nome}: $($_.Exception.Message)"
+                $falharam += $nome
             }
+        }
+        if ($falharam.Count -gt 0) {
+            Write-Warn "Continuam na versao antiga: $($falharam -join ', ')"
+            Write-Warn "Reinicie-os (services.msc) para a versao nova valer."
         }
         Write-Host ""
         Write-Info "Proximo passo - registre este servidor no painel:"
