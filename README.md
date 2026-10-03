@@ -258,10 +258,9 @@ Lidas do env-file ou das env vars do processo (CLI tem precedência).
 | `STORAGE_BUCKET` | Nome do bucket (informativo; path vem do painel) |
 | `STORAGE_ID` | ULID do storage no painel |
 | `PANEL_URL` | `https://save.arkame.app` |
-| `ENROLLMENT_TOKEN` | Temporário, só durante install |
+| `ENROLLMENT_TOKEN` | Temporário, só durante install; sai do arquivo com a aprovação |
 | `AGENT_ID` | Identidade do agente; sem ela, vale o conteúdo de `AGENT_ID_PATH` (gravado no enrollment) |
 | `AGENT_ID_PATH` | `/etc/arkame/agent.id` |
-| `AGENT_FINGERPRINT` | Só informativo (`status`) |
 | `TOKEN_PATH` | `/etc/arkame/token.jwt` — bearer do painel (0600; no Windows, Administradores e SYSTEM) |
 | `PRIVATE_KEY_PATH` | `/etc/arkame/key.pem` (idem) |
 | `HOST_ROOT` | `/` nativo, `/host` em Docker |

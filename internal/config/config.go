@@ -42,8 +42,7 @@ type Config struct {
 	// Identidade & painel
 	AgentID         string // setado após enrollment bem-sucedido (persisted em /etc/arkame/agent.id)
 	PanelURL        string // https://save.arkame.app (ou subdomínio de partner whitelabel)
-	EnrollmentToken string // só presente em install (first-time ou re-enrollment); limpo após sucesso
-	Fingerprint     string // SHA-256 do public_key (mostrado para aprovação humana)
+	EnrollmentToken string // só presente em install (first-time ou re-enrollment); sai do env-file com a aprovação
 
 	// Auth — bearer JWT recebido do painel após approval
 	TokenPath      string // /etc/arkame/token.jwt — JWT bearer (0600)
@@ -120,7 +119,6 @@ func Load(envFile string, o Overrides) (*Config, error) {
 		AgentID:              get("AGENT_ID"),
 		PanelURL:             firstNonEmpty(o.PanelURL, get("PANEL_URL"), "https://save.arkame.app"),
 		EnrollmentToken:      firstNonEmpty(o.EnrollmentToken, get("ENROLLMENT_TOKEN")),
-		Fingerprint:          get("AGENT_FINGERPRINT"),
 		TokenPath:            firstNonEmpty(get("TOKEN_PATH"), DefaultTokenPath),
 		PrivateKeyPath:       firstNonEmpty(get("PRIVATE_KEY_PATH"), DefaultPrivateKeyPath),
 		AgentIDPath:          firstNonEmpty(get("AGENT_ID_PATH"), DefaultAgentIDPath),

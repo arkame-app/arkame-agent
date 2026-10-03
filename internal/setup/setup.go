@@ -214,6 +214,42 @@ func Gravar(caminho string, linhas []string) error {
 	return segredo.Gravar(caminho, []byte(conteudo), 0o600)
 }
 
+// Remover tira do arquivo as linhas destas chaves; o resto fica como está.
+// Arquivo que não existe ou não tem nenhuma delas não é reescrito.
+func Remover(caminho string, chaves ...string) error {
+	b, err := os.ReadFile(caminho)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("lendo %s: %w", caminho, err)
+	}
+	tirar := map[string]bool{}
+	for _, k := range chaves {
+		tirar[k] = true
+	}
+	var mantidas []string
+	mudou := false
+	for _, l := range strings.Split(strings.ReplaceAll(string(b), "\r\n", "\n"), "\n") {
+		k, _, _ := strings.Cut(strings.TrimSpace(l), "=")
+		if tirar[strings.TrimSpace(k)] {
+			mudou = true
+			continue
+		}
+		if strings.TrimSpace(l) != "" {
+			mantidas = append(mantidas, l)
+		}
+	}
+	if !mudou {
+		return nil
+	}
+	conteudo := strings.Join(mantidas, "\n")
+	if conteudo != "" {
+		conteudo += "\n"
+	}
+	return segredo.Gravar(caminho, []byte(conteudo), 0o600)
+}
+
 // Chaves são as duas linhas da credencial.
 func Chaves(ak, sk string) []string {
 	return []string{"STORAGE_ACCESS_KEY=" + ak, "STORAGE_SECRET_KEY=" + sk}

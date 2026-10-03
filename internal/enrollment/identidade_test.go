@@ -186,3 +186,30 @@ func TestEnrollmentSemArmazenamentoMantemOArquivo(t *testing.T) {
 		t.Fatalf("esperava só o AGENT_ID trocado: %+v", depois)
 	}
 }
+
+// O código de instalação ficava no env-file depois da aprovação, e o status
+// de um agente instalado por env-file mostrava "PENDENTE" para sempre. A
+// aprovação o tira do arquivo (e só ele).
+func TestAprovacaoTiraOCodigoUsadoDoArquivo(t *testing.T) {
+	in := novaInstalacao(t, "ENROLLMENT_TOKEN=atk_x\nAGENT_ID=antigo\nSTORAGE_BUCKET=b\n")
+	url := painelDeEnroll(t, `{"agent_id":"novo","status":"pending","wait_url":"/w"}`)
+	t.Setenv("AGENT_ID", "")
+	t.Setenv("ENROLLMENT_TOKEN", "")
+	cfg := in.carregar(t, config.Overrides{PanelURL: url})
+	if cfg.EnrollmentToken != "atk_x" {
+		t.Fatalf("o código não veio do arquivo: %q", cfg.EnrollmentToken)
+	}
+	r, err := Run(context.Background(), cfg, Options{Hostname: "h"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Concluir(cfg, r, "a.b.novo"); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(ler(t, in.arquivo), "ENROLLMENT_TOKEN") || cfg.EnrollmentToken != "" {
+		t.Fatalf("o código usado ficou:\n%s", ler(t, in.arquivo))
+	}
+	if depois := in.carregar(t, config.Overrides{}); depois.AgentID != "novo" || depois.StorageBucket != "b" {
+		t.Fatalf("o resto do arquivo se perdeu: %+v", depois)
+	}
+}

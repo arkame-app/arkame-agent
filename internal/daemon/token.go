@@ -72,6 +72,10 @@ func (e *estadoDoToken) tratarRespostaDoHeartbeat(c *api.Client, cfg *config.Con
 		"vence_em", venc, "faltam_dias", int(venc.Sub(agora()).Hours()/24))
 }
 
+// VencimentoDoToken é o vencimento (exp) do token do agente, sem verificar a
+// assinatura; ok=false quando o token não traz a data.
+func VencimentoDoToken(token string) (time.Time, bool) { return vencimentoDoJWT(token) }
+
 // vencimentoDoJWT lê o exp do payload do JWT, sem verificar a assinatura (o
 // agente não tem o segredo; aqui só importa a data).
 func vencimentoDoJWT(token string) (time.Time, bool) {

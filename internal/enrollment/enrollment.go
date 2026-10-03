@@ -130,7 +130,8 @@ func Run(ctx context.Context, cfg *config.Config, o Options) (*Result, error) {
 // Concluir grava a identidade aprovada de uma vez: a chave privada, o
 // agent.id, o AGENT_ID (e o armazenamento) no env-file e o token. O token
 // por último: sem ele, o daemon não sobe, em vez de subir com AGENT_ID e
-// token de identidades diferentes.
+// token de identidades diferentes. Depois tira do env-file o
+// ENROLLMENT_TOKEN, já usado.
 func Concluir(cfg *config.Config, r *Result, token string) error {
 	if r == nil || r.chave == nil {
 		return errors.New("enrollment sem identidade pendente")
@@ -145,7 +146,18 @@ func Concluir(cfg *config.Config, r *Result, token string) error {
 	if err := persistirNoArquivo(cfg, r.resposta); err != nil {
 		return fmt.Errorf("gravando a identidade nova em %s: %w", cfg.ConfigPath, err)
 	}
-	return PersistToken(cfg, token)
+	if err := PersistToken(cfg, token); err != nil {
+		return err
+	}
+	// O código de instalação vale uma vez e já foi usado. Deixado no arquivo,
+	// o `status` mostrava "PENDENTE" para sempre num agente aprovado.
+	cfg.EnrollmentToken = ""
+	if cfg.ConfigPath != "" {
+		if err := setup.Remover(cfg.ConfigPath, "ENROLLMENT_TOKEN"); err != nil {
+			slog.Warn("não consegui tirar o ENROLLMENT_TOKEN usado do arquivo", "path", cfg.ConfigPath, "err", err)
+		}
+	}
+	return nil
 }
 
 // WaitForApproval faz long-poll na WaitURL até o painel aprovar o agent
