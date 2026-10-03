@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // Bucket sem versionamento: a primeira resposta sem VersionId encerra o Run
@@ -42,5 +43,27 @@ func TestProcessFileDedupSemVersao(t *testing.T) {
 	_, _, err := processFile(context.Background(), o, fi)
 	if !errors.Is(err, ErrBucketSemVersionamento) {
 		t.Fatalf("esperava ErrBucketSemVersionamento, veio %v", err)
+	}
+}
+
+// Objeto reaproveitado (mesmo hash): o índice leva a data do arquivo, não o
+// LastModified do objeto no bucket.
+func TestDedupIndexaADataDoArquivo(t *testing.T) {
+	falso, c := novoS3Falso(t)
+	fi := arquivoDeTeste(t, "igual")
+	quando := time.Date(2023, 7, 1, 12, 0, 0, 0, time.UTC)
+	fi.ModTime = quando.UnixNano()
+	falso.objetos["data/a/dados.db"] = objetoFalso{dados: []byte("igual"), sha256: sha256Hex([]byte("igual")), versao: "v9"}
+	falso.ultimaModificacao = time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+
+	e, dedup, err := processFile(context.Background(), EngineOptions{S3: c, Bucket: "b", PrefixRoot: "data/a/"}, fi)
+	if err != nil || !dedup {
+		t.Fatalf("err=%v dedup=%v", err, dedup)
+	}
+	if !e.ModifiedAt.Equal(quando) {
+		t.Fatalf("modified_at = %v, queria a data do arquivo %v", e.ModifiedAt, quando)
+	}
+	if e.VersionID != "v9" {
+		t.Fatalf("version_id = %q", e.VersionID)
 	}
 }

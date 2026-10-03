@@ -12,6 +12,7 @@ import (
 	"strings"
 	gosync "sync"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
@@ -36,6 +37,8 @@ type s3Falso struct {
 	// semVersao simula bucket sem versionamento: nenhuma resposta traz
 	// x-amz-version-id.
 	semVersao bool
+	// ultimaModificacao, se definida, vai como Last-Modified no HeadObject.
+	ultimaModificacao time.Time
 }
 
 type objetoFalso struct {
@@ -89,6 +92,9 @@ func (f *s3Falso) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("x-amz-meta-sha256", o.sha256)
 		if !f.semVersao {
 			w.Header().Set("x-amz-version-id", o.versao)
+		}
+		if !f.ultimaModificacao.IsZero() {
+			w.Header().Set("Last-Modified", f.ultimaModificacao.UTC().Format(http.TimeFormat))
 		}
 		w.Header().Set("Content-Length", strconv.Itoa(len(o.dados)))
 		w.WriteHeader(http.StatusOK)

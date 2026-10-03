@@ -145,6 +145,10 @@ func processFile(ctx context.Context, o EngineOptions, fi FileInfo) (*api.FileEn
 		if existing.VersionID == "" {
 			return nil, false, ErrBucketSemVersionamento
 		}
+		// O índice guarda a data do arquivo, não a do objeto: o LastModified
+		// é quando a versão subiu (às vezes semanas antes), e a restauração
+		// por data e a tela do arquivo mostravam a data do envio.
+		existing.ModifiedAt = time.Unix(0, fi.ModTime)
 		slog.Debug("dedup hit, pulando upload",
 			"key", key, "sha256", hash[:8], "size", fi.Size)
 		return existing, true, nil
@@ -450,15 +454,11 @@ func checkDedup(ctx context.Context, s3c *s3.Client, bucket, key, hash string) (
 	if head.ContentLength != nil {
 		size = *head.ContentLength
 	}
-	mtime := time.Now()
-	if head.LastModified != nil {
-		mtime = *head.LastModified
-	}
+	// ModifiedAt fica para o chamador, que tem a data do arquivo.
 	return &api.FileEntry{
-		Key:        key,
-		VersionID:  versionID,
-		Size:       size,
-		SHA256:     hash,
-		ModifiedAt: mtime,
+		Key:       key,
+		VersionID: versionID,
+		Size:      size,
+		SHA256:    hash,
 	}, true
 }
