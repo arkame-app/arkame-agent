@@ -11,6 +11,23 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
+// VersioningStatus devolve o estado do versionamento do bucket: "Enabled",
+// "Suspended" ou "Off" (nunca ativado).
+func VersioningStatus(ctx context.Context, client *s3.Client, bucket string) (string, error) {
+	vr, err := client.GetBucketVersioning(ctx, &s3.GetBucketVersioningInput{Bucket: &bucket})
+	if err != nil {
+		return "", err
+	}
+	switch vr.Status {
+	case types.BucketVersioningStatusEnabled:
+		return "Enabled", nil
+	case types.BucketVersioningStatusSuspended:
+		return "Suspended", nil
+	default:
+		return "Off", nil
+	}
+}
+
 // Probe inspeciona a configuração do bucket via S3 API e devolve um ProbeReport.
 // Decisão arquitetural (PLAN.md round 13): o painel NÃO tem credenciais para
 // consultar o bucket; o agent é quem descobre a config e reporta.
@@ -26,19 +43,12 @@ func Probe(ctx context.Context, client *s3.Client, bucket, storageID string) api
 	}
 
 	// Versioning
-	vr, err := client.GetBucketVersioning(ctx, &s3.GetBucketVersioningInput{Bucket: &bucket})
+	v, err := VersioningStatus(ctx, client, bucket)
 	if err != nil {
 		report.Error = "versioning: " + err.Error()
 		return report
 	}
-	switch vr.Status {
-	case types.BucketVersioningStatusEnabled:
-		report.Versioning = "Enabled"
-	case types.BucketVersioningStatusSuspended:
-		report.Versioning = "Suspended"
-	default:
-		report.Versioning = "Off"
-	}
+	report.Versioning = v
 
 	// Object Lock — opcional, pode não estar habilitado
 	olr, err := client.GetObjectLockConfiguration(ctx, &s3.GetObjectLockConfigurationInput{Bucket: &bucket})

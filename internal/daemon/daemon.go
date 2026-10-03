@@ -260,6 +260,44 @@ func planoDeOutroProcesso(cfg *config.Config, plan api.Plan) bool {
 		slices.Contains(cfg.SiblingBuckets, b)
 }
 
+// erroVersionamento é a falha da checagem de versionamento antes do envio:
+// mensagem própria (nada foi enviado), e errors.Is casa com os erros do
+// engine para quem já trata ErrBucketSemVersionamento.
+type erroVersionamento struct {
+	msg   string
+	causa error
+}
+
+func (e erroVersionamento) Error() string { return e.msg }
+func (e erroVersionamento) Unwrap() error { return e.causa }
+
+// versionamentoAtivo consulta o versionamento do bucket. Suspenso ou
+// desligado é erro. Se a consulta em si falha (credencial sem
+// s3:GetBucketVersioning, provedor que não implementa), o backup segue:
+// a checagem depois do envio, no engine, ainda barra o bucket sem versão.
+func versionamentoAtivo(ctx context.Context, s3c *s3.Client, bucket string) error {
+	estado, err := storage.VersioningStatus(ctx, s3c, bucket)
+	if err != nil {
+		slog.Warn("não deu para consultar o versionamento do bucket; seguindo com a checagem depois do envio",
+			"bucket", bucket, "err", err)
+		return nil
+	}
+	switch estado {
+	case "Enabled":
+		return nil
+	case "Suspended":
+		return erroVersionamento{
+			msg:   "versionamento do bucket suspenso: reative o versionamento do bucket. Nada foi enviado: com ele suspenso, cada envio grava a versão \"null\" por cima da anterior, que o backup já indexou",
+			causa: syncengine.ErrVersionamentoSuspenso,
+		}
+	default:
+		return erroVersionamento{
+			msg:   "bucket sem versionamento (desligado): ative o versionamento do bucket. Nada foi enviado: sem VersionId o backup não seria restaurável",
+			causa: syncengine.ErrBucketSemVersionamento,
+		}
+	}
+}
+
 // executePlan implementa o ciclo backup completo:
 //  1. POST /sessions/start → recebe sessionId
 //  2. syncengine.Run percorre paths, hash + upload S3 streamed
@@ -285,6 +323,24 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 		return fmt.Errorf("session start: %w", err)
 	}
 	slog.Info("session iniciada", "session_id", startResp.SessionID)
+
+	// Versionamento antes de enviar qualquer coisa. A checagem depois do
+	// envio (VersionId "null") só percebia o bucket suspenso depois do
+	// primeiro PutObject — e esse envio já tinha sobrescrito uma versão
+	// "null" indexada: cada execução destruía um backup antes de abortar.
+	// Ela continua no engine, como segunda guarda.
+	if errVer := versionamentoAtivo(ctx, s3c, plan.StorageRef.Bucket); errVer != nil {
+		slog.Error("bucket sem versionamento ativo; backup abortado antes do envio",
+			"plan_id", plan.ID, "bucket", plan.StorageRef.Bucket, "err", errVer)
+		marcarFalha(ctx, c, cfg, startResp.SessionID, struct {
+			ErrorCode    string `json:"error_code"`
+			ErrorMessage string `json:"error_message"`
+		}{
+			ErrorCode:    "bucket_unversioned",
+			ErrorMessage: errVer.Error(),
+		})
+		return errVer
+	}
 
 	// Comando de antes. Falha aqui aborta o backup, e é deliberado: seguir
 	// adiante salvaria o dump da véspera achando que salvou o de hoje — pior
