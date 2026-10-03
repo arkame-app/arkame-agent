@@ -97,7 +97,12 @@ detect_platform() {
   case "$os" in
     linux|darwin) ;;
     mingw*|msys*|cygwin*)
-      die "no Windows, baixe o .zip em https://github.com/$REPO/releases e rode: arkame-agent.exe install --token=..." ;;
+      # O mesmo comando do painel: o setup se eleva, se copia para Program
+      # Files e entra em "Aplicativos instalados"; o install de um .zip não.
+      codigo="${TOKEN:-<código>}"
+      die "no Windows, use o comando do painel (Windows + R, colar, Enter):
+
+     cmd /c \"curl -fsSLo \"%TEMP%\\arkame-agent.exe\" https://get.arkame.app/agente.exe && \"%TEMP%\\arkame-agent.exe\" setup --token=$codigo || pause\"" ;;
     *) die "sistema não suportado: $os" ;;
   esac
 

@@ -114,3 +114,42 @@ func TestInstallShComChecksumOuSkipChecksum(t *testing.T) {
 		t.Fatalf("--skip-checksum: terminou=%v binário=%v\n%s", terminou, instalou, out)
 	}
 }
+
+// No Git Bash do Windows, o install.sh mandava baixar o .zip e rodar
+// "arkame-agent.exe install": sem Program Files, sem a entrada para
+// desinstalar e dependendo de o terminal já ser administrador. Agora mostra
+// o comando oficial (agente.exe + setup), com o código quando veio.
+func TestInstallShNoWindowsMostraOComandoOficial(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("simula o Git Bash com um uname falso")
+	}
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sem sh")
+	}
+	falso := t.TempDir()
+	if err := os.WriteFile(filepath.Join(falso, "uname"), []byte("#!/bin/sh\necho MINGW64_NT-10.0-19045\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for token, quer := range map[string]string{
+		"atk_abcdefghijklmnopqr": "setup --token=atk_abcdefghijklmnopqr || pause",
+		"":                       "setup --token=<código> || pause",
+	} {
+		args := []string{filepath.Join("..", "..", "install.sh"), "--version=v9.9.9"}
+		if token != "" {
+			args = append(args, "--token="+token)
+		}
+		cmd := exec.Command("sh", args...)
+		cmd.Env = append(os.Environ(), "PATH="+falso+string(os.PathListSeparator)+os.Getenv("PATH"), "NO_COLOR=1")
+		out, err := cmd.CombinedOutput()
+		if err == nil {
+			t.Fatalf("no Windows o install.sh tem de parar:\n%s", out)
+		}
+		oficial := `cmd /c "curl -fsSLo "%TEMP%\arkame-agent.exe" https://get.arkame.app/agente.exe && "%TEMP%\arkame-agent.exe" `
+		if !strings.Contains(string(out), oficial+quer) {
+			t.Fatalf("sem o comando oficial com %q:\n%s", quer, out)
+		}
+		if strings.Contains(string(out), ".zip") || strings.Contains(string(out), " install --token") {
+			t.Fatalf("ainda manda o .zip e o install:\n%s", out)
+		}
+	}
+}
