@@ -228,7 +228,10 @@ espera não teria quem o concluísse.
 
 ```bash
 sudo /usr/local/bin/arkame-agent set-storage-keys --restart   # pergunta, testa, grava e reinicia
-arkame-agent check-storage                      # só testa a chave do arquivo
+sudo /usr/local/bin/arkame-agent check-storage                # só testa a chave do arquivo
+
+# Instalação sem root (Linux ou macOS)
+~/.local/bin/arkame-agent check-storage --service-scope user
 ```
 
 No Windows, o painel mostra a linha para o Windows + R
