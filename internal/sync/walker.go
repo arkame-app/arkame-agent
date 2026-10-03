@@ -170,7 +170,18 @@ func walk(ctx context.Context, hostRoot string, sourcePaths []string, excludeGlo
 					// laço e cópia em dobro do que já está em outro lugar.
 					alvo := caminho.Real(hostRoot, strings.TrimPrefix(path, filepath.Clean(hostRoot)))
 					st, serr := os.Stat(alvo)
-					if serr != nil || !st.Mode().IsRegular() {
+					if serr != nil {
+						// Link quebrado não tem o que copiar. Destino que não
+						// deu para ler (EACCES, ou o macOS sem Acesso Total ao
+						// Disco) entra na conta, como um arquivo comum: calado,
+						// o link sumia de uma sessão "concluída" e o painel lia
+						// a falta como remoção.
+						if !errors.Is(serr, fs.ErrNotExist) {
+							anotar(path, serr)
+						}
+						return nil
+					}
+					if !st.Mode().IsRegular() {
 						return nil
 					}
 					leitura, info = alvo, st

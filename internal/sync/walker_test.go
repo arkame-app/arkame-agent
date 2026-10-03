@@ -326,3 +326,56 @@ func TestWalkPastaExcluidaNaoEPercorrida(t *testing.T) {
 		t.Fatalf("esperava só a.txt, veio %v", vistos)
 	}
 }
+
+// Link para arquivo cujo destino não dá para ler entra na conta do backup
+// parcial, como um arquivo comum ilegível. Antes era pulado calado: o link
+// sumia de uma sessão "concluída" e o painel lia a falta como remoção. Link
+// quebrado e link para pasta continuam fora, sem deixar a sessão parcial.
+func TestWalkLinkComDestinoIlegivelViraErro(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("precisa de permissão de pasta POSIX e de não ser root")
+	}
+	raiz := t.TempDir()
+	if err := os.WriteFile(filepath.Join(raiz, "a.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fora := t.TempDir()
+	trancada := filepath.Join(fora, "trancada")
+	if err := os.MkdirAll(trancada, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(trancada, "b.txt"), []byte("y"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(trancada, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(trancada, 0o755) })
+	links := map[string]string{
+		"barrado":  filepath.Join(trancada, "b.txt"),
+		"quebrado": filepath.Join(fora, "nao-existe"),
+		"pasta":    fora,
+	}
+	for nome, alvo := range links {
+		if err := os.Symlink(alvo, filepath.Join(raiz, nome)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	arquivos, erros := Walk(context.Background(), "/", []string{raiz}, nil)
+	var vistos []string
+	for f := range arquivos {
+		vistos = append(vistos, filepath.Base(f.AbsolutePath))
+	}
+	err := <-erros
+	if len(vistos) != 1 || vistos[0] != "a.txt" {
+		t.Fatalf("esperava só a.txt, veio %v", vistos)
+	}
+	if err == nil || !strings.Contains(err.Error(), "1 itens não puderam ser lidos") ||
+		!strings.Contains(err.Error(), "barrado") {
+		t.Fatalf("o link com destino ilegível deveria virar erro (backup parcial), veio %v", err)
+	}
+	if strings.Contains(err.Error(), "quebrado") || strings.Contains(err.Error(), "pasta") {
+		t.Fatalf("link quebrado ou para pasta não é falha: %v", err)
+	}
+}
