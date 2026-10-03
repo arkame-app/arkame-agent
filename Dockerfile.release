@@ -5,7 +5,8 @@ FROM gcr.io/distroless/static-debian12:nonroot
 
 COPY arkame-agent /usr/local/bin/arkame-agent
 
-# Monte a raiz do servidor em /host (somente leitura) e o env-file em /etc/arkame.
+# Monte a raiz do servidor em /host com leitura e escrita (-v /:/host, sem :ro:
+# a restauração grava no servidor) e o env-file em /etc/arkame.
 VOLUME ["/host", "/etc/arkame"]
 
 # O painel mostra os comandos de Docker para este servidor (e não os do Linux).

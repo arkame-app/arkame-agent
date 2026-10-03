@@ -36,7 +36,8 @@ FROM gcr.io/distroless/static-debian12:nonroot
 
 COPY --from=builder /out/arkame-agent /usr/local/bin/arkame-agent
 
-# Monte a raiz do servidor em /host (read-only)
+# Monte a raiz do servidor em /host com leitura e escrita (-v /:/host, sem :ro):
+# a restauração grava no servidor, inclusive no lugar original.
 VOLUME ["/host"]
 
 # /etc/arkame lê o env-file com credenciais de storage
