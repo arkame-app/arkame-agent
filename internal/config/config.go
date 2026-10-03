@@ -57,8 +57,8 @@ type Config struct {
 	StorageSecretKey string
 	StorageEndpoint  string // para MinIO / S3-compat não-AWS
 	StorageRegion    string
-	StorageBucket    string // nome do bucket (informativo; path autoritativo vem do painel no plan)
-	StorageID        string // ULID do registro no painel
+	StorageBucket    string // nome do bucket; obrigatório para o teste do bucket (probe), a limpeza da retenção e o check-storage. Os caminhos dentro dele vêm do painel no plano
+	StorageID        string // UUID do registro no painel
 	// Buckets atendidos por OUTROS processos deste mesmo agent no host (um
 	// processo por conjunto de credenciais). Itens de restore desses buckets
 	// são pulados em silêncio (o irmão pega); de buckets desconhecidos, falham

@@ -268,8 +268,8 @@ Lidas do env-file ou das env vars do processo (CLI tem precedência).
 | `STORAGE_SECRET_KEY` | **Credencial S3 do cliente** |
 | `STORAGE_ENDPOINT` | Só para S3-compat não-AWS (MinIO, Wasabi, etc) |
 | `STORAGE_REGION` | `us-east-1` default |
-| `STORAGE_BUCKET` | Nome do bucket (informativo; path vem do painel) |
-| `STORAGE_ID` | ULID do storage no painel |
+| `STORAGE_BUCKET` | Nome do bucket. Obrigatório para o teste do bucket, a limpeza da retenção e o `check-storage`; também separa os planos e restaurações deste processo dos de outro (os caminhos dentro do bucket vêm do painel) |
+| `STORAGE_ID` | UUID do storage no painel |
 | `PANEL_URL` | `https://save.arkame.app` |
 | `ENROLLMENT_TOKEN` | Temporário, só durante install; sai do arquivo com a aprovação |
 | `AGENT_ID` | Identidade do agente; sem ela, vale o conteúdo de `AGENT_ID_PATH` (gravado no enrollment) |
