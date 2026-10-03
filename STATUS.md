@@ -39,8 +39,8 @@ Binário Linux rodando local contra o painel em produção (`save.arkame.app`) +
 
 ## O que está pronto
 
-> Atualizado em 2026-10-03 conferindo o código (v0.4.11, publicada em 03/10; tag no
-> `c7e95ab`). As seções datadas acima são registro histórico e podem descrever
+> Atualizado em 2026-10-03 conferindo o código (v0.4.12, publicada em 03/10; tag no
+> `5e4b04b`). As seções datadas acima são registro histórico e podem descrever
 > comportamento que já mudou.
 >
 > **Na v0.4.11:** o relato da sondagem leva `noncurrent_expiration_days` e
@@ -51,19 +51,24 @@ Binário Linux rodando local contra o painel em produção (`save.arkame.app`) +
 > e, pela ACL, Windows, onde o administrador que roda o install vale como dono), e o
 > `install.sh` com o programa no home sugere o install sem sudo.
 >
-> **Na próxima (sem tag):** arquivo e pasta novos da restauração ficam do dono da
+> **Na v0.4.12:** arquivo e pasta novos da restauração ficam do dono da
 > pasta-mãe (no Windows, a DACL de segredo só na pasta de restauração nova, não no lugar
 > de origem); `install.sh` com root usa `/opt/arkame/bin` quando o `/usr/local/bin` não é
 > só do root (Homebrew em Mac Intel); o `setup` do Windows passa
 > `C:\Program Files\Arkame` aos Administradores (outro administrador reinstala); e
 > destino só de leitura (EROFS, `/etc` no serviço nativo) vai ao painel como
 > `read_only_destination`.
+>
+> **Na 0.4.13 (sem tag):** o heartbeat leva `program_path`, o caminho real do programa
+> (`os.Executable` com links resolvidos), para o painel montar o comando de trocar a chave
+> com `/opt/arkame/bin` quando for o caso; o README cita esse caminho em trocar a chave e
+> remover.
 
 - **Enrollment Ed25519**: `internal/enrollment` gera keypair, POST `/api/agents/enroll`, long-poll na `wait-token` até receber JWT bearer
 - **Bearer auth**: client HTTP envia `Authorization: Bearer <token>` em todos os requests pós-approval; `ErrNotReady` (204) e `ErrGone` (410) pra long-poll handling
 - **Persistência local**: escopo system em `/etc/arkame/` — `token.jwt` (0600) + `key.pem` (0600) + `agent.id`, ao lado de `agent.env`; escopo user (instalação sem root e sem `--config`, fora do Windows) em `~/.config/arkame/` (ou `$XDG_CONFIG_HOME/arkame/`), com os mesmos arquivos
 - **Daemon completo** (`internal/daemon/daemon.go`), 6 loops paralelos:
-  - Loop heartbeat a cada `HEARTBEAT_INTERVAL_SEC` (padrão 60s) `/api/agents/{id}/heartbeat`, gravando o token renovado que vier na resposta
+  - Loop heartbeat a cada `HEARTBEAT_INTERVAL_SEC` (padrão 60s) `/api/agents/{id}/heartbeat` (com `service_name`, `service_scope` e `program_path`), gravando o token renovado que vier na resposta
   - Loop probe 1h + on-demand (conferido a cada 30s em `/probe-request`): `storage.Probe` → POST `/probe` (versioning, object_lock, lifecycle, noncurrent_*, uso e, se a leitura falhou por outro motivo que "não há", `lifecycle_error`/`object_lock_error`)
   - Loop plans a cada `POLL_INTERVAL_SEC` (padrão 60s): GET `/plans` → `scheduler.ShouldRun` → `executePlan` (backup)
   - Loop restore a cada `POLL_INTERVAL_SEC`: GET `/restore-items` → PATCH running → `restore.Run` → PATCH complete/failed
