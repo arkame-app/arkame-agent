@@ -73,6 +73,12 @@ func newSetupCmd() *cobra.Command {
 				}
 				fmt.Fprintln(os.Stderr, "  ✓ Programa em", destino)
 			}
+			// Copiado agora ou já no lugar: a pasta e o programa passam aos
+			// Administradores. Do administrador do primeiro setup, outro
+			// administrador não reinstalava (o install recusa o dono).
+			if err := aplicativos.DonoAdministradores(filepath.Dir(destino), destino); err != nil {
+				fmt.Fprintln(os.Stderr, "  ! não consegui passar a pasta do programa aos Administradores:", err)
+			}
 			if err := aplicativos.AdicionarAoPath(filepath.Dir(destino)); err != nil {
 				fmt.Fprintln(os.Stderr, "  ! não consegui pôr no PATH:", err)
 			}

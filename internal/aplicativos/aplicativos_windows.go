@@ -7,8 +7,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
@@ -174,3 +176,93 @@ func RemoverPrograma(exe string) error {
 // ProgramaSaiDepois: no Windows o programa é apagado depois que este processo
 // termina, não na hora.
 const ProgramaSaiDepois = true
+
+// InitializeAcl e AddAce, que o x/sys/windows não expõe.
+var (
+	advapi32          = windows.NewLazySystemDLL("advapi32.dll")
+	procInitializeAcl = advapi32.NewProc("InitializeAcl")
+	procAddAce        = advapi32.NewProc("AddAce")
+)
+
+// DonoAdministradores dá a pasta do programa e o programa ao grupo
+// Administradores (BUILTIN\Administrators, por SID) e refaz a herança da
+// DACL da pasta.
+//
+// Com a política "Proprietário padrão de objetos criados por membros do grupo
+// Administradores" em "Criador do objeto" (o padrão do Windows 10/11), o dono
+// de C:\Program Files\Arkame era o administrador do primeiro setup, e o
+// CREATOR OWNER herdado do Program Files virava uma entrada de Controle Total
+// para ele. O serviço (SYSTEM) só aceita o programa se o dono e as entradas
+// forem de Administradores, SYSTEM, TrustedInstaller ou de quem roda o
+// install: outro administrador (ou o mesmo, com a conta já removida) não
+// reinstalava. Trocar só o dono não basta — a entrada herdada continua com o
+// SID antigo —, por isso a DACL é regravada com as entradas próprias dela, e
+// o Windows recalcula as herdadas com o dono novo (e as propaga ao programa).
+// Pasta com a herança cortada (DACL protegida) fica como está.
+func DonoAdministradores(pasta, programa string) error {
+	adm, err := windows.CreateWellKnownSid(windows.WinBuiltinAdministratorsSid)
+	if err != nil {
+		return err
+	}
+	for _, c := range []string{programa, pasta} {
+		if err := windows.SetNamedSecurityInfo(c, windows.SE_FILE_OBJECT,
+			windows.OWNER_SECURITY_INFORMATION, adm, nil, nil, nil); err != nil {
+			return fmt.Errorf("dono de %s: %w", c, err)
+		}
+	}
+	return reherdarDACL(pasta)
+}
+
+// reherdarDACL regrava a DACL da pasta só com as entradas próprias (sem as
+// herdadas) e sem proteção: o Windows refaz as herdadas a partir da mãe.
+func reherdarDACL(pasta string) error {
+	sd, err := windows.GetNamedSecurityInfo(pasta, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		return fmt.Errorf("lendo as permissões de %s: %w", pasta, err)
+	}
+	ctl, _, err := sd.Control()
+	if err != nil {
+		return err
+	}
+	if ctl&windows.SE_DACL_PROTECTED != 0 {
+		return nil
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil || dacl == nil {
+		return err
+	}
+	var proprias []*windows.ACCESS_ALLOWED_ACE
+	tam := uint32(8) // o cabeçalho da ACL
+	for i := uint32(0); i < uint32(dacl.AceCount); i++ {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(dacl, i, &ace); err != nil {
+			return err
+		}
+		if ace.Header.AceFlags&windows.INHERITED_ACE != 0 {
+			continue
+		}
+		proprias = append(proprias, ace)
+		tam += uint32(ace.Header.AceSize)
+	}
+	tam = (tam + 3) &^ 3
+	buf := make([]uint32, tam/4) // alinhado em DWORD
+	nova := (*windows.ACL)(unsafe.Pointer(&buf[0]))
+	revisao := uintptr(*(*byte)(unsafe.Pointer(dacl))) // o AclRevision da original
+	if r, _, e := procInitializeAcl.Call(uintptr(unsafe.Pointer(nova)), uintptr(tam), revisao); r == 0 {
+		return fmt.Errorf("montando a lista de permissões de %s: %w", pasta, e)
+	}
+	for _, ace := range proprias {
+		if r, _, e := procAddAce.Call(uintptr(unsafe.Pointer(nova)), revisao, 0xFFFFFFFF,
+			uintptr(unsafe.Pointer(ace)), uintptr(ace.Header.AceSize)); r == 0 {
+			return fmt.Errorf("montando a lista de permissões de %s: %w", pasta, e)
+		}
+	}
+	err = windows.SetNamedSecurityInfo(pasta, windows.SE_FILE_OBJECT,
+		windows.DACL_SECURITY_INFORMATION|windows.UNPROTECTED_DACL_SECURITY_INFORMATION, nil, nil, nova, nil)
+	runtime.KeepAlive(buf)
+	runtime.KeepAlive(sd)
+	if err != nil {
+		return fmt.Errorf("refazendo a herança de %s: %w", pasta, err)
+	}
+	return nil
+}

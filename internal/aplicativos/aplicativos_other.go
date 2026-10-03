@@ -16,6 +16,10 @@ func Registrar(string, string, string, []string) error { return nil }
 // ProgramaInstalado é onde o install.sh põe o programa.
 func ProgramaInstalado() string { return "/usr/local/bin/arkame-agent" }
 
+// DonoAdministradores: fora do Windows, o instalador com sudo cria a pasta do
+// root.
+func DonoAdministradores(string, string) error { return nil }
+
 // AdicionarAoPath: /usr/local/bin já está no PATH.
 func AdicionarAoPath(string) error { return nil }
 
