@@ -42,8 +42,9 @@ Docker or binary) and the service it runs as (`service_name`,
 plan's pre- or post-backup command fails, up to 8 KB of that command's output;
 each backup's file index — path and name, size, modification date, SHA-256 and
 bucket version; and, when the user browses folders while creating a plan in
-the panel, the names of the folders and files opened. Never file contents. The
-agent can be fully removed with `arkame-agent uninstall`.
+the panel, the names of the folders and files opened and the size of each file.
+Never file contents. The agent can be fully removed with
+`arkame-agent uninstall`.
 
 ## Arquitetura
 
