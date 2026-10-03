@@ -80,3 +80,21 @@ func TestSaidaGrandeEhTruncada(t *testing.T) {
 		t.Fatal("truncou sem avisar — quem lê acharia que o comando parou ali")
 	}
 }
+
+// A saída é cortada ao chegar, não depois: um comando verboso não pode encher
+// a memória do agente para no fim mandar 8 KB.
+func TestBufferNaoCresceAlemDoTeto(t *testing.T) {
+	b := &bufferSeguro{}
+	pedaco := make([]byte, 64*1024)
+	for i := 0; i < 64; i++ { // 4 MB
+		if n, err := b.Write(pedaco); n != len(pedaco) || err != nil {
+			t.Fatalf("o comando não pode ver erro de escrita: n=%d err=%v", n, err)
+		}
+	}
+	if b.buf.Len() > MaxOutputBytes+1 {
+		t.Fatalf("buffer com %d bytes, teto %d", b.buf.Len(), MaxOutputBytes+1)
+	}
+	if got := truncar(b.String()); !strings.HasSuffix(got, "(saída truncada)") {
+		t.Fatal("a saída cortada tem de dizer que foi truncada")
+	}
+}

@@ -172,10 +172,17 @@ type bufferSeguro struct {
 	buf bytes.Buffer
 }
 
+// Write guarda só até MaxOutputBytes+1 — o byte a mais basta para o truncar
+// saber que passou. O resto é descartado, mas o comando não percebe (devolve
+// len(p)): um hook que despeja gigabytes na saída (um `pg_dump` sem `>`, um
+// `tar v`) acumulava tudo na memória do agente para depois mandar 8 KB.
 func (b *bufferSeguro) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.buf.Write(p)
+	if resta := MaxOutputBytes + 1 - b.buf.Len(); resta > 0 {
+		b.buf.Write(p[:min(len(p), resta)])
+	}
+	return len(p), nil
 }
 
 func (b *bufferSeguro) String() string {
