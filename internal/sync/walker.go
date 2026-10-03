@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -10,6 +11,10 @@ import (
 
 	"github.com/arkame-app/agent/internal/caminho"
 )
+
+// maxExemplosNaoLidos limita os caminhos citados no erro: o painel mostra a
+// mensagem, e mil caminhos não ajudam ninguém.
+const maxExemplosNaoLidos = 3
 
 // FileInfo é o que o walker emite para cada arquivo encontrado.
 type FileInfo struct {
@@ -33,6 +38,22 @@ func Walk(ctx context.Context, hostRoot string, sourcePaths []string, excludeGlo
 		// Pasta do plano que não abre é falha dela, não do plano: as outras
 		// seguem, e o erro vai no fim (o daemon trata como backup parcial).
 		var ilegiveis []string
+		// O que não deu para ler dentro das pastas (subpasta sem permissão,
+		// arquivo travado). Antes era ignorado em silêncio: faltava uma
+		// subárvore inteira e a sessão saía "concluída". Agora conta, e o
+		// backup termina parcial com exemplos do que ficou de fora.
+		naoLidos := 0
+		var exemplos []string
+		anotar := func(p string, err error) {
+			naoLidos++
+			if len(exemplos) < maxExemplosNaoLidos {
+				causa := err
+				if u := errors.Unwrap(err); u != nil {
+					causa = u // sem repetir o caminho do PathError
+				}
+				exemplos = append(exemplos, fmt.Sprintf("%s (%v)", p, causa))
+			}
+		}
 		for _, sp := range sourcePaths {
 			// O caminho escolhido no plano (como a pessoa o vê) e o caminho de
 			// verdade, com os links seguidos no servidor. Lê-se do de verdade;
@@ -53,7 +74,11 @@ func Walk(ctx context.Context, hostRoot string, sourcePaths []string, excludeGlo
 					if path == root {
 						return fmt.Errorf("não consegui ler %s: %w", root, err)
 					}
-					// arquivo apagado durante walk ou permissão — ignoramos e seguimos
+					// Apagado durante a leitura: não há o que copiar, e não é
+					// falha. O resto (permissão, erro de disco) entra na conta.
+					if !errors.Is(err, fs.ErrNotExist) {
+						anotar(path, err)
+					}
 					return nil
 				}
 				if ctx.Err() != nil {
@@ -68,6 +93,9 @@ func Walk(ctx context.Context, hostRoot string, sourcePaths []string, excludeGlo
 				leitura := path
 				info, err := d.Info()
 				if err != nil {
+					if !errors.Is(err, fs.ErrNotExist) {
+						anotar(path, err)
+					}
 					return nil
 				}
 				if d.Type()&fs.ModeSymlink != 0 {
@@ -108,6 +136,10 @@ func Walk(ctx context.Context, hostRoot string, sourcePaths []string, excludeGlo
 				errs <- err
 				return
 			}
+		}
+		if naoLidos > 0 {
+			ilegiveis = append(ilegiveis, fmt.Sprintf("%d itens não puderam ser lidos, ex.: %s",
+				naoLidos, strings.Join(exemplos, "; ")))
 		}
 		if len(ilegiveis) > 0 {
 			errs <- fmt.Errorf("%s", strings.Join(ilegiveis, "; "))

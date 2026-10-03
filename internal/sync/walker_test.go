@@ -129,3 +129,40 @@ func TestIrregularLegivelNoWindows(t *testing.T) {
 		t.Fatal("arquivo regular segue o caminho comum")
 	}
 }
+
+// Subpasta sem permissão dentro do plano: os outros arquivos seguem, mas o
+// walker avisa no fim (o daemon marca a sessão parcial). Antes, a subárvore
+// sumia do backup e a sessão saía "concluída".
+func TestWalkSubpastaIlegivelViraErro(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root lê pasta sem permissão")
+	}
+	raiz := t.TempDir()
+	if err := os.WriteFile(filepath.Join(raiz, "a.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	trancada := filepath.Join(raiz, "trancada")
+	if err := os.MkdirAll(trancada, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(trancada, "b.txt"), []byte("y"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(trancada, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(trancada, 0o755) })
+
+	arquivos, erros := Walk(context.Background(), "/", []string{raiz}, nil)
+	n := 0
+	for range arquivos {
+		n++
+	}
+	err := <-erros
+	if n != 1 {
+		t.Fatalf("esperava o arquivo legível, veio %d", n)
+	}
+	if err == nil || !strings.Contains(err.Error(), "1 itens não puderam ser lidos") || !strings.Contains(err.Error(), "trancada") {
+		t.Fatalf("a subpasta ilegível deveria virar erro (backup parcial), veio %v", err)
+	}
+}
