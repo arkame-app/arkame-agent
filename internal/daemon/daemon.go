@@ -790,7 +790,8 @@ func fsBrowseLoop(ctx context.Context, c *api.Client, cfg *config.Config) {
 //
 // Este é o único loop do agent que destrói dado. Ele não decide nada: só
 // executa o que o painel autorizou, e recusa o que estiver fora do prefixo do
-// storage ou sem VersionId (ver internal/purge).
+// storage, sem VersionId ou, no desbaste, a versão atual da chave (ver
+// internal/purge).
 func purgeLoop(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config.Config) {
 	ticker := time.NewTicker(1 * time.Hour)
 	defer ticker.Stop()

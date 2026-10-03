@@ -11,6 +11,13 @@
 //     Um plano malformado viraria perda de dados silenciosa.
 //   - item fora do prefixo do storage é recusado. O bucket é do cliente e
 //     pode ter muita coisa que não é nossa.
+//   - item de desbaste ("thinning") que aponta para a versão ATUAL da chave é
+//     recusado. Desbaste só existe para versões antigas; a atual é o arquivo
+//     como ele está hoje. Em 10/2026 o plano do painel chegou a listar a
+//     versão atual de arquivos que não mudavam — apagá-la deixaria a chave sem
+//     a cópia do estado presente. O agent confere com HeadObject (sem
+//     VersionId) antes de apagar. "hard_delete" (o arquivo saiu da origem e
+//     passou do prazo) apaga a atual de propósito e não passa por aqui.
 //
 // Um item recusado volta como falha, com o motivo. O painel registra e
 // ninguém descobre meses depois que a limpeza estava apagando o que não devia.
@@ -18,6 +25,7 @@ package purge
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -66,6 +74,9 @@ func Run(ctx context.Context, o Options, versions []Version) (deleted []Version,
 		}
 		aceitas = append(aceitas, v)
 	}
+
+	aceitas, recusadas := protegerVersaoAtual(ctx, o, aceitas)
+	failed = append(failed, recusadas...)
 
 	if len(failed) > 0 {
 		slog.Warn("itens do plano recusados pelo agent", "count", len(failed), "primeiro", failed[0].Error)
@@ -134,6 +145,73 @@ func Run(ctx context.Context, o Options, versions []Version) (deleted []Version,
 	}
 
 	return deleted, failed
+}
+
+// motivoDesbaste é o Reason dos itens que só podem ser versões antigas.
+const motivoDesbaste = "thinning"
+
+// protegerVersaoAtual recusa os itens de desbaste que apontam para a versão
+// atual da chave. Um HeadObject por chave (sem VersionId) diz qual é a atual.
+//
+// Na dúvida, recusa: se o HeadObject falhar por outro motivo que não "não
+// existe", o item volta como falha e a próxima rodada tenta de novo. Chave
+// sem versão atual (404: só versões antigas ou delete marker no topo) não tem
+// o que proteger.
+func protegerVersaoAtual(ctx context.Context, o Options, itens []Version) (aceitas []Version, recusadas []Failure) {
+	type atual struct {
+		versionID string
+		err       error
+	}
+	consultadas := map[string]atual{}
+	aceitas = itens[:0:0]
+	for _, v := range itens {
+		if v.Reason != motivoDesbaste {
+			aceitas = append(aceitas, v)
+			continue
+		}
+		a, ok := consultadas[v.Key]
+		if !ok {
+			a.versionID, a.err = versaoAtual(ctx, o, v.Key)
+			consultadas[v.Key] = a
+		}
+		switch {
+		case a.err != nil:
+			recusadas = append(recusadas, Failure{Key: v.Key, VersionID: v.VersionID,
+				Error: "desbaste recusado: não consegui conferir a versão atual da chave: " + resumir(a.err)})
+		case a.versionID != "" && a.versionID == v.VersionID:
+			recusadas = append(recusadas, Failure{Key: v.Key, VersionID: v.VersionID,
+				Error: "desbaste recusado: a versão pedida é a versão atual da chave (desbaste só apaga versões antigas)"})
+		default:
+			aceitas = append(aceitas, v)
+		}
+	}
+	return aceitas, recusadas
+}
+
+// versaoAtual devolve o VersionId da versão atual da chave, ou "" se a chave
+// não tem versão atual (404).
+func versaoAtual(ctx context.Context, o Options, key string) (string, error) {
+	out, err := o.S3.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(o.Bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		var nf *types.NotFound
+		if errors.As(err, &nf) {
+			return "", nil
+		}
+		var re interface{ HTTPStatusCode() int }
+		// Delete marker no topo: o HeadObject sem versão responde 404 (às vezes
+		// 405); em ambos a chave não tem versão atual a proteger.
+		if errors.As(err, &re) && (re.HTTPStatusCode() == 404 || re.HTTPStatusCode() == 405) {
+			return "", nil
+		}
+		return "", err
+	}
+	if out.VersionId == nil {
+		return "", nil
+	}
+	return *out.VersionId, nil
 }
 
 func validar(o Options, v Version) error {
