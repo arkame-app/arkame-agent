@@ -84,6 +84,21 @@ Binário Linux rodando local contra o painel em produção (`save.arkame.app`) +
 > (ENAMETOOLONG); no Windows, ERROR_CANT_RESOLVE_FILENAME e ERROR_FILENAME_EXCED_RANGE.
 > Só os demais erros (EACCES, EPERM, EIO, ESTALE…) deixam a sessão parcial: antes, um
 > link em laço esquecido deixava todo backup daquela origem parcial para sempre.
+>
+> O `/sessions/start` leva também `prefix_root` (string, sempre presente, `""` com as
+> chaves na raiz do bucket): o prefixo de chave do armazenamento com que esta sessão
+> monta as chaves (`<prefix_root>data/<agente>/…`). O painel lia a seleção da sessão sob
+> o prefixo em vigor; com o prefixo trocado e devolvido (`A/` → `B/` → `A/`), as chaves
+> sob `A/` de um servidor que ainda não rodou de novo pareciam removidas do servidor e
+> saíam na limpeza. O painel precisa ler a seleção sob o prefixo gravado, e tratar a
+> sessão sem o campo (agente antigo) como sem seleção conhecida.
+>
+> No Windows, o `setup` não trava mais quando o `.old` da troca anterior ainda está em
+> uso (um segundo agente no mesmo exe, ou a janela fechada no meio): o programa atual sai
+> como `.old-<aleatório>`, como no `install.ps1`, e na entrada saem todos os `.old*`
+> livres. E o `install.ps1` não para mais o serviço para trocar o exe (a troca é por
+> rename): antes, ao atualizar só o binário, o serviço ficava parado até o próximo boot.
+> Agora, nesse modo, o serviço que estava rodando é reiniciado já com a versão nova.
 
 - **Enrollment Ed25519**: `internal/enrollment` gera keypair, POST `/api/agents/enroll`, long-poll na `wait-token` até receber JWT bearer
 - **Bearer auth**: client HTTP envia `Authorization: Bearer <token>` em todos os requests pós-approval; `ErrNotReady` (204) e `ErrGone` (410) pra long-poll handling
