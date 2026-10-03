@@ -11,6 +11,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/arkame-app/agent/internal/config"
 )
@@ -104,14 +105,9 @@ func installPlatform(ctx context.Context, cfg *config.Config, opts Options) (*In
 	return installSystemd(ctx, cfg, opts)
 }
 
-// executar roda um comando e devolve a saída combinada; procurar acha o
-// executável no PATH. Variáveis para os testes trocarem o systemctl de verdade.
-var (
-	executar = func(ctx context.Context, nome string, args ...string) ([]byte, error) {
-		return exec.CommandContext(ctx, nome, args...).CombinedOutput()
-	}
-	procurar = exec.LookPath
-)
+// procurar acha o executável no PATH. Variável para os testes (ver também
+// executar, em reiniciar_unix.go).
+var procurar = exec.LookPath
 
 func installSystemd(ctx context.Context, cfg *config.Config, opts Options) (*Installed, error) {
 	if _, err := procurar("systemctl"); err != nil {
@@ -274,16 +270,57 @@ func unitChamaPrograma(arquivo, exe string) bool {
 	if err != nil {
 		return false
 	}
-	for _, l := range strings.Split(string(b), "\n") {
-		if v, ok := strings.CutPrefix(strings.TrimSpace(l), "ExecStart="); ok {
-			// Prefixos do systemd (-, @, :, +, !) vêm antes do caminho.
-			v = strings.ReplaceAll(strings.TrimLeft(v, "-@:+!"), "%%", "%")
-			if mesmoPrograma("linux", programaDaLinha(v), exe) {
-				return true
+	return mesmoPrograma("linux", programaDaUnit(string(b)), exe)
+}
+
+// pastaDeUnits é onde ficam as units de um escopo.
+type pastaDeUnits struct {
+	escopo Scope
+	dir    string
+}
+
+// dirUnitsDoSistema: variável para os testes.
+var dirUnitsDoSistema = "/etc/systemd/system"
+
+func pastasDeUnits() []pastaDeUnits {
+	pastas := []pastaDeUnits{{ScopeSystem, dirUnitsDoSistema}}
+	if d, err := userUnitDir(); err == nil {
+		pastas = append(pastas, pastaDeUnits{ScopeUser, d})
+	}
+	return pastas
+}
+
+// registrados lê as units do sistema e do usuário, com o programa de cada uma.
+func registrados() []servicoRegistrado {
+	var todos []servicoRegistrado
+	for _, p := range pastasDeUnits() {
+		m, _ := filepath.Glob(filepath.Join(p.dir, "*.service"))
+		for _, f := range m {
+			b, err := os.ReadFile(f)
+			if err != nil {
+				continue
 			}
+			todos = append(todos, servicoRegistrado{
+				nome:     strings.TrimSuffix(filepath.Base(f), ".service"),
+				escopo:   p.escopo,
+				programa: programaDaUnit(string(b)),
+			})
 		}
 	}
-	return false
+	return todos
+}
+
+// rodandoNoSO: a unit está ativa (systemctl [--user] is-active). Como root,
+// o --user não acha o gerenciador do usuário e responde que não.
+func rodandoNoSO(s servicoRegistrado) bool {
+	args := []string{"is-active", "--quiet", s.nome}
+	if s.escopo == ScopeUser {
+		args = append([]string{"--user"}, args...)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := executar(ctx, "systemctl", args...)
+	return err == nil
 }
 
 // configDoServico lê o env-file da unit de um agente no escopo dado.

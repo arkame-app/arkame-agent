@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 
@@ -140,7 +141,8 @@ func newSetupCmd() *cobra.Command {
 // programa trocado, menos o proprio: o `install` que o setup abre o
 // re-registra e inicia (sempre com o nome padrão). Sem isso, um segundo
 // agente no mesmo exe (arkame-agent-oci) seguia rodando o .old, sem aviso,
-// até o próximo boot. Devolve os que não reiniciaram, que saem num aviso.
+// até o próximo boot — no Linux e no macOS também: o processo segue com o
+// arquivo antigo depois da troca. Devolve os que não reiniciaram, que saem num aviso.
 func reiniciarOutrosDoPrograma(w io.Writer, rodando []string, proprio string, reiniciar func(string) error) []string {
 	var falharam []string
 	for _, nome := range rodando {
@@ -156,9 +158,20 @@ func reiniciarOutrosDoPrograma(w io.Writer, rodando []string, proprio string, re
 	}
 	if len(falharam) > 0 {
 		fmt.Fprintln(w, "  ! Continuam na versão antiga:", strings.Join(falharam, ", "))
-		fmt.Fprintln(w, "    Reinicie-os (services.msc) para a versão nova valer.")
+		fmt.Fprintln(w, "    Reinicie-os ("+comoReiniciar(runtime.GOOS)+") para a versão nova valer.")
 	}
 	return falharam
+}
+
+// comoReiniciar é onde o operador reinicia um serviço à mão, em cada SO.
+func comoReiniciar(goos string) string {
+	switch goos {
+	case "windows":
+		return "services.msc"
+	case "darwin":
+		return "sudo launchctl kickstart -k system/<label>, ou launchctl kickstart -k gui/$(id -u)/<label>"
+	}
+	return "sudo systemctl restart <serviço>, ou systemctl --user restart <serviço>"
 }
 
 // reiniciarSeOInstallFalhou: o install não terminou (chave errada ou

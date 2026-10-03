@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/arkame-app/agent/internal/config"
 )
@@ -101,6 +102,49 @@ func servicosDoAgente(string) []string {
 		}
 	}
 	return nomes
+}
+
+// pastasDePlists é onde ficam os plists de cada escopo.
+func pastasDePlists() map[Scope]string {
+	pastas := map[Scope]string{ScopeSystem: "/Library/LaunchDaemons"}
+	if h, err := os.UserHomeDir(); err == nil {
+		pastas[ScopeUser] = filepath.Join(h, "Library", "LaunchAgents")
+	}
+	return pastas
+}
+
+// registrados lê os jobs app.arkame.* do sistema e do usuário, com o programa
+// de cada um, pelo nome de serviço que os gerou (como servicosDoAgente).
+func registrados() []servicoRegistrado {
+	var todos []servicoRegistrado
+	for _, escopo := range []Scope{ScopeSystem, ScopeUser} {
+		dir, ok := pastasDePlists()[escopo]
+		if !ok {
+			continue
+		}
+		m, _ := filepath.Glob(filepath.Join(dir, "app.arkame.*.plist"))
+		for _, f := range m {
+			b, err := os.ReadFile(f)
+			if err != nil {
+				continue
+			}
+			todos = append(todos, servicoRegistrado{
+				nome:     "arkame-" + strings.TrimPrefix(strings.TrimSuffix(filepath.Base(f), ".plist"), "app.arkame."),
+				escopo:   escopo,
+				programa: programaDoPlist(string(b)),
+			})
+		}
+	}
+	return todos
+}
+
+// rodandoNoSO: o job está carregado e rodando (launchctl print → state =
+// running).
+func rodandoNoSO(s servicoRegistrado) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := executar(ctx, "launchctl", "print", serviceTarget(s.escopo, LaunchdLabel(s.nome)))
+	return err == nil && launchdRodando(string(out))
 }
 
 // servicoChamaPrograma diz se há um plist do serviço nome, do sistema ou do
