@@ -151,3 +151,105 @@ func TestInstallDizOPassoDoAcessoTotalNoMacOS(t *testing.T) {
 		t.Fatalf("fora do macOS não há passo: %q", p)
 	}
 }
+
+// Reinstalação com a chave no arquivo e um código de outro armazenamento: o
+// install gravava o armazenamento novo (e os caminhos da identidade) antes da
+// aprovação. Ctrl-C na espera deixava o arquivo com o bucket, a região e o
+// endereço novos e o AGENT_ID e o token antigos — o daemon antigo, no
+// próximo reinício, mirava o bucket novo com os planos do velho. Agora o
+// arquivo só muda com a aprovação.
+func TestInstallCanceladoNaEsperaNaoMexeNoArquivo(t *testing.T) {
+	limparAmbienteDaIdentidade(t)
+	isolarAWS(t)
+	semTerminal(t)
+	servico := trocarInstalarServico(t)
+	s3 := s3Falso(t, map[string][]string{"velho": {"ak"}, "novo": {"ak"}})
+	ctx, cancelar := context.WithCancel(context.Background())
+	defer cancelar()
+	var esperou atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/agents/install-config":
+			_, _ = io.WriteString(w, `{"agent_id":"ag-novo","display_name":"Srv","storage":{"id":"st-novo","display_name":"Novo","bucket":"novo","region":"sa-east-1","endpoint":"`+s3+`"}}`)
+		case "/api/agents/enroll":
+			_, _ = io.WriteString(w, `{"agent_id":"ag-novo","status":"pending","wait_url":"/w"}`)
+		case "/w":
+			// A pessoa desiste enquanto espera a aprovação (Ctrl-C).
+			esperou.Store(true)
+			cancelar()
+			<-r.Context().Done()
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	arquivo := filepath.Join(t.TempDir(), "agent-x.env")
+	conteudo := "AGENT_ID=ag-velho\nSTORAGE_ID=st-velho\nSTORAGE_BUCKET=velho\nSTORAGE_REGION=us-west-2\nSTORAGE_ENDPOINT=" + s3 +
+		"\nSTORAGE_ACCESS_KEY=ak\nSTORAGE_SECRET_KEY=sk\n"
+	if err := os.WriteFile(arquivo, []byte(conteudo), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newInstallCmd()
+	cmd.SetArgs([]string{"--config", arquivo, "--token", "atk_x", "--panel-url", srv.URL})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	if err := cmd.ExecuteContext(ctx); err == nil {
+		t.Fatal("o install cancelado na espera terminou sem erro")
+	}
+	if !esperou.Load() {
+		t.Fatal("o install não chegou à espera da aprovação")
+	}
+	if b, _ := os.ReadFile(arquivo); string(b) != conteudo {
+		t.Fatalf("o arquivo mudou sem aprovação:\n%s", b)
+	}
+	if servico.Load() != 0 {
+		t.Fatal("o serviço foi instalado sem aprovação")
+	}
+}
+
+// Aprovado, o armazenamento novo, os caminhos da identidade e o AGENT_ID da
+// aprovação vão ao arquivo de uma vez.
+func TestInstallAprovadoGravaOArmazenamentoNovo(t *testing.T) {
+	limparAmbienteDaIdentidade(t)
+	isolarAWS(t)
+	semTerminal(t)
+	trocarInstalarServico(t)
+	s3 := s3Falso(t, map[string][]string{"velho": {"ak"}, "novo": {"ak"}})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/agents/install-config":
+			_, _ = io.WriteString(w, `{"agent_id":"ag-novo","display_name":"Srv","storage":{"id":"st-novo","display_name":"Novo","bucket":"novo","region":"sa-east-1","endpoint":"`+s3+`"}}`)
+		case "/api/agents/enroll":
+			_, _ = io.WriteString(w, `{"agent_id":"ag-novo","status":"pending","wait_url":"/w"}`)
+		case "/w":
+			_, _ = io.WriteString(w, `{"agent_token":"a.b.c","expires_at":"2027-10-03T00:00:00Z"}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	arquivo := filepath.Join(dir, "agent-x.env")
+	if err := os.WriteFile(arquivo, []byte("AGENT_ID=ag-velho\nSTORAGE_ID=st-velho\nSTORAGE_BUCKET=velho\nSTORAGE_REGION=us-west-2\nSTORAGE_ENDPOINT="+s3+
+		"\nSTORAGE_ACCESS_KEY=ak\nSTORAGE_SECRET_KEY=sk\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := newInstallCmd()
+	cmd.SetArgs([]string{"--config", arquivo, "--token", "atk_x", "--panel-url", srv.URL})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ := config.Load(arquivo, config.Overrides{})
+	if cfg.AgentID != "ag-novo" || cfg.StorageID != "st-novo" || cfg.StorageBucket != "novo" || cfg.StorageRegion != "sa-east-1" ||
+		cfg.StorageAccessKey != "ak" || cfg.TokenPath != filepath.Join(dir, "agent-x.token.jwt") {
+		t.Fatalf("arquivo depois da aprovação: %+v", cfg)
+	}
+	if _, err := os.Stat(cfg.TokenPath); err != nil {
+		t.Fatalf("token: %v", err)
+	}
+}

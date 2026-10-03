@@ -128,11 +128,14 @@ func Run(ctx context.Context, cfg *config.Config, o Options) (*Result, error) {
 }
 
 // Concluir grava a identidade aprovada de uma vez: a chave privada, o
-// agent.id, o AGENT_ID (e o armazenamento) no env-file e o token. O token
+// agent.id, o AGENT_ID (e o armazenamento) no env-file e o token. As linhas
+// pendentes do install (armazenamento e chave testados, caminhos da
+// identidade) vão ao env-file junto com o AGENT_ID: antes da aprovação o
+// arquivo não muda, e Ctrl-C na espera o deixa como estava. O token
 // por último: sem ele, o daemon não sobe, em vez de subir com AGENT_ID e
 // token de identidades diferentes. Depois tira do env-file o
 // ENROLLMENT_TOKEN, já usado.
-func Concluir(cfg *config.Config, r *Result, token string) error {
+func Concluir(cfg *config.Config, r *Result, token string, pendentes []string) error {
 	if r == nil || r.chave == nil {
 		return errors.New("enrollment sem identidade pendente")
 	}
@@ -143,7 +146,7 @@ func Concluir(cfg *config.Config, r *Result, token string) error {
 	if err := persistAgentID(cfg, r.AgentID); err != nil {
 		return fmt.Errorf("persistindo agent_id: %w", err)
 	}
-	if err := persistirNoArquivo(cfg, r.resposta); err != nil {
+	if err := persistirNoArquivo(cfg, r.resposta, pendentes); err != nil {
 		return fmt.Errorf("gravando a identidade nova em %s: %w", cfg.ConfigPath, err)
 	}
 	if err := PersistToken(cfg, token); err != nil {
@@ -241,14 +244,17 @@ func jaEmitido(err error) bool {
 // era reescrito, e o daemon subia com o AGENT_ID velho, assinando com a chave
 // nova: 403 para sempre. Agora o enrollment bem-sucedido sempre reescreve o
 // AGENT_ID (e o armazenamento, quando o painel o informa).
-func persistirNoArquivo(cfg *config.Config, resp api.EnrollResponse) error {
+func persistirNoArquivo(cfg *config.Config, resp api.EnrollResponse, pendentes []string) error {
 	if resp.AgentID != "" {
 		cfg.AgentID = resp.AgentID
 	}
-	if cfg.ConfigPath == "" || resp.AgentID == "" {
+	if cfg.ConfigPath == "" {
 		return nil
 	}
-	linhas := []string{"AGENT_ID=" + resp.AgentID}
+	var linhas []string
+	if resp.AgentID != "" {
+		linhas = append(linhas, "AGENT_ID="+resp.AgentID)
+	}
 	if resp.StorageID != "" {
 		linhas = append(linhas, "STORAGE_ID="+resp.StorageID)
 		cfg.StorageID = resp.StorageID
@@ -256,6 +262,23 @@ func persistirNoArquivo(cfg *config.Config, resp api.EnrollResponse) error {
 	if resp.StorageBucket != "" {
 		linhas = append(linhas, "STORAGE_BUCKET="+resp.StorageBucket)
 		cfg.StorageBucket = resp.StorageBucket
+	}
+	// A resposta da aprovação vence a pendente da mesma chave (o AGENT_ID
+	// que o install-config adiantou, por exemplo).
+	daResposta := map[string]bool{}
+	for _, l := range linhas {
+		k, _, _ := strings.Cut(l, "=")
+		daResposta[k] = true
+	}
+	var todas []string
+	for _, l := range pendentes {
+		if k, _, _ := strings.Cut(l, "="); !daResposta[k] {
+			todas = append(todas, l)
+		}
+	}
+	linhas = append(todas, linhas...)
+	if len(linhas) == 0 {
+		return nil
 	}
 	for _, l := range linhas {
 		// Cada valor é uma linha: uma quebra escreveria outra chave no arquivo.

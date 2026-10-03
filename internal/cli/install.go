@@ -93,10 +93,18 @@ agent_id existente, preservando histórico e path no bucket.`,
 				configFile = abs
 			}
 
+			// Linhas do env-file que só vão ao disco com a aprovação
+			// (enrollment.Concluir): o armazenamento e a chave testados e os
+			// caminhos da identidade. Gravadas antes, um Ctrl-C na espera
+			// deixava o arquivo com o armazenamento novo e o AGENT_ID e o
+			// token antigos — o daemon antigo, no próximo reinício, mirava o
+			// bucket novo com os planos do velho.
+			var pendentes []string
 			carregar := func() (*config.Config, error) {
 				c, err := config.Load(configFile, config.Overrides{
 					EnrollmentToken: enrollmentToken,
 					PanelURL:        panelURL,
+					Pendentes:       pendentes,
 				})
 				if err != nil {
 					return nil, fmt.Errorf("carregando config: %w", err)
@@ -118,11 +126,12 @@ agent_id existente, preservando histórico e path no bucket.`,
 			// A chave do bucket, testada, antes de registrar: servidor
 			// registrado com chave errada falharia no primeiro backup, calado.
 			if checkStorage {
-				mudou, err := garantirCredencial(ctx, cfg, configFile)
+				linhas, err := garantirCredencial(ctx, cfg, configFile)
 				if err != nil {
 					return err
 				}
-				if mudou {
+				if len(linhas) > 0 {
+					pendentes = append(pendentes, linhas...)
 					if cfg, err = carregar(); err != nil {
 						return err
 					}
@@ -132,9 +141,10 @@ agent_id existente, preservando histórico e path no bucket.`,
 			// Agente com --config próprio (mais de um na máquina): token, chave
 			// e agent.id ao lado do arquivo dele, e não nos padrões que o
 			// agente da configuração padrão também usa.
-			if mudou, err := identidadePropria(configFile, cfg); err != nil {
+			if linhas, err := identidadePropria(configFile, cfg); err != nil {
 				return err
-			} else if mudou {
+			} else if len(linhas) > 0 {
+				pendentes = append(pendentes, linhas...)
 				if cfg, err = carregar(); err != nil {
 					return err
 				}
@@ -163,7 +173,7 @@ agent_id existente, preservando histórico e path no bucket.`,
 			if err != nil {
 				return fmt.Errorf("aguardando aprovação: %w", err)
 			}
-			if err := enrollment.Concluir(cfg, result, tok.AgentToken); err != nil {
+			if err := enrollment.Concluir(cfg, result, tok.AgentToken, pendentes); err != nil {
 				return err
 			}
 			slog.Info("aprovado — token persistido", "expires_at", tok.ExpiresAt)
@@ -244,16 +254,17 @@ agent_id existente, preservando histórico e path no bucket.`,
 	return cmd
 }
 
-// identidadePropria grava no env-file caminhos de identidade derivados dele
-// (agent-oci.env → agent-oci.token.jwt, agent-oci.key.pem, agent-oci.agent.id)
-// quando o arquivo não é o padrão e o caminho ainda é o padrão. Sem isso, o
-// segundo agente da máquina gravava a chave e o token por cima dos do
-// primeiro. Caminho já definido (no arquivo ou no ambiente) não muda, nem o
-// agente da configuração padrão.
-func identidadePropria(configFile string, cfg *config.Config) (bool, error) {
+// identidadePropria devolve as linhas do env-file com caminhos de identidade
+// derivados dele (agent-oci.env → agent-oci.token.jwt, agent-oci.key.pem,
+// agent-oci.agent.id) quando o arquivo não é o padrão e o caminho ainda é o
+// padrão. Sem isso, o segundo agente da máquina gravava a chave e o token por
+// cima dos do primeiro. Caminho já definido (no arquivo ou no ambiente) não
+// muda, nem o agente da configuração padrão. As linhas só vão ao arquivo com
+// a aprovação (enrollment.Concluir); aqui só se confere que ele é gravável.
+func identidadePropria(configFile string, cfg *config.Config) ([]string, error) {
 	padrao, err := filepath.Abs(config.DefaultPath)
 	if err != nil || chaveDeCaminho(configFile) == chaveDeCaminho(padrao) {
-		return false, nil
+		return nil, nil
 	}
 	base := strings.TrimSuffix(configFile, filepath.Ext(configFile))
 	var linhas []string
@@ -267,12 +278,12 @@ func identidadePropria(configFile string, cfg *config.Config) (bool, error) {
 		linhas = append(linhas, "AGENT_ID_PATH="+base+".agent.id")
 	}
 	if len(linhas) == 0 {
-		return false, nil
+		return nil, nil
 	}
-	if err := setup.Gravar(configFile, linhas); err != nil {
-		return false, fmt.Errorf("gravando os caminhos da identidade em %s: %w", configFile, err)
+	if err := setup.PodeGravar(configFile); err != nil {
+		return nil, err
 	}
-	return true, nil
+	return linhas, nil
 }
 
 // passoDoAcessoTotal é o passo que falta no macOS: sem o Acesso Total ao

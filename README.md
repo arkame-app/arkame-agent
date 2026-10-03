@@ -226,7 +226,8 @@ estiver lá e para com a causa se o bucket recusar. `--check-storage=false` pula
 o teste.
 
 O `install` sempre espera a aprovação no painel (Ctrl-C cancela sem mexer no
-disco): a identidade nova só é gravada com ela, e o serviço só é instalado
+arquivo de configuração): a identidade nova, e também o armazenamento e a
+chave já testados, só são gravados com ela, e o serviço só é instalado
 depois, com o token no disco. Não há `--wait=false` — o enrollment deixado sem
 espera não teria quem o concluísse.
 

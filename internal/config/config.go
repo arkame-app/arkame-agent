@@ -92,6 +92,11 @@ type Overrides struct {
 	EnrollmentToken string
 	PanelURL        string
 	HostRoot        string
+	// Pendentes são linhas do env-file ("CHAVE=valor") que o install ainda
+	// não gravou: valem como se estivessem no arquivo (o ambiente do processo
+	// continua vencendo). O install só as grava com a aprovação
+	// (enrollment.Concluir); desistindo antes, o arquivo fica como estava.
+	Pendentes []string
 }
 
 // Load lê o env-file (se existir) + variáveis de ambiente + overrides.
@@ -122,6 +127,11 @@ func Load(envFile string, o Overrides) (*Config, error) {
 			return nil, fmt.Errorf("abrindo %s: %w", envFile, err)
 		}
 		// se não existe, seguimos com env vazio (primeira instalação)
+	}
+	for _, l := range o.Pendentes {
+		if k, v, ok := strings.Cut(l, "="); ok {
+			env[strings.TrimSpace(k)] = strings.Trim(strings.TrimSpace(v), `"'`)
+		}
 	}
 
 	get := func(key string) string {

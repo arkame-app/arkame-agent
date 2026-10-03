@@ -58,11 +58,14 @@ func TestInstallComConfigPropriaSeparaAIdentidade(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg, _ := config.Load(arquivo, config.Overrides{})
-	mudou, err := identidadePropria(arquivo, cfg)
-	if err != nil || !mudou {
-		t.Fatalf("mudou=%v err=%v", mudou, err)
+	linhas, err := identidadePropria(arquivo, cfg)
+	if err != nil || len(linhas) == 0 {
+		t.Fatalf("linhas=%v err=%v", linhas, err)
 	}
-	cfg, _ = config.Load(arquivo, config.Overrides{})
+	if b, _ := os.ReadFile(arquivo); string(b) != "STORAGE_BUCKET=b\n" {
+		t.Fatalf("o arquivo mudou antes da aprovação:\n%s", b)
+	}
+	cfg, _ = config.Load(arquivo, config.Overrides{Pendentes: linhas})
 	base := filepath.Join(dir, "agent-oci")
 	if cfg.TokenPath != base+".token.jwt" || cfg.PrivateKeyPath != base+".key.pem" || cfg.AgentIDPath != base+".agent.id" {
 		t.Fatalf("identidade: %s %s %s", cfg.TokenPath, cfg.PrivateKeyPath, cfg.AgentIDPath)
@@ -71,12 +74,12 @@ func TestInstallComConfigPropriaSeparaAIdentidade(t *testing.T) {
 		t.Fatal("o resto do arquivo se perdeu")
 	}
 	// De novo: nada muda.
-	if mudou, _ := identidadePropria(arquivo, cfg); mudou {
+	if linhas, _ := identidadePropria(arquivo, cfg); linhas != nil {
 		t.Fatal("reescreveu caminhos já definidos")
 	}
 	// A configuração padrão segue com os caminhos padrão.
 	padrao, _ := filepath.Abs(config.DefaultPath)
-	if mudou, _ := identidadePropria(padrao, &config.Config{TokenPath: config.DefaultTokenPath}); mudou {
+	if linhas, _ := identidadePropria(padrao, &config.Config{TokenPath: config.DefaultTokenPath}); linhas != nil {
 		t.Fatal("mexeu na configuração padrão")
 	}
 }

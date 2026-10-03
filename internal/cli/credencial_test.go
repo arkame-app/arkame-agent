@@ -100,9 +100,9 @@ func TestChaveDoArquivoTestadaNoArmazenamentoDoCodigo(t *testing.T) {
 	conteudo := fmt.Sprintf("AGENT_ID=ag-velho\nSTORAGE_ID=st-velho\nSTORAGE_BUCKET=velho\nSTORAGE_REGION=us-west-2\nSTORAGE_ENDPOINT=%s\nSTORAGE_ACCESS_KEY=ak-velha\nSTORAGE_SECRET_KEY=sk\n", s3)
 	arquivo := arquivoDeConfig(t, conteudo)
 
-	mudou, err := garantirCredencial(context.Background(), carregarCfg(t, arquivo, painel), arquivo)
+	linhas, err := garantirCredencial(context.Background(), carregarCfg(t, arquivo, painel), arquivo)
 	if err == nil {
-		t.Fatalf("a chave do bucket velho passou como se servisse ao novo (mudou=%v)", mudou)
+		t.Fatalf("a chave do bucket velho passou como se servisse ao novo (linhas=%v)", linhas)
 	}
 	if !strings.Contains(err.Error(), "novo") {
 		t.Fatalf("o erro não diz qual bucket recusou: %v", err)
@@ -112,20 +112,25 @@ func TestChaveDoArquivoTestadaNoArmazenamentoDoCodigo(t *testing.T) {
 	}
 }
 
-// A chave do arquivo serve no armazenamento novo: grava o armazenamento novo
-// inteiro (região e endereço juntos), mantém a chave e não toca no AGENT_ID.
+// A chave do arquivo serve no armazenamento novo: devolve o armazenamento
+// novo inteiro (região e endereço juntos), mantém a chave e não toca no
+// AGENT_ID. O arquivo não muda: as linhas só vão ao disco com a aprovação.
 func TestArmazenamentoNovoGravadoInteiro(t *testing.T) {
 	isolarAWS(t)
 	semTerminal(t)
 	s3 := s3Falso(t, map[string][]string{"velho": {"ak"}, "novo": {"ak"}})
 	painel := painelDeInstalacao(t, fmt.Sprintf(`{"id":"st-novo","display_name":"Novo","bucket":"novo","region":"sa-east-1","endpoint":%q}`, s3+"/"))
-	arquivo := arquivoDeConfig(t, fmt.Sprintf("AGENT_ID=ag-velho\nSTORAGE_ID=st-velho\nSTORAGE_BUCKET=velho\nSTORAGE_REGION=us-west-2\nSTORAGE_ENDPOINT=%s\nSTORAGE_ACCESS_KEY=ak\nSTORAGE_SECRET_KEY=sk\n", s3))
+	conteudo := fmt.Sprintf("AGENT_ID=ag-velho\nSTORAGE_ID=st-velho\nSTORAGE_BUCKET=velho\nSTORAGE_REGION=us-west-2\nSTORAGE_ENDPOINT=%s\nSTORAGE_ACCESS_KEY=ak\nSTORAGE_SECRET_KEY=sk\n", s3)
+	arquivo := arquivoDeConfig(t, conteudo)
 
-	mudou, err := garantirCredencial(context.Background(), carregarCfg(t, arquivo, painel), arquivo)
-	if err != nil || !mudou {
-		t.Fatalf("mudou=%v err=%v", mudou, err)
+	linhas, err := garantirCredencial(context.Background(), carregarCfg(t, arquivo, painel), arquivo)
+	if err != nil || len(linhas) == 0 {
+		t.Fatalf("linhas=%v err=%v", linhas, err)
 	}
-	depois, _ := config.Load(arquivo, config.Overrides{})
+	if b, _ := os.ReadFile(arquivo); string(b) != conteudo {
+		t.Fatalf("o arquivo mudou antes da aprovação:\n%s", b)
+	}
+	depois, _ := config.Load(arquivo, config.Overrides{Pendentes: linhas})
 	if depois.StorageID != "st-novo" || depois.StorageBucket != "novo" || depois.StorageRegion != "sa-east-1" || depois.StorageEndpoint != s3+"/" {
 		t.Fatalf("armazenamento: id=%q bucket=%q região=%q endereço=%q", depois.StorageID, depois.StorageBucket, depois.StorageRegion, depois.StorageEndpoint)
 	}
@@ -143,9 +148,9 @@ func TestMesmoArmazenamentoNaoReescreve(t *testing.T) {
 	conteudo := fmt.Sprintf("STORAGE_ID=st\nSTORAGE_BUCKET=b\nSTORAGE_ENDPOINT=%s\nSTORAGE_ACCESS_KEY=ak\nSTORAGE_SECRET_KEY=sk\n", s3)
 	arquivo := arquivoDeConfig(t, conteudo)
 
-	mudou, err := garantirCredencial(context.Background(), carregarCfg(t, arquivo, painel), arquivo)
-	if err != nil || mudou {
-		t.Fatalf("mudou=%v err=%v", mudou, err)
+	linhas, err := garantirCredencial(context.Background(), carregarCfg(t, arquivo, painel), arquivo)
+	if err != nil || linhas != nil {
+		t.Fatalf("linhas=%v err=%v", linhas, err)
 	}
 	if b, _ := os.ReadFile(arquivo); string(b) != conteudo {
 		t.Fatalf("o arquivo mudou:\n%s", b)

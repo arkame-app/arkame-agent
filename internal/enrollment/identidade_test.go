@@ -116,7 +116,7 @@ func TestEnrollmentReescreveAIdentidadeNoArquivo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := Concluir(cfg, r, tok.AgentToken); err != nil {
+	if err := Concluir(cfg, r, tok.AgentToken, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -178,7 +178,7 @@ func TestEnrollmentSemArmazenamentoMantemOArquivo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := Concluir(cfg, r, "a.b.novo"); err != nil {
+	if err := Concluir(cfg, r, "a.b.novo", nil); err != nil {
 		t.Fatal(err)
 	}
 	depois := in.carregar(t, config.Overrides{})
@@ -203,7 +203,7 @@ func TestAprovacaoTiraOCodigoUsadoDoArquivo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := Concluir(cfg, r, "a.b.novo"); err != nil {
+	if err := Concluir(cfg, r, "a.b.novo", nil); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(ler(t, in.arquivo), "ENROLLMENT_TOKEN") || cfg.EnrollmentToken != "" {
@@ -211,5 +211,32 @@ func TestAprovacaoTiraOCodigoUsadoDoArquivo(t *testing.T) {
 	}
 	if depois := in.carregar(t, config.Overrides{}); depois.AgentID != "novo" || depois.StorageBucket != "b" {
 		t.Fatalf("o resto do arquivo se perdeu: %+v", depois)
+	}
+}
+
+// As linhas que o install deixou pendentes (armazenamento e chave testados,
+// caminhos da identidade) vão ao arquivo com a aprovação, junto do AGENT_ID;
+// o AGENT_ID da aprovação vence o que o install-config adiantou.
+func TestConcluirGravaAsLinhasPendentes(t *testing.T) {
+	in := novaInstalacao(t, "AGENT_ID=antigo\nSTORAGE_ID=st\nSTORAGE_BUCKET=b\nSIBLING_BUCKETS=outro\n")
+	url := painelDeEnroll(t, `{"agent_id":"novo","status":"pending","wait_url":"/w"}`)
+	t.Setenv("AGENT_ID", "")
+	pendentes := []string{"AGENT_ID=adiantado", "STORAGE_ID=st-novo", "STORAGE_BUCKET=b-novo", "STORAGE_REGION=sa-east-1",
+		"STORAGE_ACCESS_KEY=ak-nova", "STORAGE_SECRET_KEY=sk-nova"}
+	cfg := in.carregar(t, config.Overrides{PanelURL: url, EnrollmentToken: "atk_x", Pendentes: pendentes})
+	r, err := Run(context.Background(), cfg, Options{Hostname: "h"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Concluir(cfg, r, "a.b.novo", pendentes); err != nil {
+		t.Fatal(err)
+	}
+	depois := in.carregar(t, config.Overrides{})
+	if depois.AgentID != "novo" || depois.StorageID != "st-novo" || depois.StorageBucket != "b-novo" ||
+		depois.StorageRegion != "sa-east-1" || depois.StorageAccessKey != "ak-nova" || depois.StorageSecretKey != "sk-nova" {
+		t.Fatalf("pendentes não gravadas com a aprovação: %+v", depois)
+	}
+	if len(depois.SiblingBuckets) != 1 || strings.Count(ler(t, in.arquivo), "AGENT_ID=") != 1 {
+		t.Fatalf("arquivo:\n%s", ler(t, in.arquivo))
 	}
 }

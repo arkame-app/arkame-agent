@@ -18,15 +18,18 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// garantirCredencial deixa o arquivo de configuração com uma chave que o bucket
-// aceita, antes do registro no painel.
+// garantirCredencial confere, antes do registro no painel, que há uma chave
+// que o bucket aceita, e devolve as linhas do env-file a gravar — sem
+// gravá-las: só vão ao disco com a aprovação (enrollment.Concluir), e um
+// Ctrl-C na espera deixa o arquivo como estava.
 //
 //   - Sem chave no arquivo: pergunta ao painel qual bucket (pelo código de
-//     instalação), pede a chave no terminal, testa e grava.
+//     instalação), pede a chave no terminal, testa e devolve o armazenamento
+//     e a chave.
 //   - Com chave: pergunta ao painel também. Se o código aponta para outro
 //     armazenamento (bucket, região ou endereço), testa a chave do arquivo no
-//     armazenamento novo e grava o armazenamento novo inteiro; senão, testa no
-//     do arquivo. Recusada, pede de novo (havendo terminal) ou para com a
+//     armazenamento novo e devolve o armazenamento novo inteiro; senão, testa
+//     no do arquivo. Recusada, pede de novo (havendo terminal) ou para com a
 //     causa.
 //
 // Antes, com chave, só o bucket do arquivo era testado; aprovado o servidor,
@@ -34,77 +37,76 @@ import (
 // região, o endereço e a chave do armazenamento antigo — o primeiro backup
 // falhava.
 //
-// Devolve se o arquivo mudou, para o chamador reler só nesse caso.
-func garantirCredencial(ctx context.Context, cfg *config.Config, caminho string) (bool, error) {
+// Devolve nil quando nada muda; o chamador relê a config com as linhas
+// (config.Overrides.Pendentes).
+func garantirCredencial(ctx context.Context, cfg *config.Config, caminho string) ([]string, error) {
 	semChave := cfg.StorageAccessKey == "" || cfg.StorageSecretKey == ""
 
 	if !semChave {
 		alvo, linhas, err := armazenamentoDoCodigo(ctx, cfg)
 		if err != nil {
-			return false, err
+			return nil, err
 		}
 		if linhas != nil {
 			if err := setup.PodeGravar(caminho); err != nil {
-				return false, err
+				return nil, err
 			}
 		}
 		err = storage.Check(ctx, alvo)
 		if err == nil {
 			fmt.Fprintln(os.Stderr, "  ✓ O bucket", alvo.StorageBucket, "aceitou a chave de", caminho)
-			if linhas == nil {
-				return false, nil
+			if linhas != nil {
+				fmt.Fprintln(os.Stderr, "  ✓ O armazenamento novo vai para", caminho, "com a aprovação")
 			}
-			if err := setup.Gravar(caminho, linhas); err != nil {
-				return false, err
-			}
-			fmt.Fprintln(os.Stderr, "  ✓ Armazenamento novo gravado em", caminho)
-			return true, nil
+			return linhas, nil
 		}
 		t, terr := abrirTerminal()
 		if terr != nil || storage.Classe(err) != "chave" {
 			// Sem terminal, ou problema que outra chave não resolve.
 			if linhas != nil {
-				return false, fmt.Errorf("a chave de %s não serve para o bucket %s, que o código de instalação indica: %s (%v). "+
+				return nil, fmt.Errorf("a chave de %s não serve para o bucket %s, que o código de instalação indica: %s (%v). "+
 					"Rode o comando num terminal para digitar a chave desse bucket, ou grave-a em %s antes", caminho, alvo.StorageBucket, storage.Causa(err), err, caminho)
 			}
-			return false, fmt.Errorf("%s (%v). Arquivo: %s", storage.Causa(err), err, caminho)
+			return nil, fmt.Errorf("%s (%v). Arquivo: %s", storage.Causa(err), err, caminho)
 		}
 		defer t.Close()
+		if linhas == nil {
+			if err := setup.PodeGravar(caminho); err != nil {
+				return nil, err
+			}
+		}
 		fmt.Fprintf(os.Stderr, "\n  ✗ A chave de %s não funciona no bucket %s: %s.\n", caminho, alvo.StorageBucket, storage.Causa(err))
 		ak, sk, err := setup.PerguntarETestar(ctx, t, alvo)
 		if err != nil {
-			return false, err
+			return nil, err
 		}
-		return true, setup.Gravar(caminho, append(linhas, setup.Chaves(ak, sk)...))
+		return append(linhas, setup.Chaves(ak, sk)...), nil
 	}
 
 	if cfg.EnrollmentToken == "" {
-		return false, fmt.Errorf("sem chave do bucket em %s", caminho)
+		return nil, fmt.Errorf("sem chave do bucket em %s", caminho)
 	}
 	if err := setup.PodeGravar(caminho); err != nil {
-		return false, err
+		return nil, err
 	}
 	t, err := abrirTerminal()
 	if err != nil {
-		return false, fmt.Errorf("sem chave do bucket em %s e sem terminal para perguntar: rode o comando num terminal interativo (no Docker, com -it)", caminho)
+		return nil, fmt.Errorf("sem chave do bucket em %s e sem terminal para perguntar: rode o comando num terminal interativo (no Docker, com -it)", caminho)
 	}
 	defer t.Close()
 
 	p, err := setup.BuscarNoPainel(ctx, cfg.PanelURL, cfg.EnrollmentToken)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	fmt.Fprintf(os.Stderr, "\n  Servidor:       %s\n  Armazenamento:  %s (%s)\n", p.DisplayName, p.Armazenamento.DisplayName, p.Armazenamento.Bucket)
 
 	ak, sk, err := setup.PerguntarETestar(ctx, t, setup.NaConfig(p, cfg))
 	if err != nil {
-		return false, err
+		return nil, err
 	}
-	if err := setup.Gravar(caminho, append(setup.Linhas(p, cfg.PanelURL), setup.Chaves(ak, sk)...)); err != nil {
-		return false, err
-	}
-	fmt.Fprintln(os.Stderr, "  ✓ Gravado em", caminho)
-	return true, nil
+	fmt.Fprintln(os.Stderr, "  ✓ Vai para", caminho, "com a aprovação")
+	return append(setup.Linhas(p, cfg.PanelURL), setup.Chaves(ak, sk)...), nil
 }
 
 // abrirTerminal é o terminal.Open; os testes o trocam.
