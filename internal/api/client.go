@@ -69,6 +69,9 @@ func New(opts Options) (*Client, error) {
 	}
 
 	transport := &http.Transport{
+		// Servidor atrás de proxy corporativo (HTTPS_PROXY/NO_PROXY): sem
+		// isto o agente ignorava o proxy e não alcançava o painel.
+		Proxy:               http.ProxyFromEnvironment,
 		MaxIdleConns:        10,
 		IdleConnTimeout:     90 * time.Second,
 		TLSHandshakeTimeout: 10 * time.Second,
