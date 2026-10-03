@@ -37,6 +37,8 @@ type s3Falso struct {
 	// semVersao simula bucket sem versionamento: nenhuma resposta traz
 	// x-amz-version-id.
 	semVersao bool
+	// suspenso simula versionamento suspenso: o envio grava a versão "null".
+	suspenso bool
 	// ultimaModificacao, se definida, vai como Last-Modified no HeadObject.
 	ultimaModificacao time.Time
 }
@@ -108,6 +110,9 @@ func (f *s3Falso) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		f.versao++
 		v := fmt.Sprintf("v%d", f.versao)
+		if f.suspenso {
+			v = "null"
+		}
 		f.objetos[chave] = objetoFalso{dados: b, sha256: r.Header.Get("x-amz-meta-sha256"), versao: v}
 		if !f.semVersao {
 			w.Header().Set("x-amz-version-id", v)
@@ -131,6 +136,9 @@ func (f *s3Falso) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		f.versao++
 		v := fmt.Sprintf("v%d", f.versao)
+		if f.suspenso {
+			v = "null"
+		}
 		f.objetos[chave] = objetoFalso{dados: dados, versao: v}
 		f.completos++
 		if !f.semVersao {

@@ -25,14 +25,25 @@ import (
 // Com versionado=false, nenhuma resposta traz x-amz-version-id.
 func bucketDeTeste(t *testing.T, versionado bool) *s3.Client {
 	t.Helper()
+	versao := ""
+	if versionado {
+		versao = "v1"
+	}
+	return bucketQueDevolve(t, versao)
+}
+
+// bucketQueDevolve é o bucketDeTeste com o VersionId que o PUT devolve
+// (vazio: nenhum; "null": versionamento suspenso).
+func bucketQueDevolve(t *testing.T, versao string) *s3.Client {
+	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.Copy(io.Discard, r.Body)
 		switch r.Method {
 		case http.MethodHead:
 			w.WriteHeader(http.StatusNotFound)
 		case http.MethodPut:
-			if versionado {
-				w.Header().Set("x-amz-version-id", "v1")
+			if versao != "" {
+				w.Header().Set("x-amz-version-id", versao)
 			}
 			w.WriteHeader(http.StatusOK)
 		default:
@@ -80,6 +91,25 @@ func TestBucketSemVersionamentoFalhaASessao(t *testing.T) {
 	corpo := painel.corpo("/api/agents/a1/sessions/s1/fail")
 	if !strings.Contains(corpo, "bucket_unversioned") || !strings.Contains(corpo, "ative o versionamento") {
 		t.Fatalf("o /fail não diz a causa: %s", corpo)
+	}
+}
+
+// Versionamento suspenso: o PUT volta com VersionId "null". A sessão falha
+// como a do bucket sem versionamento, com a causa certa na mensagem.
+func TestVersionamentoSuspensoFalhaASessao(t *testing.T) {
+	painel, c := novoPainel(t)
+	cfg := &config.Config{AgentID: "a1", HostRoot: "/"}
+
+	err := executePlan(context.Background(), c, bucketQueDevolve(t, "null"), cfg, planoComArquivo(t))
+	if !errors.Is(err, syncengine.ErrVersionamentoSuspenso) {
+		t.Fatalf("esperava ErrVersionamentoSuspenso, veio %v", err)
+	}
+	if n := painel.recebeu("/sessions/s1/complete"); n != 0 {
+		t.Fatalf("a sessão foi concluída com versões \"null\"; chamadas: %v", painel.chamadas)
+	}
+	corpo := painel.corpo("/api/agents/a1/sessions/s1/fail")
+	if !strings.Contains(corpo, "bucket_unversioned") || !strings.Contains(corpo, "suspenso") {
+		t.Fatalf("o /fail não diz que o versionamento está suspenso: %s", corpo)
 	}
 }
 

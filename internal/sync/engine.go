@@ -228,6 +228,14 @@ func processFile(ctx context.Context, o EngineOptions, fi FileInfo) (*api.FileEn
 		// com zero arquivos indexados — um backup que não restaura nada.
 		return nil, false, ErrBucketSemVersionamento
 	}
+	if versionID == "null" {
+		// Versionamento suspenso: o envio grava a versão "null", que
+		// sobrescreve a "null" anterior — cada backup apaga o de antes, e o
+		// índice apontaria todas as datas para o mesmo conteúdo. Só o envio
+		// conta: a versão "null" que o dedup reaproveita é de antes de o
+		// versionamento ser ativado, e é legítima.
+		return nil, false, ErrVersionamentoSuspenso
+	}
 
 	return &api.FileEntry{
 		Key:        key,
@@ -363,6 +371,20 @@ var ErrArquivoMudou = errors.New("arquivo mudou durante o envio (o conteúdo env
 // versão não há o que indexar nem restaurar; a sessão inteira falha com este
 // erro em vez de terminar "complete" sem nada indexado.
 var ErrBucketSemVersionamento = errors.New("bucket sem versionamento: ative o versionamento do bucket (o objeto subiu sem VersionId e o backup não seria restaurável)")
+
+// ErrVersionamentoSuspenso: o envio voltou com VersionId "null" — o bucket
+// está com o versionamento suspenso, e cada envio sobrescreve a versão "null"
+// anterior. É um caso de ErrBucketSemVersionamento (errors.Is vale para os
+// dois), com a causa certa na mensagem.
+var ErrVersionamentoSuspenso error = erroVersionamentoSuspenso{}
+
+type erroVersionamentoSuspenso struct{}
+
+func (erroVersionamentoSuspenso) Error() string {
+	return "versionamento do bucket suspenso: reative o versionamento do bucket (o objeto subiu como versão \"null\", que cada backup sobrescreve, e as versões anteriores não seriam restauráveis)"
+}
+
+func (erroVersionamentoSuspenso) Is(alvo error) bool { return alvo == ErrBucketSemVersionamento }
 
 // antesDoEnvio é um gancho só para teste: roda entre o hash e o envio, o
 // intervalo em que um arquivo alterado no lugar fazia subir conteúdo diferente
