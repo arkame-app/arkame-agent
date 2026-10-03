@@ -424,8 +424,9 @@ func Install(ctx context.Context, cfg *config.Config, opts Options) (*Installed,
 	return inst, err
 }
 
-// ConferirPrograma recusa registrar no escopo do sistema (root) um programa
-// que outro usuário pode trocar — ver conferirPrograma. No escopo user não
+// ConferirPrograma recusa registrar no escopo do sistema (root; no Windows,
+// LocalSystem) um programa que outro usuário pode trocar — ver
+// conferirPrograma (programa_unix.go, programa_windows.go). No escopo user não
 // há o que conferir: o serviço roda como o próprio dono do programa. Escopo
 // vazio = o padrão desta plataforma; programa vazio = este executável. O
 // install a chama antes do registro no painel, para não deixar um servidor

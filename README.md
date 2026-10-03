@@ -200,6 +200,11 @@ macOS (LaunchDaemon) vale o mesmo — inclusive para um `/usr/local/bin` cujo
 dono é o seu usuário, como deixa o Homebrew em Macs Intel; nesse caso, escolha
 outra pasta do root:
 `curl -fsSL https://get.arkame.app/install.sh | sudo env ARKAME_BIN_DIR=/opt/arkame/bin sh -s -- --token=atk_...`.
+No Windows, o serviço roda como SYSTEM e o `install` confere a mesma coisa pela
+lista de permissões: o programa e as pastas acima dele só podem ser alteráveis
+pelos Administradores, pelo SYSTEM ou pelo TrustedInstaller. O `setup` (comando
+do painel) e o `install.ps1` põem o programa em `C:\Program Files\Arkame`, que
+passa; um `install` rodado de Downloads é recusado.
 
 No Windows, o serviço grava o log ao lado da configuração, em
 `C:\etc\arkame\agent.log` (rodízio aos 10 MB; o anterior fica em

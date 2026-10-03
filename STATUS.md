@@ -46,8 +46,8 @@ Binário Linux rodando local contra o painel em produção (`save.arkame.app`) +
 > `noncurrent_expiration_days` e `noncurrent_transitions` (prometidos desde a 0.4.10 e
 > que não saíam do agente) e os campos novos `lifecycle_error` / `object_lock_error`
 > (leitura negada ≠ bucket sem regra); a unit do systemd põe aspas no `--config` e
-> escapa `%`; o serviço do sistema (root) recusa programa que outro usuário pode trocar
-> (Linux e macOS), e o `install.sh` com o programa no home sugere o install sem sudo.
+> escapa `%`; o serviço do sistema (root; SYSTEM no Windows) recusa programa que outro usuário
+> pode trocar (Linux, macOS e, pela ACL, Windows), e o `install.sh` com o programa no home sugere o install sem sudo.
 
 - **Enrollment Ed25519**: `internal/enrollment` gera keypair, POST `/api/agents/enroll`, long-poll na `wait-token` até receber JWT bearer
 - **Bearer auth**: client HTTP envia `Authorization: Bearer <token>` em todos os requests pós-approval; `ErrNotReady` (204) e `ErrGone` (410) pra long-poll handling
