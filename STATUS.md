@@ -39,20 +39,25 @@ Binário Linux rodando local contra o painel em produção (`save.arkame.app`) +
 
 ## O que está pronto
 
+> Atualizado em 2026-10-03 conferindo o código (v0.4.2). As seções datadas acima são
+> registro histórico e podem descrever comportamento que já mudou.
+
 - **Enrollment Ed25519**: `internal/enrollment` gera keypair, POST `/api/agents/enroll`, long-poll na `wait-token` até receber JWT bearer
 - **Bearer auth**: client HTTP envia `Authorization: Bearer <token>` em todos os requests pós-approval; `ErrNotReady` (204) e `ErrGone` (410) pra long-poll handling
 - **Persistência local**: `/etc/arkame/token.jwt` (0600) + `/etc/arkame/key.pem` (0600) + `/etc/arkame/agent.id`
-- **Daemon completo** (`internal/daemon/daemon.go`), 4 loops paralelos:
-  - Loop heartbeat 60s `/api/agents/{id}/heartbeat`
-  - Loop probe 1h: `storage.Probe` → POST `/probe` (versioning, object_lock, lifecycle)
-  - Loop plans 60s: GET `/plans` → `scheduler.ShouldRun` → `executePlan` (backup)
-  - Loop restore 60s: GET `/restore-items` → PATCH running → `restore.Run` → PATCH complete/failed (Tier 1 C)
+- **Daemon completo** (`internal/daemon/daemon.go`), 6 loops paralelos:
+  - Loop heartbeat a cada `HEARTBEAT_INTERVAL_SEC` (padrão 60s) `/api/agents/{id}/heartbeat`, gravando o token renovado que vier na resposta
+  - Loop probe 1h + on-demand (conferido a cada 30s em `/probe-request`): `storage.Probe` → POST `/probe` (versioning, object_lock, lifecycle, uso)
+  - Loop plans a cada `POLL_INTERVAL_SEC` (padrão 60s): GET `/plans` → `scheduler.ShouldRun` → `executePlan` (backup)
+  - Loop restore a cada `POLL_INTERVAL_SEC`: GET `/restore-items` → PATCH running → `restore.Run` → PATCH complete/failed
+  - Loop do explorador de pastas (long-poll): lista pastas para o painel (`internal/fsbrowse`)
+  - Loop de expurgo 1h: aplica a retenção autorizada pelo painel (`internal/purge`)
 - **`executePlan` (backup)**: POST `/sessions/start` → `sync.Run` (walker + hash + dedup HeadObject + PutObject/multipart + version_map) → POST `/sessions/{sid}/complete` com version_map inline; em falha total POST `/sessions/{sid}/fail`
 - **Dedup file-level**: antes de PutObject, faz HeadObject e compara `sha256` no metadata. Hit retorna FileEntry com VersionId existente sem subir bytes; stats `FilesUploaded` não conta dedup hits
 - **`restore.Run` (restore)**: `internal/restore/executor.go` — escrita atômica (tmp + rename) com SHA-256 verify → conflict resolution `suffix-version`/`overwrite`/`skip`; respeita `HOST_ROOT`
 - **Multipart download**: arquivos >= 100 MB usam `s3manager.Downloader` (4 workers, parts 16 MiB); hash é calculado relendo o tmp file
-- **Warming cold storage**: GetObject que falha com `InvalidObjectState` → HeadObject pra checar `x-amz-restore` → RestoreObject (Standard tier, 7d) se necessário; daemon mantém item como `running` pra re-tentar no próximo poll (ErrWarmingRequested / ErrWarmingInProgress)
-- **Comandos CLI**: `install` (com `--wait` default true), `run`, `status`, `heartbeat` (one-shot pra testar auth), `version`
+- **Warming cold storage**: GetObject que falha com `InvalidObjectState` → HeadObject pra checar `x-amz-restore` → RestoreObject (Standard tier, 7d) se necessário; daemon mantém item como `running` pra re-tentar no próximo poll (ErrWarmingRequested / ErrWarmingInProgress), e o PATCH do item leva `warming_state` (`requested`/`in_progress`), `warming_tier` e `warming_eta`
+- **Comandos CLI**: `install` (sempre espera a aprovação; `--wait=false` é recusado), `setup` (Windows: copia para Program Files e roda o `install`), `run`, `status`, `heartbeat` (one-shot pra testar auth), `check-storage`, `set-storage-keys`, `service install|uninstall|status`, `uninstall`, `version`
 
 ## Versionado no GitHub
 
@@ -63,7 +68,6 @@ Repo público (Apache 2.0) em [`arkame-app/arkame-agent`](https://github.com/ark
 - **Self-update** do binário em produção (fase posterior)
 - **mTLS hardening** (fase 2) — substituir bearer JWT por mTLS com CA do painel, sem quebrar o contrato atual
 - **VSS no Windows** pra snapshots consistentes (Linux LVM também no roadmap)
-- **Persistir warming_state em restore_items**: PATCH atual só atualiza `status`. Adicionar endpoint dedicado pra warming_state/warming_tier/warming_requested_at quando relevante.
 
 ## Como compilar (sem Go local)
 
