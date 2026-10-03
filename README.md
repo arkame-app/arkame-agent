@@ -8,9 +8,10 @@ Agent Go do SaaS [Arkame](https://arkame.app) — roda no servidor do cliente, l
 
 Arkame Agent is an open source (Apache 2.0) backup agent for Linux, macOS and
 Windows servers. It reads the folders the user selects, uploads them directly to
-the user's own S3-compatible bucket (AWS S3, Backblaze B2, Wasabi, Cloudflare R2,
-Oracle Cloud and others) with the user's own credentials — which never leave the
-machine — and restores any version back to the server. It reports only backup
+the user's own S3-compatible bucket (AWS S3, Backblaze B2, Wasabi, Oracle Cloud
+and others) with the user's own credentials — which never leave the machine —
+and restores any version back to the server. Cloudflare R2 is not accepted for
+new storage in the panel: it offers neither versioning nor Object Lock. It reports only backup
 metadata to the [Arkame](https://arkame.app) management panel.
 
 ## Download
@@ -131,7 +132,9 @@ host (cron), numa pasta incluída no plano.
 
 Servidor sem sinal: `sudo docker logs --tail 50 arkame-agent` e
 `sudo docker restart arkame-agent`. Trocar a chave do bucket:
-`sudo docker run --rm -it --user 0 -v /etc/arkame:/etc/arkame ghcr.io/arkame-app/arkame-agent:latest set-storage-keys && sudo docker restart arkame-agent`.
+`sudo docker run --rm -it --user 0 --security-opt label=disable -v /etc/arkame:/etc/arkame ghcr.io/arkame-app/arkame-agent:latest set-storage-keys && sudo docker restart arkame-agent`
+(o `label=disable` pelo mesmo motivo da instalação: com SELinux, sem ele o
+container não grava em `/etc/arkame`).
 
 #### Nativo (Linux, macOS e Windows)
 
@@ -229,11 +232,15 @@ Lidas do env-file ou das env vars do processo (CLI tem precedência).
 | `STORAGE_ID` | ULID do storage no painel |
 | `PANEL_URL` | `https://save.arkame.app` |
 | `ENROLLMENT_TOKEN` | Temporário, só durante install |
-| `AGENT_ID` | Persistido após primeiro enrollment |
-| `CERT_PATH` | `/etc/arkame/cert.pem` |
-| `PRIVATE_KEY_PATH` | `/etc/arkame/key.pem` (0600) |
-| `CA_PATH` | `/etc/arkame/ca.pem` |
+| `AGENT_ID` | Identidade do agente; sem ela, vale o conteúdo de `AGENT_ID_PATH` (gravado no enrollment) |
+| `AGENT_ID_PATH` | `/etc/arkame/agent.id` |
+| `AGENT_FINGERPRINT` | Só informativo (`status`) |
+| `TOKEN_PATH` | `/etc/arkame/token.jwt` — bearer do painel (0600; no Windows, Administradores e SYSTEM) |
+| `PRIVATE_KEY_PATH` | `/etc/arkame/key.pem` (idem) |
 | `HOST_ROOT` | `/` nativo, `/host` em Docker |
+| `SIBLING_BUCKETS` | Buckets atendidos por outros processos deste agente no host (CSV): planos e restaurações desses buckets ficam para o irmão |
+| `POLL_INTERVAL_SEC` | Intervalo de consulta de planos e restaurações (padrão 60) |
+| `HEARTBEAT_INTERVAL_SEC` | Intervalo do heartbeat (padrão 60) |
 
 ## O que falta (TODOs)
 
@@ -250,7 +257,6 @@ Núcleo funcional entregue. Itens concluídos e pendências de hardening:
 - [ ] Snapshot orquestrado (LVM / VSS / btrfs) — fora do escopo atual (PLAN.md), pode voltar como plugin
 - [ ] Testes: integration com MinIO local (scheduler já tem unit)
 - [ ] Observabilidade: métricas Prometheus + traces OTEL (endpoint opcional)
-- [ ] `.goreleaser.yaml` para GitHub Releases automatizado
 
 ## Contribuindo
 
