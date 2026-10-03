@@ -40,6 +40,14 @@ func pacoteFalso(t *testing.T) []byte {
 // e se o binário foi instalado.
 func rodarInstallSh(t *testing.T, checksums func(pacote, sha string) string, args ...string) (string, bool, bool) {
 	t.Helper()
+	return rodarInstallShNoHome(t, false, checksums, args...)
+}
+
+// rodarInstallShNoHome é o rodarInstallSh com, se noHome, o HOME apontando
+// para a pasta que contém o destino do binário (a instalação sem root, que
+// vai para ~/.local/bin).
+func rodarInstallShNoHome(t *testing.T, noHome bool, checksums func(pacote, sha string) string, args ...string) (string, bool, bool) {
+	t.Helper()
 	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
 		t.Skip("install.sh é do Linux e do macOS")
 	}
@@ -71,6 +79,9 @@ func rodarInstallSh(t *testing.T, checksums func(pacote, sha string) string, arg
 	cmd := exec.Command("sh", append([]string{filepath.Join("..", "..", "install.sh"),
 		"--version=v9.9.9", "--download-base=" + srv.URL}, args...)...)
 	cmd.Env = append(os.Environ(), "ARKAME_BIN_DIR="+binDir, "NO_COLOR=1")
+	if noHome {
+		cmd.Env = append(cmd.Env, "HOME="+filepath.Dir(binDir))
+	}
 	out, err := cmd.CombinedOutput()
 	_, errBin := os.Stat(filepath.Join(binDir, "arkame-agent"))
 	return string(out), err == nil, errBin == nil
@@ -151,5 +162,32 @@ func TestInstallShNoWindowsMostraOComandoOficial(t *testing.T) {
 		if strings.Contains(string(out), ".zip") || strings.Contains(string(out), " install --token") {
 			t.Fatalf("ainda manda o .zip e o install:\n%s", out)
 		}
+	}
+}
+
+// Sem token e com o programa no home (instalação sem root), o install.sh
+// mandava rodar `sudo ~/.local/bin/arkame-agent install`: um serviço root
+// chamando um arquivo que o usuário troca. Agora sugere o install sem sudo
+// (escopo user) ou o instalador com sudo; fora do home, segue o sudo.
+func TestInstallShSemTokenNoHomeSugereSemSudo(t *testing.T) {
+	certo := func(pacote, sha string) string { return sha + "  " + pacote + "\n" }
+
+	out, terminou, _ := rodarInstallShNoHome(t, true, certo)
+	if !terminou {
+		t.Fatalf("não terminou:\n%s", out)
+	}
+	for _, l := range strings.Split(out, "\n") {
+		if strings.Contains(l, "arkame-agent install --token") && strings.Contains(l, "sudo") {
+			t.Fatalf("sugere sudo no programa do home: %q\n%s", l, out)
+		}
+	}
+	if !strings.Contains(out, "/arkame-agent install --token=SEU_CODIGO") ||
+		!strings.Contains(out, "| sudo sh -s -- --token=SEU_CODIGO") {
+		t.Fatalf("sem o install sem sudo e o instalador com sudo:\n%s", out)
+	}
+
+	out, terminou, _ = rodarInstallSh(t, certo)
+	if !terminou || !strings.Contains(out, "sudo /") || !strings.Contains(out, "/arkame-agent install --token=SEU_CODIGO") {
+		t.Fatalf("fora do home, o próximo passo é com sudo:\n%s", out)
 	}
 }

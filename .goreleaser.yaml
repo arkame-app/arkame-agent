@@ -129,11 +129,15 @@ release:
   header: |
     ## Agent Arkame {{ .Version }}
 
-    Instalação em uma linha (Linux e macOS):
+    Instalação em uma linha (Linux e macOS), com o código de instalação do
+    painel (Servidores → Novo servidor):
 
     ```sh
-    curl -fsSL https://get.arkame.app/install.sh | sh
+    curl -fsSL https://get.arkame.app/install.sh | sudo sh -s -- --token=SEU_CODIGO
     ```
+
+    Sem sudo, o agente fica só para o seu usuário (escopo user) e só lê o que
+    você lê. No Windows, use o comando que o painel mostra.
 
     Ou baixe o binário abaixo. Confira a integridade com `checksums.txt` — a
     assinatura keyless está em `checksums.txt.sig` e `checksums.txt.pem`.

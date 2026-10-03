@@ -49,6 +49,8 @@ Instalador do agente Arkame.
 
 Uso:
   curl -fsSL https://get.arkame.app/install.sh | sudo sh -s -- --token=atk_xxx
+  curl -fsSL https://get.arkame.app/install.sh | sh -s -- --token=atk_xxx
+                                     (sem sudo: serviço só do seu usuário)
   curl -fsSL https://get.arkame.app/install.sh | sh        (só o binário)
 
 Opções:
@@ -246,8 +248,24 @@ main() {
     printf '\n'
     info "Próximo passo — registre este servidor no painel:"
     printf '\n'
-    # Caminho completo: o sudo do RHEL/Fedora não procura em /usr/local/bin.
-    info "  ${BOLD}sudo $BIN_DIR/arkame-agent install --token=SEU_CODIGO${RESET}"
+    case "$BIN_DIR/" in
+      "${HOME:-/nenhum}"/*)
+        # Programa no home: o serviço do sistema roda como root, e qualquer
+        # processo deste usuário trocaria o arquivo e viraria root no próximo
+        # reinício (o agente recusa). Sem sudo, o serviço é só deste usuário.
+        info "  ${BOLD}$BIN_DIR/arkame-agent install --token=SEU_CODIGO${RESET}"
+        printf '\n'
+        info "Sem sudo: o agente roda como o seu usuário e só lê o que você lê."
+        info "Para o servidor inteiro (como root), instale de novo com sudo, que põe o"
+        info "programa em /usr/local/bin:"
+        printf '\n'
+        info "  ${BOLD}curl -fsSL https://get.arkame.app/install.sh | sudo sh -s -- --token=SEU_CODIGO${RESET}"
+        ;;
+      *)
+        # Caminho completo: o sudo do RHEL/Fedora não procura em /usr/local/bin.
+        info "  ${BOLD}sudo $BIN_DIR/arkame-agent install --token=SEU_CODIGO${RESET}"
+        ;;
+    esac
     printf '\n'
     info "O código aparece em $PANEL_URL/agents/new."
     printf '\n'
