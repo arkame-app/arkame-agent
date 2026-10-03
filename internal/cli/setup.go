@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/arkame-app/agent/internal/aplicativos"
+	"github.com/arkame-app/agent/pkg/version"
 	"github.com/spf13/cobra"
 )
 
@@ -20,14 +21,15 @@ import (
 // para baixar e rodar código, e o Windows Defender o barrou como
 // Trojan:Win32/Commando.A!ml num Windows real (fundador, 28/09). Agora o
 // Executar chama o `curl.exe` que vem no Windows para baixar este programa, e
-// ele faz o resto: pede administrador (o "Sim" do Windows), se copia para
-// Program Files, entra no PATH e roda o `install` de lá — que pergunta e testa
+// ele faz o resto: pede administrador (o "Sim" do Windows), confere o próprio
+// checksum com o do release, se copia para Program Files, entra no PATH e roda o `install` de lá — que pergunta e testa
 // a chave, registra e instala o serviço.
 func newSetupCmd() *cobra.Command {
 	var (
 		enrollmentToken string
 		panelURL        string
 		elevado         bool
+		pularChecksum   bool
 	)
 	cmd := &cobra.Command{
 		Use:   "setup",
@@ -56,6 +58,14 @@ func newSetupCmd() *cobra.Command {
 			}
 			destino := aplicativos.ProgramaInstalado()
 			if !strings.EqualFold(filepath.Clean(exe), filepath.Clean(destino)) {
+				// O programa baixado (curl.exe → get.arkame.app/agente.exe)
+				// só entra em Program Files se for o publicado no release
+				// desta versão: confere o SHA-256 dele com o checksums.txt,
+				// como o install.ps1 e o install.sh fazem com o pacote.
+				if err := verificarBaixado(cmd.Context(), clienteDoChecksum, releasesDoAgente,
+					version.Version, nomeNoReleaseDeste(), exe, pularChecksum, os.Stderr); err != nil {
+					return err
+				}
 				// O serviço segue rodando o programa antigo até o `install`
 				// recriá-lo; se algo falhar aqui, ele continua de pé.
 				if err := copiarPrograma(exe, destino); err != nil {
@@ -93,6 +103,7 @@ func newSetupCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&enrollmentToken, "token", "", "código de instalação gerado no painel (atk_…)")
 	cmd.Flags().StringVar(&panelURL, "panel-url", "", "URL do painel (padrão: https://save.arkame.app)")
+	cmd.Flags().BoolVar(&pularChecksum, "skip-checksum", false, "instalar mesmo sem conseguir baixar o checksums.txt do release (checksum diferente aborta sempre)")
 	cmd.Flags().BoolVar(&elevado, "elevado", false, "")
 	_ = cmd.Flags().MarkHidden("elevado")
 	return cmd

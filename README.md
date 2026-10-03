@@ -160,11 +160,17 @@ curl -fsSL https://get.arkame.app/install.sh | sudo sh -s -- --token=atk_...
 ```text
 # Windows: Windows + R, colar, Enter. O curl.exe do Windows baixa o agente
 # (get.arkame.app/agente.exe → release mais recente) e o `setup` dele pede
-# administrador (o "Sim" do Windows), se copia para Program Files, entra no
-# PATH e roda o `install`. Sem PowerShell: o Defender barrava o formato
+# administrador (o "Sim" do Windows), confere o SHA-256 do próprio programa
+# com o checksums.txt do release da versão dele, se copia para Program Files,
+# entra no PATH e roda o `install`. Sem PowerShell: o Defender barrava o formato
 # `powershell -ExecutionPolicy Bypass … irm` como Trojan:Win32/Commando.A!ml.
 cmd /c "curl -fsSLo "%TEMP%\arkame-agent.exe" https://get.arkame.app/agente.exe && "%TEMP%\arkame-agent.exe" setup --token=atk_... || pause"
 ```
+
+Checksum diferente aborta sem instalar nada. Se o `checksums.txt` não pode ser
+baixado (sem acesso a `github.com`, por exemplo), o `setup` também para; para
+instalar assim mesmo, sem conferir, acrescente `--skip-checksum` depois do
+`setup`.
 
 O `curl.exe` vem no Windows 10 (1803+), 11 e Server 2019+. No Server 2016, use o
 `install.ps1` (PowerShell como administrador).
