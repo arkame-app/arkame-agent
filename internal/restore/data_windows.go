@@ -8,24 +8,14 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// aplicarData grava a data de modificação (e a de acesso) do arquivo.
+// definirData grava a data de modificação (e a de acesso) do arquivo do
+// handle (aberto com FILE_WRITE_ATTRIBUTES).
 //
 // Não é o os.Chtimes: ele converte por UnixNano, que só cobre 1677–2262, e a
 // data restaurada de um arquivo fora disso dava a volta. O FILETIME (intervalos
 // de 100 ns desde 1601) vai até o ano 30828 e é montado aqui sem passar por
 // UnixNano.
-func aplicarData(caminho string, acesso, modificacao time.Time) error {
-	p, err := windows.UTF16PtrFromString(caminho)
-	if err != nil {
-		return err
-	}
-	h, err := windows.CreateFile(p, windows.FILE_WRITE_ATTRIBUTES,
-		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
-		nil, windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
-	if err != nil {
-		return err
-	}
-	defer windows.CloseHandle(h)
+func definirData(h windows.Handle, acesso, modificacao time.Time) error {
 	a, m := filetime(acesso), filetime(modificacao)
 	return windows.SetFileTime(h, nil, &a, &m)
 }
