@@ -39,12 +39,12 @@ Binário Linux rodando local contra o painel em produção (`save.arkame.app`) +
 
 ## O que está pronto
 
-> Atualizado em 2026-10-03 conferindo o código (v0.4.2). As seções datadas acima são
+> Atualizado em 2026-10-03 conferindo o código (v0.4.9). As seções datadas acima são
 > registro histórico e podem descrever comportamento que já mudou.
 
 - **Enrollment Ed25519**: `internal/enrollment` gera keypair, POST `/api/agents/enroll`, long-poll na `wait-token` até receber JWT bearer
 - **Bearer auth**: client HTTP envia `Authorization: Bearer <token>` em todos os requests pós-approval; `ErrNotReady` (204) e `ErrGone` (410) pra long-poll handling
-- **Persistência local**: `/etc/arkame/token.jwt` (0600) + `/etc/arkame/key.pem` (0600) + `/etc/arkame/agent.id`
+- **Persistência local**: escopo system em `/etc/arkame/` — `token.jwt` (0600) + `key.pem` (0600) + `agent.id`, ao lado de `agent.env`; escopo user (instalação sem root e sem `--config`, fora do Windows) em `~/.config/arkame/` (ou `$XDG_CONFIG_HOME/arkame/`), com os mesmos arquivos
 - **Daemon completo** (`internal/daemon/daemon.go`), 6 loops paralelos:
   - Loop heartbeat a cada `HEARTBEAT_INTERVAL_SEC` (padrão 60s) `/api/agents/{id}/heartbeat`, gravando o token renovado que vier na resposta
   - Loop probe 1h + on-demand (conferido a cada 30s em `/probe-request`): `storage.Probe` → POST `/probe` (versioning, object_lock, lifecycle, uso)
