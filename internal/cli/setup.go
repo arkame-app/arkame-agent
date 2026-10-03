@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/arkame-app/agent/internal/aplicativos"
@@ -56,6 +57,9 @@ func newSetupCmd() *cobra.Command {
 			}
 
 			fmt.Fprintln(os.Stderr, "\n  Instalador do agente Arkame")
+			// O serviço que rodava o programa trocado e que o install, se não
+			// terminar, deixaria no .old.
+			reiniciarSeFalhar := ""
 			exe, err := os.Executable()
 			if err != nil {
 				return err
@@ -80,6 +84,12 @@ func newSetupCmd() *cobra.Command {
 				}
 				fmt.Fprintln(os.Stderr, "  ✓ Programa em", destino)
 				reiniciarOutrosDoPrograma(os.Stderr, rodando, service.DefaultName, service.Reiniciar)
+				// O próprio fica para o install re-registrar — mas ele só
+				// chega lá se terminar. Avisado de que o serviço rodava o
+				// programa trocado, o install o reinicia se falhar antes.
+				if slices.ContainsFunc(rodando, func(n string) bool { return strings.EqualFold(n, service.DefaultName) }) {
+					reiniciarSeFalhar = service.DefaultName
+				}
 			}
 			// Copiado agora ou já no lugar: a pasta e o programa passam aos
 			// Administradores. Do administrador do primeiro setup, outro
@@ -99,6 +109,9 @@ func newSetupCmd() *cobra.Command {
 			// write" (fundador, 28/09). A janela segue com o install, que espera
 			// o Enter no fim.
 			args := []string{"install", "--token=" + enrollmentToken, "--pause"}
+			if reiniciarSeFalhar != "" {
+				args = append(args, "--restart-on-failure="+reiniciarSeFalhar)
+			}
 			if panelURL != "" {
 				args = append(args, "--panel-url="+panelURL)
 			}
@@ -146,6 +159,20 @@ func reiniciarOutrosDoPrograma(w io.Writer, rodando []string, proprio string, re
 		fmt.Fprintln(w, "    Reinicie-os (services.msc) para a versão nova valer.")
 	}
 	return falharam
+}
+
+// reiniciarSeOInstallFalhou: o install não terminou (chave errada ou
+// cancelada, código vencido) e não chegou a re-registrar o serviço que rodava
+// o programa trocado — ele segue no .old até o próximo boot. Reinicia-o, ou
+// avisa que continua na versão antiga. Sem nome (o setup não trocou o
+// programa, ou o serviço não rodava), nada a fazer.
+func reiniciarSeOInstallFalhou(w io.Writer, errDoInstall error, nome string, reiniciar func(string) error) {
+	if errDoInstall == nil || nome == "" {
+		return
+	}
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "  A instalação não terminou, mas o programa já foi trocado.")
+	reiniciarOutrosDoPrograma(w, []string{nome}, "", reiniciar)
 }
 
 func discoDoSistema() string {

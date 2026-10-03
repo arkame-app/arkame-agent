@@ -21,16 +21,17 @@ import (
 
 func newInstallCmd() *cobra.Command {
 	var (
-		configFile      string
-		enrollmentToken string
-		panelURL        string
-		installService  bool
-		serviceName     string
-		serviceScope    string
-		hostName        string
-		waitApproval    bool
-		checkStorage    bool
-		pausar          bool
+		configFile        string
+		enrollmentToken   string
+		panelURL          string
+		installService    bool
+		serviceName       string
+		serviceScope      string
+		hostName          string
+		waitApproval      bool
+		checkStorage      bool
+		pausar            bool
+		reiniciarSeFalhar string
 	)
 
 	cmd := &cobra.Command{
@@ -68,6 +69,11 @@ agent_id existente, preservando histórico e path no bucket.`,
 					esperarEnter(&err)
 				}()
 			}
+			// Aberto pelo setup depois de trocar o programa de um serviço em
+			// execução: se não terminar, o serviço não é re-registrado e
+			// seguiria no programa antigo. Roda antes da espera do Enter
+			// (defer posterior), para o resultado aparecer na janela.
+			defer func() { reiniciarSeOInstallFalhou(os.Stderr, err, reiniciarSeFalhar, service.Reiniciar) }()
 			// --wait=false deixava um enrollment que nada concluía (a identidade
 			// nova só existe em memória até a aprovação) e, com o serviço,
 			// subia um daemon sem token, em laço de "não aprovado". Numa
@@ -248,6 +254,8 @@ agent_id existente, preservando histórico e path no bucket.`,
 	cmd.Flags().BoolVar(&checkStorage, "check-storage", true, "testar a chave do bucket antes de registrar (sem chave no arquivo, pergunta no terminal)")
 	// Escondida: o install sempre espera a aprovação. Fica só para que
 	// --wait=false pare com a explicação em vez de "unknown flag".
+	cmd.Flags().StringVar(&reiniciarSeFalhar, "restart-on-failure", "", "")
+	_ = cmd.Flags().MarkHidden("restart-on-failure")
 	cmd.Flags().BoolVar(&waitApproval, "wait", true, "(sem efeito) o install sempre aguarda a aprovação; --wait=false não é aceito")
 	_ = cmd.Flags().MarkHidden("wait")
 

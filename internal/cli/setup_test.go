@@ -151,3 +151,36 @@ func TestReiniciarOutrosDoPrograma(t *testing.T) {
 		t.Fatalf("só o do install: reiniciou %v, falharam %v, saída %q", reiniciados, f, out.String())
 	}
 }
+
+// O install aberto pelo setup falhou antes de re-registrar o serviço (chave
+// errada, código vencido): o serviço que rodava o programa trocado é
+// reiniciado, ou fica no aviso dos que continuam na versão antiga. Antes,
+// seguia no .old até o próximo boot, sem aviso.
+func TestInstallQueFalhaReiniciaOServicoDoPrograma(t *testing.T) {
+	var reiniciados []string
+	reiniciar := func(n string) error { reiniciados = append(reiniciados, n); return nil }
+	var out bytes.Buffer
+
+	reiniciarSeOInstallFalhou(&out, errors.New("chave recusada"), "arkame-agent", reiniciar)
+	if strings.Join(reiniciados, ",") != "arkame-agent" {
+		t.Fatalf("reiniciados = %v; o serviço no programa antigo deveria reiniciar", reiniciados)
+	}
+	if !strings.Contains(out.String(), "arkame-agent reiniciado") {
+		t.Fatalf("sem a confirmação do reinício:\n%s", out.String())
+	}
+
+	out.Reset()
+	reiniciados = nil
+	falha := func(string) error { return errors.New("acesso negado") }
+	reiniciarSeOInstallFalhou(&out, errors.New("cancelado"), "arkame-agent", falha)
+	if !strings.Contains(out.String(), "Continuam na versão antiga: arkame-agent") {
+		t.Fatalf("sem o aviso de versão antiga:\n%s", out.String())
+	}
+
+	out.Reset()
+	reiniciarSeOInstallFalhou(&out, nil, "arkame-agent", reiniciar)
+	reiniciarSeOInstallFalhou(&out, errors.New("x"), "", reiniciar)
+	if reiniciados != nil || out.Len() != 0 {
+		t.Fatalf("install concluído ou sem serviço a reiniciar: reiniciou %v, saída %q", reiniciados, out.String())
+	}
+}

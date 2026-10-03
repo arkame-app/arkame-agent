@@ -318,7 +318,16 @@ try {
     # ele); os outros que rodavam o exe (um segundo agente) seguem no .old
     # até reiniciar. Reinicia-os, tenha o install terminado ou não: a troca
     # do exe já aconteceu.
-    $outros = @($paraReiniciar | Where-Object { $NoService -or ($_ -ine $ServiceName) })
+    #
+    # Se o install não terminou (chave errada ou cancelada, código vencido),
+    # ele não chegou a re-registrar o $ServiceName, que segue rodando o .old:
+    # entra na lista também. Sem isso, o serviço principal ficava na versão
+    # antiga até o próximo boot, sem o aviso "Continuam na versao antiga".
+    if ($codigoDoInstall -ne 0) {
+        $outros = $paraReiniciar
+    } else {
+        $outros = @($paraReiniciar | Where-Object { $NoService -or ($_ -ine $ServiceName) })
+    }
     Restart-ServicosDoExe -Nomes $outros
     if ($codigoDoInstall -ne 0) {
         Stop-WithError "a instalacao nao terminou (codigo $codigoDoInstall). Veja a mensagem acima."
