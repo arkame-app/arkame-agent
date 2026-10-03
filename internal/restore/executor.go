@@ -61,7 +61,9 @@ type Options struct {
 	HostRoot string // raiz (em container Docker = "/host"; standalone = "/")
 }
 
-// Run baixa um item do bucket e escreve no destino.
+// Run baixa um item do bucket e escreve no destino. Se o destino já tem o
+// item inteiro (mesmo tamanho e sha256 — um item refeito porque o resultado
+// não chegou ao painel), não baixa nem grava de novo e devolve nil.
 //
 // Estratégia de conflito (item.ConflictStrategy):
 //   - "suffix-version": se o arquivo existe, escreve como "<name>.v<versionId8>.<ext>"
@@ -98,6 +100,16 @@ func Run(ctx context.Context, opts Options, item api.RestoreItem) error {
 	rootedDir := caminho.RealNoDisco(opts.HostRoot, filepath.Join(destDir, filepath.FromSlash(subDir)))
 	if err := os.MkdirAll(rootedDir, 0o755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", rootedDir, err)
+	}
+
+	// Item refeito: a gravação deu certo, mas o PATCH final não chegou ao
+	// painel, e o item voltou na fila. O resolveConflict via o arquivo que
+	// esta mesma restauração acabou de gravar e, em suffix-version, gravava
+	// outra cópia (app.conf.vXXXX.1). Já no destino, inteiro, é concluído.
+	if feito, err := jaRestaurado(rootedDir, baseName, item); err != nil {
+		return err
+	} else if feito {
+		return nil
 	}
 
 	finalName, err := resolveConflict(rootedDir, baseName, item.SourceVersionID, item.ConflictStrategy)
@@ -414,23 +426,17 @@ func resolveConflict(dir, filename, versionID, strategy string) (string, error) 
 	case "skip":
 		return "", nil
 	case "suffix-version", "":
-		short := versionID
-		if len(short) > 8 {
-			short = short[:8]
-		}
+		short := sufixoDeVersao(versionID)
 		if short == "" {
 			short = time.Now().UTC().Format("20060102T150405")
 		}
-		ext := filepath.Ext(filename)
-		base := strings.TrimSuffix(filename, ext)
-		// se já com sufixo (idempotência), incrementa contador
-		candidate := fmt.Sprintf("%s.v%s%s", base, short, ext)
-		for i := 1; ; i++ {
+		// Nome com sufixo já ocupado: incrementa o contador.
+		for i := 0; ; i++ {
+			candidate := nomeComVersao(filename, short, i)
 			full := filepath.Join(dir, candidate)
 			if _, err := os.Stat(full); errors.Is(err, os.ErrNotExist) {
 				return candidate, nil
 			}
-			candidate = fmt.Sprintf("%s.v%s.%d%s", base, short, i, ext)
 			if i > 1000 {
 				return "", fmt.Errorf("conflict resolution exaurido em %s", dir)
 			}
@@ -438,6 +444,81 @@ func resolveConflict(dir, filename, versionID, strategy string) (string, error) 
 	default:
 		return "", fmt.Errorf("conflict_strategy desconhecida: %q", strategy)
 	}
+}
+
+// sufixoDeVersao é o pedaço do VersionId que vai no nome em suffix-version.
+func sufixoDeVersao(versionID string) string {
+	if len(versionID) > 8 {
+		return versionID[:8]
+	}
+	return versionID
+}
+
+// nomeComVersao é o i-ésimo nome que suffix-version tenta:
+// app.vXXXX.conf, app.vXXXX.1.conf, app.vXXXX.2.conf, ...
+func nomeComVersao(filename, short string, i int) string {
+	ext := filepath.Ext(filename)
+	base := strings.TrimSuffix(filename, ext)
+	if i == 0 {
+		return fmt.Sprintf("%s.v%s%s", base, short, ext)
+	}
+	return fmt.Sprintf("%s.v%s.%d%s", base, short, i, ext)
+}
+
+// jaRestaurado diz se o destino já tem este item, inteiro: um arquivo com o
+// tamanho e o sha256 esperados no nome que a estratégia de conflito usaria
+// (o próprio nome e, em suffix-version, os nomes com o sufixo da versão).
+// Sem sha256 no item não há como confirmar, e a restauração segue.
+func jaRestaurado(dir, baseName string, item api.RestoreItem) (bool, error) {
+	if item.SourceSha256 == "" {
+		return false, nil
+	}
+	nomes := []string{baseName}
+	if s := item.ConflictStrategy; s == "suffix-version" || s == "" {
+		if short := sufixoDeVersao(item.SourceVersionID); short != "" {
+			for i := 0; i <= 1000; i++ {
+				n := nomeComVersao(baseName, short, i)
+				if _, err := os.Lstat(filepath.Join(dir, n)); err != nil {
+					break // o resolveConflict pararia aqui
+				}
+				nomes = append(nomes, n)
+			}
+		}
+	}
+	for _, n := range nomes {
+		igual, err := mesmoConteudo(filepath.Join(dir, n), item)
+		if err != nil {
+			return false, err
+		}
+		if igual {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// mesmoConteudo compara o arquivo com o tamanho e o sha256 do item. Só lê o
+// arquivo se o tamanho bate.
+func mesmoConteudo(p string, item api.RestoreItem) (bool, error) {
+	st, err := os.Lstat(p)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	} else if err != nil {
+		return false, fmt.Errorf("stat %s: %w", p, err)
+	}
+	if !st.Mode().IsRegular() || (item.SourceSize > 0 && st.Size() != item.SourceSize) {
+		return false, nil
+	}
+	f, err := os.Open(p)
+	if err != nil {
+		return false, fmt.Errorf("abrindo %s: %w", p, err)
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return false, fmt.Errorf("lendo %s: %w", p, err)
+	}
+	return strings.EqualFold(hex.EncodeToString(h.Sum(nil)), item.SourceSha256), nil
 }
 
 // jaEstaResolvendo diz se o erro do RestoreObject significa "espere", e não

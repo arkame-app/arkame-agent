@@ -620,8 +620,11 @@ func avaliarSessao(result *syncengine.Result, syncErr error) (falhou bool, statu
 //  3. restore.Run → GetObject + write + sha256 verify
 //  4. PATCH status=complete (ou failed com error_message)
 //
-// Items running de execuções anteriores são reprocessados (recovery após crash).
-// A idempotência da escrita vem do conflict_strategy=suffix-version.
+// Items running de execuções anteriores são reprocessados (recovery após crash,
+// ou PATCH final que não chegou ao painel). A idempotência vem do restore.Run:
+// destino que já tem o arquivo com o tamanho e o sha256 esperados é concluído
+// sem nova gravação. O suffix-version, sozinho, não dava isso — ele via o
+// arquivo recém-gravado como conflito e gravava outra cópia.
 // Recuo entre conferências de um item que está aquecendo.
 //
 // O laço acorda a cada PollIntervalSec (60 s por padrão), o que é certo para
