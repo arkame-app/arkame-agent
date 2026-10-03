@@ -281,6 +281,19 @@ func planoDeOutroProcesso(cfg *config.Config, plan api.Plan) bool {
 		slices.Contains(cfg.SiblingBuckets, b)
 }
 
+// codigoOutroArmazenamento é o error_code da sessão de um plano cujo
+// armazenamento não é o deste processo. Simétrico ao wrong_bucket da
+// restauração.
+const codigoOutroArmazenamento = "wrong_storage"
+
+// planoDeOutroArmazenamento: o plano aponta para um armazenamento diferente do
+// instalado neste processo. Sem STORAGE_ID (instalação antiga) ou sem id no
+// plano, não há como comparar e o plano roda como antes.
+func planoDeOutroArmazenamento(cfg *config.Config, plan api.Plan) bool {
+	id := plan.StorageRef.ID
+	return cfg.StorageID != "" && id != "" && id != cfg.StorageID
+}
+
 // erroVersionamento é a falha da checagem de versionamento antes do envio:
 // mensagem própria (nada foi enviado), e errors.Is casa com os erros do
 // engine para quem já trata ErrBucketSemVersionamento.
@@ -365,6 +378,28 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 		return fmt.Errorf("session start: %w", err)
 	}
 	slog.Info("session iniciada", "session_id", startResp.SessionID)
+
+	// Plano de outro armazenamento (e não de um processo irmão, filtrado no
+	// laço): este processo só tem a chave, a região e o endpoint do
+	// armazenamento instalado. Rodar gravava com a chave dele num bucket que
+	// a restauração recusa (wrong_bucket) e cuja retenção ninguém consulta —
+	// backup "concluído" que não restaura. A sessão abre e falha com a causa,
+	// sem comando de antes nem envio; o /start já avançou o next_run_at.
+	if planoDeOutroArmazenamento(cfg, plan) {
+		msg := fmt.Sprintf("o plano grava no armazenamento %s (bucket %q), mas este agente foi instalado com o armazenamento %s (bucket %q): nada foi enviado. Troque o armazenamento do plano pelo do agente, ou instale o agente com as credenciais desse armazenamento",
+			plan.StorageRef.ID, plan.StorageRef.Bucket, cfg.StorageID, cfg.StorageBucket)
+		slog.Error("plano de outro armazenamento; backup recusado",
+			"plan_id", plan.ID, "storage_id", plan.StorageRef.ID, "bucket", plan.StorageRef.Bucket,
+			"storage_id_instalado", cfg.StorageID)
+		marcarFalha(ctx, c, cfg, startResp.SessionID, struct {
+			ErrorCode    string `json:"error_code"`
+			ErrorMessage string `json:"error_message"`
+		}{
+			ErrorCode:    codigoOutroArmazenamento,
+			ErrorMessage: msg,
+		})
+		return fmt.Errorf("%s: %s", codigoOutroArmazenamento, msg)
+	}
 
 	// Versionamento antes de enviar qualquer coisa. A checagem depois do
 	// envio (VersionId "null") só percebia o bucket suspenso depois do
