@@ -128,9 +128,12 @@ type HeartbeatResponse struct {
 
 // SessionStart é enviado quando uma sessão de backup começa.
 type SessionStart struct {
-	PlanID            string   `json:"plan_id"`
-	AgentID           string   `json:"agent_id"`
-	SourcePaths       []string `json:"source_paths"`
+	PlanID      string   `json:"plan_id"`
+	AgentID     string   `json:"agent_id"`
+	SourcePaths []string `json:"source_paths"`
+	// ExcludeGlobs: as exclusões que o walker usa nesta sessão (sempre lista,
+	// vazia se não houver). O painel grava estas, não as do plano no /start.
+	ExcludeGlobs      []string `json:"exclude_globs"`
 	ConsistencyMethod string   `json:"consistency_method"`
 }
 

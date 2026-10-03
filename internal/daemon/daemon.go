@@ -325,14 +325,27 @@ func versionamentoAtivo(ctx context.Context, s3c *s3.Client, bucket string) erro
 //  3. POST /sessions/[sid]/complete com version_map inline
 //  4. Em erro de upload: POST /sessions/[sid]/fail
 func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config.Config, plan api.Plan) error {
+	// As exclusões vão ao painel junto com as pastas: são as que o walker usa
+	// nesta sessão, lidas quando o plano foi buscado. O painel gravava as do
+	// plano em vigor no /start — se o cliente tirou `*.log` enquanto outro
+	// plano rodava, a sessão registrava "sem exclusões" e não tinha nenhum
+	// .log, e a falta deles virava prova de remoção. Vai sempre como lista
+	// (vazia, nunca null): o painel distingue "sem exclusões" de agente antigo,
+	// que não manda o campo.
+	exclusoes := plan.ExcludeGlobs
+	if exclusoes == nil {
+		exclusoes = []string{}
+	}
 	startReq := struct {
 		PlanID            string   `json:"plan_id"`
 		SourcePaths       []string `json:"source_paths"`
+		ExcludeGlobs      []string `json:"exclude_globs"`
 		ConsistencyMethod string   `json:"consistency_method,omitempty"`
 		AgentVersion      string   `json:"agent_version,omitempty"`
 	}{
 		PlanID:       plan.ID,
 		SourcePaths:  plan.SourcePaths,
+		ExcludeGlobs: exclusoes,
 		AgentVersion: version.Version,
 	}
 	var startResp struct {
@@ -392,7 +405,7 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 		PrefixRoot:   plan.StorageRef.PrefixRoot + "data/" + cfg.AgentID + "/",
 		HostRoot:     cfg.HostRoot,
 		SourcePaths:  plan.SourcePaths,
-		ExcludeGlobs: plan.ExcludeGlobs,
+		ExcludeGlobs: exclusoes,
 		MaxMbps:      plan.Throttle.MaxMbps,
 	})
 	// Comando de depois: roda com sucesso OU com falha, porque é ele que limpa
