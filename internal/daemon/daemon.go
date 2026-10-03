@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -640,120 +641,7 @@ func restoreLoop(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 	// comportamento certo depois de uma queda.
 	aquecendo := map[string]*esperaDeAquecimento{}
 
-	run := func() {
-		var resp api.ListRestoreItemsResponse
-		if err := c.GET(ctx, "/api/agents/"+cfg.AgentID+"/restore-items", &resp); err != nil {
-			slog.Warn("poll restore-items falhou", "err", err)
-			return
-		}
-		if len(resp.Items) == 0 {
-			return
-		}
-		slog.Info("restore-items pendentes", "count", len(resp.Items))
-
-		exec := restore.Options{S3: s3c, HostRoot: cfg.HostRoot}
-		for _, item := range resp.Items {
-			if ctx.Err() != nil {
-				return
-			}
-			// Ainda no recuo: nem chega a falar com a S3 nem com o painel.
-			if e, ok := aquecendo[item.ItemID]; ok && time.Now().Before(e.proxima) {
-				continue
-			}
-			// Este processo só tem credenciais para o bucket configurado. Item de
-			// outro bucket falha rápido com erro claro (em vez de um 403 confuso) —
-			// se houver outro processo do agent com as credenciais certas, ele já
-			// terá filtrado o item dele por aqui também.
-			if cfg.StorageBucket != "" && item.Bucket != cfg.StorageBucket {
-				if slices.Contains(cfg.SiblingBuckets, item.Bucket) {
-					continue // outro processo deste agent atende esse bucket
-				}
-				fail := api.RestoreItemUpdate{
-					Status:       "failed",
-					ErrorCode:    "wrong_bucket",
-					ErrorMessage: fmt.Sprintf("agent sem credenciais para o bucket %q (este processo atende %q)", item.Bucket, cfg.StorageBucket),
-				}
-				if err := c.PATCH(ctx, "/api/agents/"+cfg.AgentID+"/restore-items/"+item.ItemID, fail, nil); err != nil {
-					slog.Warn("PATCH wrong_bucket falhou", "item_id", item.ItemID, "err", err)
-				}
-				slog.Warn("restore item de bucket não atendido", "item_id", item.ItemID, "bucket", item.Bucket)
-				continue
-			}
-			// Marca running antes de tentar
-			markRunning := api.RestoreItemUpdate{Status: "running"}
-			if err := c.PATCH(ctx, "/api/agents/"+cfg.AgentID+"/restore-items/"+item.ItemID, markRunning, nil); err != nil {
-				slog.Warn("PATCH running falhou, pulando item", "item_id", item.ItemID, "err", err)
-				continue
-			}
-
-			err := restore.Run(ctx, exec, item)
-			update := api.RestoreItemUpdate{}
-
-			var warmReq *restore.ErrWarmingRequested
-			var warmInProg *restore.ErrWarmingInProgress
-			switch {
-			case err == nil:
-				delete(aquecendo, item.ItemID)
-				update.Status = "complete"
-				slog.Info("restore item OK",
-					"item_id", item.ItemID, "key", item.SourceKey,
-					"dest", item.DestPath+"/"+item.DestFilename)
-			case errors.As(err, &warmReq):
-				// Objeto em cold storage. Mantém status=running, próximo poll re-tenta.
-				slog.Info("warming requested",
-					"item_id", item.ItemID, "key", item.SourceKey,
-					"class", warmReq.StorageClass, "tier", warmReq.Tier)
-				update.Status = "running"
-				update.ErrorMessage = "warming-requested"
-				update.WarmingState = "requested"
-				update.WarmingTier = warmReq.Tier
-				update.WarmingETA = warmReq.PrevistoEm.Format(time.RFC3339)
-				agendarRecuo(aquecendo, item.ItemID)
-			case errors.As(err, &warmInProg):
-				slog.Info("warming in progress, aguardando",
-					"item_id", item.ItemID, "key", item.SourceKey,
-					"class", warmInProg.StorageClass)
-				update.Status = "running"
-				update.ErrorMessage = "warming-in-progress"
-				update.WarmingState = "in_progress"
-				agendarRecuo(aquecendo, item.ItemID)
-			default:
-				delete(aquecendo, item.ItemID)
-				update.Status = "failed"
-				update.ErrorMessage = err.Error()
-				// Objeto sumiu do bucket → sinaliza ao painel pra reconciliar o índice.
-				if isObjectGone(err) {
-					update.ErrorCode = "not_found"
-				}
-				slog.Error("restore item falhou",
-					"item_id", item.ItemID, "key", item.SourceKey, "err", err)
-			}
-
-			// Serviço parando no meio do item: não é falha do arquivo. Fica
-			// "running", e o próximo arranque o refaz (recuperação de crash).
-			if err != nil && ctx.Err() != nil {
-				return
-			}
-			// O resultado de um item que terminou tem de chegar ao painel
-			// mesmo que o serviço esteja parando.
-			var resp api.RestoreItemUpdateResponse
-			pctx, pcancel := context.WithTimeout(context.WithoutCancel(ctx), finalizacaoGraca)
-			perr := c.PATCH(pctx, "/api/agents/"+cfg.AgentID+"/restore-items/"+item.ItemID, update, &resp)
-			pcancel()
-			if perr != nil {
-				slog.Warn("PATCH final falhou", "item_id", item.ItemID, "err", perr)
-				continue
-			}
-			if resp.JobStatus == "complete" || resp.JobStatus == "partial" || resp.JobStatus == "failed" {
-				slog.Info("restore job concluído",
-					"job_id", resp.JobID,
-					"status", resp.JobStatus,
-					"done", resp.ItemsDone,
-					"failed", resp.ItemsFailed,
-					"total", resp.ItemsTotal)
-			}
-		}
-	}
+	run := func() { processarFilaDeRestore(ctx, c, s3c, cfg, aquecendo) }
 
 	// Primeiro tick imediato pra recuperar items "running" deixados num crash
 	run()
@@ -763,6 +651,130 @@ func restoreLoop(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 			return
 		case <-ticker.C:
 			run()
+		}
+	}
+}
+
+// limiteDeRestoreItems é quantos itens o agente pede por vez — o teto do
+// painel. Sem ?limit, vinha o padrão do painel (100): com cem itens frios
+// aquecendo no topo da fila, todos pulados pelo recuo, o item 101 em diante
+// nunca chegava ao agente.
+const limiteDeRestoreItems = 500
+
+// processarFilaDeRestore busca um lote de restore_items e executa cada um.
+// Item ainda no recuo do aquecimento é pulado, e o laço segue para os outros
+// do lote.
+func processarFilaDeRestore(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config.Config, aquecendo map[string]*esperaDeAquecimento) {
+	var resp api.ListRestoreItemsResponse
+	if err := c.GET(ctx, "/api/agents/"+cfg.AgentID+"/restore-items?limit="+strconv.Itoa(limiteDeRestoreItems), &resp); err != nil {
+		slog.Warn("poll restore-items falhou", "err", err)
+		return
+	}
+	if len(resp.Items) == 0 {
+		return
+	}
+	slog.Info("restore-items pendentes", "count", len(resp.Items))
+
+	exec := restore.Options{S3: s3c, HostRoot: cfg.HostRoot}
+	for _, item := range resp.Items {
+		if ctx.Err() != nil {
+			return
+		}
+		// Ainda no recuo: nem chega a falar com a S3 nem com o painel.
+		if e, ok := aquecendo[item.ItemID]; ok && time.Now().Before(e.proxima) {
+			continue
+		}
+		// Este processo só tem credenciais para o bucket configurado. Item de
+		// outro bucket falha rápido com erro claro (em vez de um 403 confuso) —
+		// se houver outro processo do agent com as credenciais certas, ele já
+		// terá filtrado o item dele por aqui também.
+		if cfg.StorageBucket != "" && item.Bucket != cfg.StorageBucket {
+			if slices.Contains(cfg.SiblingBuckets, item.Bucket) {
+				continue // outro processo deste agent atende esse bucket
+			}
+			fail := api.RestoreItemUpdate{
+				Status:       "failed",
+				ErrorCode:    "wrong_bucket",
+				ErrorMessage: fmt.Sprintf("agent sem credenciais para o bucket %q (este processo atende %q)", item.Bucket, cfg.StorageBucket),
+			}
+			if err := c.PATCH(ctx, "/api/agents/"+cfg.AgentID+"/restore-items/"+item.ItemID, fail, nil); err != nil {
+				slog.Warn("PATCH wrong_bucket falhou", "item_id", item.ItemID, "err", err)
+			}
+			slog.Warn("restore item de bucket não atendido", "item_id", item.ItemID, "bucket", item.Bucket)
+			continue
+		}
+		// Marca running antes de tentar
+		markRunning := api.RestoreItemUpdate{Status: "running"}
+		if err := c.PATCH(ctx, "/api/agents/"+cfg.AgentID+"/restore-items/"+item.ItemID, markRunning, nil); err != nil {
+			slog.Warn("PATCH running falhou, pulando item", "item_id", item.ItemID, "err", err)
+			continue
+		}
+
+		err := restore.Run(ctx, exec, item)
+		update := api.RestoreItemUpdate{}
+
+		var warmReq *restore.ErrWarmingRequested
+		var warmInProg *restore.ErrWarmingInProgress
+		switch {
+		case err == nil:
+			delete(aquecendo, item.ItemID)
+			update.Status = "complete"
+			slog.Info("restore item OK",
+				"item_id", item.ItemID, "key", item.SourceKey,
+				"dest", item.DestPath+"/"+item.DestFilename)
+		case errors.As(err, &warmReq):
+			// Objeto em cold storage. Mantém status=running, próximo poll re-tenta.
+			slog.Info("warming requested",
+				"item_id", item.ItemID, "key", item.SourceKey,
+				"class", warmReq.StorageClass, "tier", warmReq.Tier)
+			update.Status = "running"
+			update.ErrorMessage = "warming-requested"
+			update.WarmingState = "requested"
+			update.WarmingTier = warmReq.Tier
+			update.WarmingETA = warmReq.PrevistoEm.Format(time.RFC3339)
+			agendarRecuo(aquecendo, item.ItemID)
+		case errors.As(err, &warmInProg):
+			slog.Info("warming in progress, aguardando",
+				"item_id", item.ItemID, "key", item.SourceKey,
+				"class", warmInProg.StorageClass)
+			update.Status = "running"
+			update.ErrorMessage = "warming-in-progress"
+			update.WarmingState = "in_progress"
+			agendarRecuo(aquecendo, item.ItemID)
+		default:
+			delete(aquecendo, item.ItemID)
+			update.Status = "failed"
+			update.ErrorMessage = err.Error()
+			// Objeto sumiu do bucket → sinaliza ao painel pra reconciliar o índice.
+			if isObjectGone(err) {
+				update.ErrorCode = "not_found"
+			}
+			slog.Error("restore item falhou",
+				"item_id", item.ItemID, "key", item.SourceKey, "err", err)
+		}
+
+		// Serviço parando no meio do item: não é falha do arquivo. Fica
+		// "running", e o próximo arranque o refaz (recuperação de crash).
+		if err != nil && ctx.Err() != nil {
+			return
+		}
+		// O resultado de um item que terminou tem de chegar ao painel
+		// mesmo que o serviço esteja parando.
+		var resp api.RestoreItemUpdateResponse
+		pctx, pcancel := context.WithTimeout(context.WithoutCancel(ctx), finalizacaoGraca)
+		perr := c.PATCH(pctx, "/api/agents/"+cfg.AgentID+"/restore-items/"+item.ItemID, update, &resp)
+		pcancel()
+		if perr != nil {
+			slog.Warn("PATCH final falhou", "item_id", item.ItemID, "err", perr)
+			continue
+		}
+		if resp.JobStatus == "complete" || resp.JobStatus == "partial" || resp.JobStatus == "failed" {
+			slog.Info("restore job concluído",
+				"job_id", resp.JobID,
+				"status", resp.JobStatus,
+				"done", resp.ItemsDone,
+				"failed", resp.ItemsFailed,
+				"total", resp.ItemsTotal)
 		}
 	}
 }
