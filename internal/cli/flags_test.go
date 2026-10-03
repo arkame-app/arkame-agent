@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/arkame-app/agent/internal/config"
@@ -34,5 +35,21 @@ func TestFlagsNaoAnulamOAmbiente(t *testing.T) {
 	t.Setenv("PANEL_URL", "")
 	if cfg, _ = config.Load("", config.Overrides{HostRoot: hr, PanelURL: pu}); cfg.HostRoot != "/" || cfg.PanelURL != "https://save.arkame.app" {
 		t.Fatalf("padrões: HostRoot=%q PanelURL=%q", cfg.HostRoot, cfg.PanelURL)
+	}
+}
+
+// A ajuda do `run` prometia self-update, update sob demanda e long-poll dos
+// planos — nada disso existe no daemon. Ela descreve o que ele faz.
+func TestAjudaDoRunNaoPrometeOQueNaoExiste(t *testing.T) {
+	long := newRunCmd().Long
+	for _, promessa := range []string{"Aplica novas versões", "probe-storage, update", "long-poll + fallback"} {
+		if strings.Contains(long, promessa) {
+			t.Errorf("a ajuda do run ainda promete %q:\n%s", promessa, long)
+		}
+	}
+	for _, fato := range []string{"POLL_INTERVAL_SEC", "HEARTBEAT_INTERVAL_SEC", "self-update ainda não existe"} {
+		if !strings.Contains(long, fato) {
+			t.Errorf("a ajuda do run não diz %q:\n%s", fato, long)
+		}
 	}
 }

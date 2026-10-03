@@ -27,11 +27,16 @@ func newRunCmd() *cobra.Command {
 		Use:   "run",
 		Short: "Inicia o daemon do agent (enrollment já concluído)",
 		Long: `Loop principal do agent:
-  - Puxa plans do painel (long-poll + fallback a cada 60s)
+  - Busca os planos no painel a cada POLL_INTERVAL_SEC (padrão 60s)
   - Executa backups conforme schedule + janelas + throttling
-  - Reporta heartbeat a cada 60s
-  - Responde a comandos on-demand (restore, probe-storage, update)
-  - Aplica novas versões quando disponíveis (self-update)`,
+  - Reporta heartbeat a cada HEARTBEAT_INTERVAL_SEC (padrão 60s) e grava o
+    token novo que o painel mandar na resposta
+  - Busca restaurações pendentes a cada POLL_INTERVAL_SEC
+  - Testa o bucket de hora em hora e quando o painel pede (conferido a cada 30s)
+  - Atende o explorador de pastas do painel (long-poll)
+  - Aplica o expurgo de retenção autorizado pelo painel (de hora em hora)
+
+O programa não se atualiza sozinho: self-update ainda não existe.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, err := config.Load(configFile, config.Overrides{
 				HostRoot: hostRoot,
