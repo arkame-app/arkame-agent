@@ -135,6 +135,22 @@ func servicosDoAgente() []string {
 	return nomes
 }
 
+// configDoServico lê o --config do plist de outro agente.
+func configDoServico(nome string) (string, bool) {
+	dirs := []string{"/Library/LaunchDaemons"}
+	if h, err := os.UserHomeDir(); err == nil {
+		dirs = append(dirs, filepath.Join(h, "Library", "LaunchAgents"))
+	}
+	for _, d := range dirs {
+		b, err := os.ReadFile(filepath.Join(d, LaunchdLabel(nome)+".plist"))
+		if err == nil {
+			c := configDoPlist(string(b))
+			return c, c != ""
+		}
+	}
+	return "", false
+}
+
 // Parar: fora do Windows o programa pode ser trocado com o serviço de pé.
 func Parar(string) {}
 

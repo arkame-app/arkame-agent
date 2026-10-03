@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/arkame-app/agent/internal/aplicativos"
@@ -59,20 +60,25 @@ func newUninstallCmd() *cobra.Command {
 			// Antes de tocar em qualquer coisa: a configuração existe, e dá para
 			// apagá-la. Sem isto, sem sudo ou com o --config errado, o serviço
 			// saía, o programa saía, e a chave ficava.
-			arquivos := []string{}
+			existentes := []string{}
 			for _, p := range []string{configFile, cfg.TokenPath, cfg.PrivateKeyPath, cfg.AgentIDPath} {
 				if p != "" {
 					if _, serr := os.Stat(p); serr == nil {
-						arquivos = append(arquivos, p)
+						existentes = append(existentes, p)
 					}
 				}
 			}
-			if len(arquivos) == 0 {
+			if len(existentes) == 0 {
 				return fmt.Errorf("não encontrei a configuração do agente em %s: nada foi removido (use --config com o caminho da instalação)", configFile)
 			}
 			if perr := setup.PodeGravar(configFile); perr != nil {
 				return fmt.Errorf("%w — nada foi removido", perr)
 			}
+			// Os outros agentes desta máquina podem usar o mesmo token, chave
+			// e agent.id (o padrão é /etc/arkame/ para todos): apagá-los
+			// matava o vizinho.
+			outros, completo := configsDosOutros(serviceName)
+			arquivos, mantidos := separarArquivos(configFile, existentes, outros, completo)
 
 			if !sim {
 				t, terr := terminal.Open()
@@ -106,7 +112,10 @@ func newUninstallCmd() *cobra.Command {
 				_ = os.Remove(logs + ".1")
 			}
 			_ = os.Remove(filepath.Dir(configFile)) // só sai se ficou vazia
-			fmt.Fprintln(os.Stderr, "  ✓ Configuração, chave e identidade removidas:", strings.Join(arquivos, ", "))
+			fmt.Fprintln(os.Stderr, "  ✓ Removidos:", strings.Join(arquivos, ", "))
+			if len(mantidos) > 0 {
+				fmt.Fprintln(os.Stderr, "  Ficam, porque outro agente desta máquina pode usá-los:", strings.Join(mantidos, ", "))
+			}
 			aplicativos.RemoverEntrada(serviceName)
 
 			fmt.Fprintln(os.Stderr, "\n  No painel, arquive o servidor (Servidores → ⋯ → Arquivar) para ele deixar de ser cobrado.")
@@ -147,4 +156,58 @@ func newUninstallCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&elevado, "elevado", false, "")
 	_ = cmd.Flags().MarkHidden("elevado")
 	return cmd
+}
+
+// configsDosOutros carrega a configuração de cada outro agente desta máquina.
+// completo é false quando a de algum não pôde ser lida.
+func configsDosOutros(serviceName string) ([]*config.Config, bool) {
+	caminhos, completo := service.ConfigsDosOutros(serviceName)
+	var cfgs []*config.Config
+	for _, c := range caminhos {
+		cfg, err := config.Load(c, config.Overrides{})
+		if err != nil {
+			completo = false
+			continue
+		}
+		cfgs = append(cfgs, cfg)
+	}
+	return cfgs, completo
+}
+
+// separarArquivos decide o que o uninstall apaga. Arquivo que a configuração
+// de outro agente cita fica. Sem saber de algum outro agente (completo=false),
+// a identidade (tudo menos o próprio arquivo de configuração) fica toda:
+// apagar no escuro é o que derrubava o vizinho.
+func separarArquivos(configFile string, candidatos []string, outros []*config.Config, completo bool) (remover, manter []string) {
+	usados := map[string]bool{}
+	for _, o := range outros {
+		for _, p := range []string{o.ConfigPath, o.TokenPath, o.PrivateKeyPath, o.AgentIDPath} {
+			if p != "" {
+				usados[chaveDeCaminho(p)] = true
+			}
+		}
+	}
+	proprio := chaveDeCaminho(configFile)
+	for _, p := range candidatos {
+		switch {
+		case usados[chaveDeCaminho(p)]:
+			manter = append(manter, p)
+		case !completo && chaveDeCaminho(p) != proprio:
+			manter = append(manter, p)
+		default:
+			remover = append(remover, p)
+		}
+	}
+	return remover, manter
+}
+
+func chaveDeCaminho(p string) string {
+	if abs, err := filepath.Abs(p); err == nil {
+		p = abs
+	}
+	p = filepath.Clean(p)
+	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
+		p = strings.ToLower(p)
+	}
+	return p
 }

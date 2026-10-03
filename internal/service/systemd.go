@@ -191,6 +191,22 @@ func servicosDoAgente() []string {
 	return nomes
 }
 
+// configDoServico lê o env-file da unit de outro agente.
+func configDoServico(nome string) (string, bool) {
+	dirs := []string{"/etc/systemd/system"}
+	if d, err := userUnitDir(); err == nil {
+		dirs = append(dirs, d)
+	}
+	for _, d := range dirs {
+		b, err := os.ReadFile(filepath.Join(d, nome+".service"))
+		if err == nil {
+			c := configDaUnit(string(b))
+			return c, c != ""
+		}
+	}
+	return "", false
+}
+
 // Parar: fora do Windows o programa pode ser trocado com o serviço de pé.
 func Parar(string) {}
 

@@ -35,6 +35,9 @@ param(
     [string]$PanelUrl    = $(if ($env:ARKAME_PANEL_URL) { $env:ARKAME_PANEL_URL } else { 'https://save.arkame.app' }),
     [string]$Version     = $env:ARKAME_VERSION,
     [string]$ServiceName = 'arkame-agent',
+    # Arquivo de configuração deste agente. Com mais de um agente na máquina
+    # (um por credencial de bucket), cada um com o seu, junto de -ServiceName.
+    [string]$Config      = '',
     [switch]$NoService,
     # Onde este script mora, para se reabrir como administrador.
     [string]$ScriptUrl   = $(if ($env:ARKAME_SCRIPT_URL) { $env:ARKAME_SCRIPT_URL } else { 'https://get.arkame.app/install.ps1' }),
@@ -92,6 +95,11 @@ if (-not (Test-Administrator)) {
     }
     $partes = @("-ScriptUrl '$ScriptUrl'", "-PanelUrl '$PanelUrl'", "-ServiceName '$ServiceName'", '-Elevated')
     if ($Token)     { $partes += "-Token '$Token'" }
+    if ($Config)    {
+        # Vai entre aspas simples no comando da janela elevada.
+        if ($Config -match "['\r\n]") { Stop-WithError "caminho de configuracao invalido: $Config" }
+        $partes += "-Config '$Config'"
+    }
     if ($Version)   { $partes += "-Version '$Version'" }
     if ($NoService) { $partes += '-NoService' }
     $comando = "&([scriptblock]::Create((Invoke-RestMethod -UseBasicParsing '$ScriptUrl'))) " + ($partes -join ' ')
@@ -208,6 +216,7 @@ try {
     # O agente pergunta a chave do bucket, testa e só então registra.
     Write-Host ""
     $agentArgs = @('install', "--token=$Token", "--panel-url=$PanelUrl", "--service-name=$ServiceName")
+    if ($Config)    { $agentArgs += "--config=$Config" }
     if ($NoService) { $agentArgs += '--install-service=false' }
 
     & $exePath @agentArgs

@@ -26,6 +26,7 @@ DOWNLOAD_BASE="${ARKAME_DOWNLOAD_BASE:-}"
 TOKEN=""
 SERVICE_NAME="arkame-agent"
 SERVICE_SCOPE=""
+CONFIG_FILE=""
 INSTALL_SERVICE="true"
 
 # ── saída ────────────────────────────────────────────────────────────────────
@@ -53,6 +54,9 @@ Opções:
   --token=CODIGO        código de instalação do painel (Servidores → Novo servidor)
   --panel-url=URL       painel a usar (padrão: https://save.arkame.app)
   --service-name=NOME   nome do serviço (use um por credencial de storage)
+  --config=ARQUIVO      arquivo de configuração deste agente (padrão:
+                        /etc/arkame/agent.env). Com mais de um agente na
+                        máquina, um arquivo por agente, junto de --service-name
   --service-scope=X     system (todo o host, exige sudo) ou user (sem sudo)
   --no-service          só instala o binário, sem registrar serviço
   --version=vX.Y.Z      instala uma versão específica
@@ -67,6 +71,7 @@ for arg in "$@"; do
     --panel-url=*)     PANEL_URL="${arg#*=}" ;;
     --service-name=*)  SERVICE_NAME="${arg#*=}" ;;
     --service-scope=*) SERVICE_SCOPE="${arg#*=}" ;;
+    --config=*)        CONFIG_FILE="${arg#*=}" ;;
     --version=*)       ARKAME_VERSION="${arg#*=}" ;;
     --download-base=*) DOWNLOAD_BASE="${arg#*=}" ;;
     --no-service)      INSTALL_SERVICE="false" ;;
@@ -236,6 +241,7 @@ main() {
   printf '\n'
   set -- install --token="$TOKEN" --panel-url="$PANEL_URL" --service-name="$SERVICE_NAME"
   [ -n "$SERVICE_SCOPE" ] && set -- "$@" --service-scope="$SERVICE_SCOPE"
+  [ -n "$CONFIG_FILE" ] && set -- "$@" --config="$CONFIG_FILE"
   [ "$INSTALL_SERVICE" = "false" ] && set -- "$@" --install-service=false
 
   "$BIN_DIR/arkame-agent" "$@"

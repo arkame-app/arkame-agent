@@ -7,11 +7,13 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/arkame-app/agent/internal/aplicativos"
 	"github.com/arkame-app/agent/internal/config"
 	"github.com/arkame-app/agent/internal/enrollment"
 	"github.com/arkame-app/agent/internal/service"
+	"github.com/arkame-app/agent/internal/setup"
 	"github.com/arkame-app/agent/pkg/version"
 	"github.com/spf13/cobra"
 )
@@ -99,6 +101,17 @@ agent_id existente, preservando histórico e path no bucket.`,
 					if cfg, err = carregar(); err != nil {
 						return err
 					}
+				}
+			}
+
+			// Agente com --config próprio (mais de um na máquina): token, chave
+			// e agent.id ao lado do arquivo dele, e não nos padrões que o
+			// agente da configuração padrão também usa.
+			if mudou, err := identidadePropria(configFile, cfg); err != nil {
+				return err
+			} else if mudou {
+				if cfg, err = carregar(); err != nil {
+					return err
 				}
 			}
 
@@ -195,6 +208,37 @@ agent_id existente, preservando histórico e path no bucket.`,
 	_ = cmd.Flags().MarkHidden("enrollment-token")
 
 	return cmd
+}
+
+// identidadePropria grava no env-file caminhos de identidade derivados dele
+// (agent-oci.env → agent-oci.token.jwt, agent-oci.key.pem, agent-oci.agent.id)
+// quando o arquivo não é o padrão e o caminho ainda é o padrão. Sem isso, o
+// segundo agente da máquina gravava a chave e o token por cima dos do
+// primeiro. Caminho já definido (no arquivo ou no ambiente) não muda, nem o
+// agente da configuração padrão.
+func identidadePropria(configFile string, cfg *config.Config) (bool, error) {
+	padrao, err := filepath.Abs(config.DefaultPath)
+	if err != nil || chaveDeCaminho(configFile) == chaveDeCaminho(padrao) {
+		return false, nil
+	}
+	base := strings.TrimSuffix(configFile, filepath.Ext(configFile))
+	var linhas []string
+	if cfg.TokenPath == config.DefaultTokenPath {
+		linhas = append(linhas, "TOKEN_PATH="+base+".token.jwt")
+	}
+	if cfg.PrivateKeyPath == config.DefaultPrivateKeyPath {
+		linhas = append(linhas, "PRIVATE_KEY_PATH="+base+".key.pem")
+	}
+	if cfg.AgentIDPath == config.DefaultAgentIDPath {
+		linhas = append(linhas, "AGENT_ID_PATH="+base+".agent.id")
+	}
+	if len(linhas) == 0 {
+		return false, nil
+	}
+	if err := setup.Gravar(configFile, linhas); err != nil {
+		return false, fmt.Errorf("gravando os caminhos da identidade em %s: %w", configFile, err)
+	}
+	return true, nil
 }
 
 // mantém contexto disponível para testes

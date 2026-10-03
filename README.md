@@ -195,7 +195,17 @@ chave privada, agent.id) e o programa; a pasta só sai se ficar vazia. Os backup
 continuam no bucket. No painel, arquive o servidor para ele deixar de ser cobrado.
 Antes de tocar em qualquer coisa, confere que achou a configuração e que pode
 apagá-la. Com mais de um agente na máquina (`--service-name`), use o mesmo
-`--service-name` e `--config` da instalação; o programa só sai com o último.
+`--service-name` e `--config` da instalação; o programa só sai com o último, e
+token, chave e agent.id que a configuração de outro agente ainda usa ficam (se
+a configuração de algum não puder ser lida, a identidade fica toda).
+
+Mais de um agente na máquina (um por credencial de bucket): instale cada um com
+o seu `--service-name` e `--config` (`install.sh --config=/etc/arkame/agent-oci.env
+--service-name=arkame-agent-oci`; no `install.ps1`, `-Config` e `-ServiceName`).
+Com `--config` diferente do padrão, o `install` grava token, chave e agent.id
+ao lado do arquivo (`agent-oci.token.jwt`, `agent-oci.key.pem`,
+`agent-oci.agent.id`), a menos que `TOKEN_PATH`, `PRIVATE_KEY_PATH` ou
+`AGENT_ID_PATH` já estejam definidos.
 
 No Windows, o agente aparece em **Aplicativos instalados** ("Arkame — agente de
 backup"); o Desinstalar chama `uninstall --pause` e pede administrador sozinho.

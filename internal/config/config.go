@@ -22,6 +22,13 @@ import (
 // DefaultPath é o arquivo de configuração padrão (no Windows, C:\etc\arkame\agent.env).
 const DefaultPath = "/etc/arkame/agent.env"
 
+// Caminhos padrão da identidade do agente.
+const (
+	DefaultTokenPath      = "/etc/arkame/token.jwt"
+	DefaultPrivateKeyPath = "/etc/arkame/key.pem"
+	DefaultAgentIDPath    = "/etc/arkame/agent.id"
+)
+
 // DefaultRegion é a região quando o armazenamento não informa uma.
 const DefaultRegion = "us-east-1"
 
@@ -114,9 +121,9 @@ func Load(envFile string, o Overrides) (*Config, error) {
 		PanelURL:             firstNonEmpty(o.PanelURL, get("PANEL_URL"), "https://save.arkame.app"),
 		EnrollmentToken:      firstNonEmpty(o.EnrollmentToken, get("ENROLLMENT_TOKEN")),
 		Fingerprint:          get("AGENT_FINGERPRINT"),
-		TokenPath:            firstNonEmpty(get("TOKEN_PATH"), "/etc/arkame/token.jwt"),
-		PrivateKeyPath:       firstNonEmpty(get("PRIVATE_KEY_PATH"), "/etc/arkame/key.pem"),
-		AgentIDPath:          firstNonEmpty(get("AGENT_ID_PATH"), "/etc/arkame/agent.id"),
+		TokenPath:            firstNonEmpty(get("TOKEN_PATH"), DefaultTokenPath),
+		PrivateKeyPath:       firstNonEmpty(get("PRIVATE_KEY_PATH"), DefaultPrivateKeyPath),
+		AgentIDPath:          firstNonEmpty(get("AGENT_ID_PATH"), DefaultAgentIDPath),
 		HostRoot:             firstNonEmpty(o.HostRoot, get("HOST_ROOT"), "/"),
 		StorageAccessKey:     get("STORAGE_ACCESS_KEY"),
 		StorageSecretKey:     get("STORAGE_SECRET_KEY"),

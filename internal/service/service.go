@@ -129,6 +129,76 @@ func OutrosAgentes(name string) []string {
 	return outros
 }
 
+// ConfigsDosOutros devolve o arquivo de configuração de cada outro agente
+// desta máquina, lido do registro do serviço (unit, plist, SCM). completo é
+// false quando algum deles não pôde ser lido — o chamador não sabe, então,
+// que caminhos aquele agente usa.
+func ConfigsDosOutros(name string) (configs []string, completo bool) {
+	completo = true
+	for _, n := range OutrosAgentes(name) {
+		c, ok := configDoServico(n)
+		if !ok || c == "" {
+			completo = false
+			continue
+		}
+		configs = append(configs, c)
+	}
+	return configs, completo
+}
+
+// configDaUnit lê o env-file de uma unit do systemd gerada pelo agente
+// (EnvironmentFile=, ou o --config do ExecStart).
+func configDaUnit(conteudo string) string {
+	var doExec string
+	for _, l := range strings.Split(conteudo, "\n") {
+		l = strings.TrimSpace(l)
+		if v, ok := strings.CutPrefix(l, "EnvironmentFile="); ok {
+			return strings.Trim(strings.TrimPrefix(v, "-"), `"`)
+		}
+		if v, ok := strings.CutPrefix(l, "ExecStart="); ok {
+			doExec = configDosArgs(strings.Fields(v))
+		}
+	}
+	return strings.Trim(doExec, `"`)
+}
+
+// configDoPlist lê o argumento depois de --config no ProgramArguments.
+func configDoPlist(conteudo string) string {
+	var args []string
+	resto := conteudo
+	for {
+		i := strings.Index(resto, "<string>")
+		if i < 0 {
+			break
+		}
+		resto = resto[i+len("<string>"):]
+		j := strings.Index(resto, "</string>")
+		if j < 0 {
+			break
+		}
+		args = append(args, xmlUnescape(resto[:j]))
+		resto = resto[j+len("</string>"):]
+	}
+	return configDosArgs(args)
+}
+
+// configDosArgs acha o valor de --config (separado ou com =).
+func configDosArgs(args []string) string {
+	for i, a := range args {
+		if a == "--config" && i+1 < len(args) {
+			return args[i+1]
+		}
+		if v, ok := strings.CutPrefix(a, "--config="); ok {
+			return v
+		}
+	}
+	return ""
+}
+
+func xmlUnescape(s string) string {
+	return strings.NewReplacer("&lt;", "<", "&gt;", ">", "&quot;", `"`, "&apos;", "'", "&amp;", "&").Replace(s)
+}
+
 // Install registra o agent como serviço do SO.
 func Install(ctx context.Context, cfg *config.Config, opts Options) (*Installed, error) {
 	if opts.Name == "" {

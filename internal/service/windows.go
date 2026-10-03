@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/arkame-app/agent/internal/config"
+	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/mgr"
 )
@@ -98,6 +99,30 @@ func servicosDoAgente() []string {
 		}
 	}
 	return nomes
+}
+
+// configDoServico lê o --config da linha de comando registrada no SCM.
+func configDoServico(nome string) (string, bool) {
+	m, err := mgr.Connect()
+	if err != nil {
+		return "", false
+	}
+	defer m.Disconnect()
+	s, err := m.OpenService(nome)
+	if err != nil {
+		return "", false
+	}
+	defer s.Close()
+	c, err := s.Config()
+	if err != nil {
+		return "", false
+	}
+	args, err := windows.DecomposeCommandLine(c.BinaryPathName)
+	if err != nil {
+		return "", false
+	}
+	cfg := configDosArgs(args)
+	return cfg, cfg != ""
 }
 
 // pararEEsperar para o serviço e espera ele parar de fato: o processo pode
