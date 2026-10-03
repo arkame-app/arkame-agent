@@ -280,10 +280,22 @@ main() {
   [ -f "$TMP/arkame-agent" ] || die "o pacote não contém o binário arkame-agent"
 
   chmod +x "$TMP/arkame-agent"
-  # mv entre sistemas de arquivos diferentes falha; cat preserva o destino se
-  # o binário estiver em uso (texto ocupado), então removemos antes.
-  rm -f "$BIN_DIR/arkame-agent" 2>/dev/null || true
-  cp "$TMP/arkame-agent" "$BIN_DIR/arkame-agent" || die "não consegui escrever em $BIN_DIR (tente com sudo, ou defina ARKAME_BIN_DIR)"
+  # O novo é copiado ao lado (o $TMP pode estar em outro sistema de arquivos)
+  # e entra no lugar por mv, atômico na mesma pasta e sem "texto ocupado" com
+  # o agente rodando. Se a cópia falhar (disco cheio), sai só o temporário e o
+  # programa antigo fica: apagado antes, o serviço não subia mais no próximo
+  # reinício.
+  novo="$BIN_DIR/.arkame-agent.novo.$$"
+  escrever="não consegui escrever em $BIN_DIR (tente com sudo, ou defina ARKAME_BIN_DIR); o programa que estava lá continua"
+  if ! cp "$TMP/arkame-agent" "$novo"; then
+    rm -f "$novo" 2>/dev/null || true
+    die "$escrever"
+  fi
+  chmod 755 "$novo" 2>/dev/null || true
+  if ! mv -f "$novo" "$BIN_DIR/arkame-agent"; then
+    rm -f "$novo" 2>/dev/null || true
+    die "$escrever"
+  fi
   ok "Instalado: $("$BIN_DIR"/arkame-agent version 2>/dev/null || echo "$BIN_DIR/arkame-agent")"
 
   case ":$PATH:" in

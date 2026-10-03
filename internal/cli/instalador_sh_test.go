@@ -48,6 +48,18 @@ func rodarInstallSh(t *testing.T, checksums func(pacote, sha string) string, arg
 // vai para ~/.local/bin).
 func rodarInstallShNoHome(t *testing.T, noHome bool, checksums func(pacote, sha string) string, args ...string) (string, bool, bool) {
 	t.Helper()
+	binDir := t.TempDir()
+	var env []string
+	if noHome {
+		env = append(env, "HOME="+filepath.Dir(binDir))
+	}
+	return rodarInstallShEm(t, binDir, env, checksums, args...)
+}
+
+// rodarInstallShEm roda o install.sh com o destino binDir (que pode já ter um
+// programa) e as variáveis extras env.
+func rodarInstallShEm(t *testing.T, binDir string, env []string, checksums func(pacote, sha string) string, args ...string) (string, bool, bool) {
+	t.Helper()
 	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
 		t.Skip("install.sh é do Linux e do macOS")
 	}
@@ -75,13 +87,9 @@ func rodarInstallShNoHome(t *testing.T, noHome bool, checksums func(pacote, sha 
 	}))
 	t.Cleanup(srv.Close)
 
-	binDir := t.TempDir()
 	cmd := exec.Command("sh", append([]string{filepath.Join("..", "..", "install.sh"),
 		"--version=v9.9.9", "--download-base=" + srv.URL}, args...)...)
-	cmd.Env = append(os.Environ(), "ARKAME_BIN_DIR="+binDir, "NO_COLOR=1")
-	if noHome {
-		cmd.Env = append(cmd.Env, "HOME="+filepath.Dir(binDir))
-	}
+	cmd.Env = append(append(os.Environ(), "ARKAME_BIN_DIR="+binDir, "NO_COLOR=1"), env...)
 	out, err := cmd.CombinedOutput()
 	_, errBin := os.Stat(filepath.Join(binDir, "arkame-agent"))
 	return string(out), err == nil, errBin == nil
@@ -232,4 +240,62 @@ func TestInstallShComRootEscolheUmaPastaSoDoRoot(t *testing.T) {
 	if got := escolha("/tmp/arkame-nao-existe/bin"); got != "/opt/arkame/bin" {
 		t.Errorf("pasta debaixo do /tmp mantida: %q", got)
 	}
+}
+
+// O install.sh apagava o programa antes de copiar o novo: com a cópia
+// falhando no meio (disco cheio), o antigo sumia, o novo ficava pela metade
+// e o serviço não subia mais no próximo reinício. Agora o novo é copiado ao
+// lado e entra por mv; se a cópia falha, o antigo fica e o temporário sai.
+func TestInstallShCopiaQueFalhaMantemOProgramaAntigo(t *testing.T) {
+	certo := func(pacote, sha string) string { return sha + "  " + pacote + "\n" }
+	antigo := []byte("#!/bin/sh\necho arkame-agent antigo\n")
+	semTemporario := func(t *testing.T, binDir string) {
+		t.Helper()
+		sobras, _ := filepath.Glob(filepath.Join(binDir, ".arkame-agent.novo.*"))
+		if len(sobras) > 0 {
+			t.Errorf("temporário deixado para trás: %v", sobras)
+		}
+	}
+
+	t.Run("cópia falha", func(t *testing.T) {
+		binDir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(binDir, "arkame-agent"), antigo, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		// Um cp que escreve pela metade e falha, como no disco cheio.
+		falso := t.TempDir()
+		cp := "#!/bin/sh\nprintf parcial > \"$2\"\nexit 1\n"
+		if err := os.WriteFile(filepath.Join(falso, "cp"), []byte(cp), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		path := "PATH=" + falso + string(os.PathListSeparator) + os.Getenv("PATH")
+		out, terminou, _ := rodarInstallShEm(t, binDir, []string{path}, certo)
+		if terminou {
+			t.Fatalf("a cópia falhou e o install.sh terminou bem:\n%s", out)
+		}
+		got, err := os.ReadFile(filepath.Join(binDir, "arkame-agent"))
+		if err != nil || !bytes.Equal(got, antigo) {
+			t.Fatalf("o programa antigo não ficou (err=%v, conteúdo=%q):\n%s", err, got, out)
+		}
+		if !strings.Contains(out, "continua") {
+			t.Errorf("a mensagem não diz que o programa antigo continua:\n%s", out)
+		}
+		semTemporario(t, binDir)
+	})
+
+	t.Run("cópia certa troca o antigo", func(t *testing.T) {
+		binDir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(binDir, "arkame-agent"), antigo, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		out, terminou, instalou := rodarInstallShEm(t, binDir, nil, certo)
+		if !terminou || !instalou {
+			t.Fatalf("terminou=%v binário=%v\n%s", terminou, instalou, out)
+		}
+		got, _ := os.ReadFile(filepath.Join(binDir, "arkame-agent"))
+		if !bytes.Contains(got, []byte("falso")) {
+			t.Fatalf("o novo não entrou no lugar: %q", got)
+		}
+		semTemporario(t, binDir)
+	})
 }
