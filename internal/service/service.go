@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 
 	"github.com/arkame-app/agent/internal/config"
@@ -117,16 +118,38 @@ func RestartCommand(name string, scope Scope) string {
 // credencial de storage, com --service-name). Eles usam o mesmo programa:
 // desinstalar um não pode apagá-lo.
 func OutrosAgentes(name string) []string {
+	return outrosEntre(runtime.GOOS, servicosDoAgente(), name)
+}
+
+// outrosEntre tira name da lista de serviços do agente. A comparação é pela
+// identidade do serviço no SO, e não pelo texto: no macOS o painel devolve o
+// label (app.arkame.agent-aws) em --service-name, e a lista vem pelo nome
+// (arkame-agent-aws) — o agente se contava como "outro", e o uninstall
+// deixava a configuração com a chave, o token e a chave privada no disco.
+func outrosEntre(goos string, todos []string, name string) []string {
 	if name == "" {
 		name = DefaultName
 	}
+	proprio := chaveDoServico(goos, name)
 	var outros []string
-	for _, n := range servicosDoAgente() {
-		if n != name {
+	for _, n := range todos {
+		if chaveDoServico(goos, n) != proprio {
 			outros = append(outros, n)
 		}
 	}
 	return outros
+}
+
+// chaveDoServico é como o SO identifica o serviço: o label no launchd, o nome
+// sem distinção de maiúsculas no SCM do Windows, o nome da unit no systemd.
+func chaveDoServico(goos, name string) string {
+	switch goos {
+	case "darwin":
+		return LaunchdLabel(name)
+	case "windows":
+		return strings.ToLower(name)
+	}
+	return name
 }
 
 // ConfigsDosOutros devolve o arquivo de configuração de cada outro agente
