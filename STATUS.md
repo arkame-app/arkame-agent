@@ -125,6 +125,23 @@ Binário Linux rodando local contra o painel em produção (`save.arkame.app`) +
 > `.arkame-agent.novo.<pid>` na mesma pasta e troca por `mv -f`. Se a cópia falha (disco
 > cheio), sai só o temporário e o programa antigo continua; antes, o antigo sumia, o novo
 > ficava pela metade e o serviço não subia no próximo reinício.
+>
+> No Linux e no macOS, trocar o programa agora reinicia os outros agentes que o rodam,
+> como no Windows. O `mv -f` troca o inode e cada processo seguia com o binário antigo
+> até alguém reiniciá-lo ou o host reiniciar; com `--token`, só o `--service-name`
+> reiniciava, e sem `--token`, nenhum. Antes do `mv`, o `install.sh` anota as units
+> `arkame-agent*` ativas (systemd do sistema e `--user`) cujo `ExecStart` aponta para o
+> programa instalado (`systemctl show -p ExecStart`), ou os jobs `app.arkame.agent*`
+> rodando (`launchctl print` → `state = running`) cujo `ProgramArguments` aponta para
+> ele. Depois da troca reinicia todos: com `--token`, menos o `--service-name`, que o
+> `install` reinicia (salvo com `--no-service`, e salvo se o `install` sair com erro:
+> aí o script o reinicia); sem `--token`, todos, inclusive o principal, e não mostra
+> mais "registre este servidor" quando é atualização de servidor já instalado. Os que
+> falham saem no aviso "Continuam na versão antiga". No pacote `service`,
+> `RodandoOPrograma` e `Reiniciar` passam a funcionar no systemd e no launchd
+> (`systemctl [--user] is-active`/`restart`; `launchctl print`/`kickstart -k`, no escopo
+> em que o serviço está registrado), e o `setup` no Linux/macOS reinicia os outros do
+> programa pelo mesmo caminho do Windows.
 
 - **Enrollment Ed25519**: `internal/enrollment` gera keypair, POST `/api/agents/enroll`, long-poll na `wait-token` até receber JWT bearer
 - **Bearer auth**: client HTTP envia `Authorization: Bearer <token>` em todos os requests pós-approval; `ErrNotReady` (204) e `ErrGone` (410) pra long-poll handling
