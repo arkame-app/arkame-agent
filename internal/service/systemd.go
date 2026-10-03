@@ -20,6 +20,12 @@ import (
 // inteiro para fazer backup, então ProtectSystem=full (que só protege /usr,
 // /boot e /etc contra escrita) em vez de strict, e ProtectHome desligado,
 // senão /home fica invisível justamente para quem deveria protegê-lo.
+//
+// Sem PrivateTmp: com ele o serviço via um /tmp só dele — o backup de /tmp
+// saía vazio, e a restauração para /tmp gravava no /tmp privado, que some ao
+// parar o serviço. Efeito conhecido do ProtectSystem=full: restaurar para
+// /usr, /boot ou /etc falha com "read-only file system" — falha visível no
+// painel, e não arquivo perdido; quem precisar restaura em outra pasta.
 const systemUnitTmpl = `[Unit]
 Description=Arkame Backup Agent (%[1]s)
 Documentation=https://arkame.app/docs
@@ -38,7 +44,6 @@ Group=root
 # Hardening compatível com a função do agent (ler o disco para backup)
 NoNewPrivileges=true
 ProtectSystem=full
-PrivateTmp=true
 ReadWritePaths=%[4]s
 
 [Install]

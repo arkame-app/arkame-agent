@@ -37,3 +37,14 @@ func TestLaunchdLabelAceitaOProprioLabel(t *testing.T) {
 		}
 	}
 }
+
+// PrivateTmp dava ao serviço um /tmp só dele: backup de /tmp vazio e
+// restauração para /tmp sumindo ao parar o serviço.
+func TestUnitDeSistemaSemPrivateTmp(t *testing.T) {
+	if strings.Contains(systemUnitTmpl, "PrivateTmp") {
+		t.Fatal("a unit de sistema não pode ter PrivateTmp")
+	}
+	if !strings.Contains(systemUnitTmpl, "ProtectSystem=full") {
+		t.Fatal("o resto do hardening continua")
+	}
+}
