@@ -67,6 +67,18 @@ Binário Linux rodando local contra o painel em produção (`save.arkame.app`) +
 > no meio de um backup a versão que ele reaproveitava por dedup, e a sessão gravava no
 > catálogo uma versão que já não existia. O backup espera a limpeza em curso; a limpeza
 > com backup em curso nem pergunta ao painel e tenta de novo em 1 minuto.
+>
+> O `/sessions/start` leva `exclude_globs` (sempre lista, vazia se não houver): as
+> exclusões que o walker usa nesta sessão, lidas quando o plano foi buscado. O painel
+> gravava as do plano em vigor no `/start`; com um `*.log` tirado do plano enquanto
+> outro rodava, a sessão dizia "sem exclusões" sem ter nenhum `.log`, e a falta virava
+> remoção. O painel precisa gravar o campo do agente (e cair no do plano quando ele não
+> vier, de agente antigo).
+>
+> Link para arquivo cujo destino não dá para ler (EACCES; no macOS, sem Acesso Total ao
+> Disco) entra na conta do backup parcial, como um arquivo comum ilegível. Antes era
+> pulado calado: sumia de uma sessão "concluída" e o painel lia a falta como remoção.
+> Link quebrado e link para pasta continuam fora, sem deixar a sessão parcial.
 
 - **Enrollment Ed25519**: `internal/enrollment` gera keypair, POST `/api/agents/enroll`, long-poll na `wait-token` até receber JWT bearer
 - **Bearer auth**: client HTTP envia `Authorization: Bearer <token>` em todos os requests pós-approval; `ErrNotReady` (204) e `ErrGone` (410) pra long-poll handling
