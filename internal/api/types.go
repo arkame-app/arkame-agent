@@ -133,8 +133,12 @@ type SessionStart struct {
 	SourcePaths []string `json:"source_paths"`
 	// ExcludeGlobs: as exclusões que o walker usa nesta sessão (sempre lista,
 	// vazia se não houver). O painel grava estas, não as do plano no /start.
-	ExcludeGlobs      []string `json:"exclude_globs"`
-	ConsistencyMethod string   `json:"consistency_method"`
+	ExcludeGlobs []string `json:"exclude_globs"`
+	// PrefixRoot: o prefixo de chave do armazenamento com que esta sessão
+	// monta as chaves (sempre presente, "" se as chaves ficam na raiz). O
+	// painel lê a seleção da sessão sob ele, não sob o prefixo em vigor.
+	PrefixRoot        string `json:"prefix_root"`
+	ConsistencyMethod string `json:"consistency_method"`
 }
 
 // SessionComplete é enviado ao fim da sessão com o version_map já

@@ -336,16 +336,24 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 	if exclusoes == nil {
 		exclusoes = []string{}
 	}
+	// O prefixo de chave desta sessão vai junto, pelo mesmo motivo: o painel
+	// lê a seleção da sessão sob ele. Lendo pelo prefixo em vigor, uma troca
+	// de prefixo (A/ → B/ → A/) fazia as chaves sob A/ de um servidor que
+	// ainda não rodou de novo parecerem "removidas do servidor". Vai sempre,
+	// mesmo vazio: ausente é agente antigo.
+	prefixo := plan.StorageRef.PrefixRoot
 	startReq := struct {
 		PlanID            string   `json:"plan_id"`
 		SourcePaths       []string `json:"source_paths"`
 		ExcludeGlobs      []string `json:"exclude_globs"`
+		PrefixRoot        string   `json:"prefix_root"`
 		ConsistencyMethod string   `json:"consistency_method,omitempty"`
 		AgentVersion      string   `json:"agent_version,omitempty"`
 	}{
 		PlanID:       plan.ID,
 		SourcePaths:  plan.SourcePaths,
 		ExcludeGlobs: exclusoes,
+		PrefixRoot:   prefixo,
 		AgentVersion: version.Version,
 	}
 	var startResp struct {
@@ -402,7 +410,7 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 	result, syncErr := rodarSync(ctx, syncengine.EngineOptions{
 		S3:           s3c,
 		Bucket:       plan.StorageRef.Bucket,
-		PrefixRoot:   plan.StorageRef.PrefixRoot + "data/" + cfg.AgentID + "/",
+		PrefixRoot:   prefixo + "data/" + cfg.AgentID + "/",
 		HostRoot:     cfg.HostRoot,
 		SourcePaths:  plan.SourcePaths,
 		ExcludeGlobs: exclusoes,
