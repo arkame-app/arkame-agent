@@ -52,7 +52,7 @@ func TestDedupIndexaADataDoArquivo(t *testing.T) {
 	falso, c := novoS3Falso(t)
 	fi := arquivoDeTeste(t, "igual")
 	quando := time.Date(2023, 7, 1, 12, 0, 0, 0, time.UTC)
-	fi.ModTime = quando.UnixNano()
+	fi.ModTime = quando
 	falso.objetos["data/a/dados.db"] = objetoFalso{dados: []byte("igual"), sha256: sha256Hex([]byte("igual")), versao: "v9"}
 	falso.ultimaModificacao = time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 

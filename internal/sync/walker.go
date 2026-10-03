@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/arkame-app/agent/internal/caminho"
 )
@@ -22,7 +23,11 @@ type FileInfo struct {
 	AbsolutePath string // caminho real na máquina (/host/var/data/file.conf)
 	RelativePath string // caminho dentro da source_path (var/data/file.conf)
 	Size         int64
-	ModTime      int64 // unix nano
+	// ModTime é a data do arquivo como o sistema a dá. Era int64 em
+	// nanossegundos (UnixNano), que só cobre 1677–2262: um arquivo com data
+	// fora disso (relógio errado, arquivo de teste) ia ao índice com a data
+	// dando a volta.
+	ModTime time.Time
 }
 
 // Walk percorre os paths fornecidos, respeitando excludeGlobs (patterns tipo *.tmp, node_modules).
@@ -154,7 +159,7 @@ func Walk(ctx context.Context, hostRoot string, sourcePaths []string, excludeGlo
 					AbsolutePath: leitura,
 					RelativePath: chave(path),
 					Size:         info.Size(),
-					ModTime:      info.ModTime().UnixNano(),
+					ModTime:      info.ModTime(),
 				}:
 				}
 				return nil

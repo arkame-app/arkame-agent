@@ -148,7 +148,7 @@ func processFile(ctx context.Context, o EngineOptions, fi FileInfo) (*api.FileEn
 		// O índice guarda a data do arquivo, não a do objeto: o LastModified
 		// é quando a versão subiu (às vezes semanas antes), e a restauração
 		// por data e a tela do arquivo mostravam a data do envio.
-		existing.ModifiedAt = time.Unix(0, fi.ModTime)
+		existing.ModifiedAt = dataParaOPainel(fi.ModTime)
 		slog.Debug("dedup hit, pulando upload",
 			"key", key, "sha256", hash[:8], "size", fi.Size)
 		return existing, true, nil
@@ -222,7 +222,7 @@ func processFile(ctx context.Context, o EngineOptions, fi FileInfo) (*api.FileEn
 		VersionID:  versionID,
 		Size:       fi.Size,
 		SHA256:     hash,
-		ModifiedAt: time.Unix(0, fi.ModTime),
+		ModifiedAt: dataParaOPainel(fi.ModTime),
 	}, false, nil
 }
 
@@ -461,4 +461,24 @@ func checkDedup(ctx context.Context, s3c *s3.Client, bucket, key, hash string) (
 		Size:      size,
 		SHA256:    hash,
 	}, true
+}
+
+// Limites da data que vai ao painel: o JSON de time.Time (RFC 3339) só aceita
+// os anos 0 a 9999 — fora disso o json.Marshal falha e a sessão inteira não
+// fecha —, e o Postgres não tem o ano 0.
+var (
+	menorDataDoPainel = time.Date(1, 1, 1, 0, 0, 0, 0, time.UTC)
+	maiorDataDoPainel = time.Date(9999, 12, 31, 23, 59, 59, 999999999, time.UTC)
+)
+
+// dataParaOPainel é a data do arquivo para o índice, presa aos anos que o
+// formato do painel aceita.
+func dataParaOPainel(t time.Time) time.Time {
+	switch {
+	case t.Before(menorDataDoPainel):
+		return menorDataDoPainel
+	case t.After(maiorDataDoPainel):
+		return maiorDataDoPainel
+	}
+	return t
 }

@@ -173,7 +173,7 @@ func Run(ctx context.Context, opts Options, item api.RestoreItem) error {
 	if item.SourceModifiedAt != nil && !item.SourceModifiedAt.IsZero() {
 		mtime = *item.SourceModifiedAt
 	}
-	_ = os.Chtimes(finalPath, time.Now(), mtime)
+	_ = aplicarData(finalPath, time.Now(), mtime)
 	return nil
 }
 

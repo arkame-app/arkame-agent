@@ -16,7 +16,7 @@ func arquivoDeTeste(t *testing.T, conteudo string) FileInfo {
 		t.Fatal(err)
 	}
 	st, _ := os.Stat(p)
-	return FileInfo{AbsolutePath: p, RelativePath: "dados.db", Size: st.Size(), ModTime: st.ModTime().UnixNano()}
+	return FileInfo{AbsolutePath: p, RelativePath: "dados.db", Size: st.Size(), ModTime: st.ModTime()}
 }
 
 // Arquivo que não muda: sobe, e o version_map registra o hash do que subiu.
