@@ -39,30 +39,34 @@ Binário Linux rodando local contra o painel em produção (`save.arkame.app`) +
 
 ## O que está pronto
 
-> Atualizado em 2026-10-03 conferindo o código (v0.4.12, publicada em 03/10; tag no
-> `5e4b04b`). As seções datadas acima são registro histórico e podem descrever
-> comportamento que já mudou.
+> Atualizado em 2026-10-03 conferindo o código. A versão publicada é a que diz
+> `git tag --sort=-v:refname` (ou o GitHub Releases), não este texto. As seções datadas
+> acima são registro histórico e podem descrever comportamento que já mudou.
 >
-> **Na v0.4.11:** o relato da sondagem leva `noncurrent_expiration_days` e
-> `noncurrent_transitions` (prometidos desde a 0.4.10 e que não saíam do agente) e os
-> campos novos `lifecycle_error` / `object_lock_error` (leitura negada ≠ bucket sem
-> regra); a unit do systemd põe aspas no `--config` e escapa `%`; o serviço do sistema
-> (root; SYSTEM no Windows) recusa programa que outro usuário pode trocar (Linux, macOS
-> e, pela ACL, Windows, onde o administrador que roda o install vale como dono), e o
-> `install.sh` com o programa no home sugere o install sem sudo.
+> **Até a v0.4.13:**
+> - **v0.4.11:** o relato da sondagem leva `noncurrent_expiration_days` e
+>   `noncurrent_transitions` (prometidos desde a 0.4.10 e que não saíam do agente) e os
+>   campos novos `lifecycle_error` / `object_lock_error` (leitura negada ≠ bucket sem
+>   regra); a unit do systemd põe aspas no `--config` e escapa `%`; o serviço do sistema
+>   (root; SYSTEM no Windows) recusa programa que outro usuário pode trocar (Linux, macOS
+>   e, pela ACL, Windows, onde o administrador que roda o install vale como dono), e o
+>   `install.sh` com o programa no home sugere o install sem sudo.
+> - **v0.4.12:** arquivo e pasta novos da restauração ficam do dono da pasta-mãe (no
+>   Windows, a DACL de segredo só na pasta de restauração nova, não no lugar de origem);
+>   `install.sh` com root usa `/opt/arkame/bin` quando o `/usr/local/bin` não é só do root
+>   (Homebrew em Mac Intel); o `setup` do Windows passa `C:\Program Files\Arkame` aos
+>   Administradores (outro administrador reinstala); e destino só de leitura (EROFS,
+>   `/etc` no serviço nativo) vai ao painel como `read_only_destination`.
+> - **v0.4.13:** o heartbeat leva `program_path`, o caminho real do programa
+>   (`os.Executable` com links resolvidos), para o painel montar o comando de trocar a
+>   chave com `/opt/arkame/bin` quando for o caso; o README cita esse caminho em trocar a
+>   chave e remover.
 >
-> **Na v0.4.12:** arquivo e pasta novos da restauração ficam do dono da
-> pasta-mãe (no Windows, a DACL de segredo só na pasta de restauração nova, não no lugar
-> de origem); `install.sh` com root usa `/opt/arkame/bin` quando o `/usr/local/bin` não é
-> só do root (Homebrew em Mac Intel); o `setup` do Windows passa
-> `C:\Program Files\Arkame` aos Administradores (outro administrador reinstala); e
-> destino só de leitura (EROFS, `/etc` no serviço nativo) vai ao painel como
-> `read_only_destination`.
->
-> **Na 0.4.13 (sem tag):** o heartbeat leva `program_path`, o caminho real do programa
-> (`os.Executable` com links resolvidos), para o painel montar o comando de trocar a chave
-> com `/opt/arkame/bin` quando for o caso; o README cita esse caminho em trocar a chave e
-> remover.
+> **Desde então (entra na próxima versão):** backup e limpeza de retenção não rodam
+> juntos no mesmo bucket (`internal/daemon/exclusao.go`). Antes, a limpeza podia apagar
+> no meio de um backup a versão que ele reaproveitava por dedup, e a sessão gravava no
+> catálogo uma versão que já não existia. O backup espera a limpeza em curso; a limpeza
+> com backup em curso nem pergunta ao painel e tenta de novo em 1 minuto.
 
 - **Enrollment Ed25519**: `internal/enrollment` gera keypair, POST `/api/agents/enroll`, long-poll na `wait-token` até receber JWT bearer
 - **Bearer auth**: client HTTP envia `Authorization: Bearer <token>` em todos os requests pós-approval; `ErrNotReady` (204) e `ErrGone` (410) pra long-poll handling
@@ -73,7 +77,7 @@ Binário Linux rodando local contra o painel em produção (`save.arkame.app`) +
   - Loop plans a cada `POLL_INTERVAL_SEC` (padrão 60s): GET `/plans` → `scheduler.ShouldRun` → `executePlan` (backup)
   - Loop restore a cada `POLL_INTERVAL_SEC`: GET `/restore-items` → PATCH running → `restore.Run` → PATCH complete/failed
   - Loop do explorador de pastas (long-poll): lista pastas para o painel (`internal/fsbrowse`)
-  - Loop de expurgo 1h: aplica a retenção autorizada pelo painel (`internal/purge`)
+  - Loop de expurgo 1h: aplica a retenção autorizada pelo painel (`internal/purge`); nunca junto com um backup (`exclusaoDoBucket`: o backup espera, a limpeza é adiada e reprovada a cada minuto)
 - **`executePlan` (backup)**: POST `/sessions/start` → `sync.Run` (walker + hash + dedup HeadObject + PutObject/multipart + version_map) → POST `/sessions/{sid}/complete` com version_map inline; em falha total POST `/sessions/{sid}/fail`
 - **Dedup file-level**: antes de PutObject, faz HeadObject e compara `sha256` no metadata. Hit retorna FileEntry com VersionId existente sem subir bytes; stats `FilesUploaded` não conta dedup hits
 - **`restore.Run` (restore)**: `internal/restore/executor.go` — escrita atômica (tmp + rename) com SHA-256 verify → conflict resolution `suffix-version`/`overwrite`/`skip`; respeita `HOST_ROOT`
