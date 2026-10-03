@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -230,5 +231,49 @@ func TestWalkSubpastaIlegivelViraErro(t *testing.T) {
 	}
 	if err == nil || !strings.Contains(err.Error(), "1 itens não puderam ser lidos") || !strings.Contains(err.Error(), "trancada") {
 		t.Fatalf("a subpasta ilegível deveria virar erro (backup parcial), veio %v", err)
+	}
+}
+
+// Pasta excluída do plano (node_modules) não é percorrida: uma subpasta
+// ilegível lá dentro não pode deixar o backup parcial. Antes o walker entrava
+// em toda pasta e só aplicava a exclusão aos arquivos.
+func TestWalkPastaExcluidaNaoEPercorrida(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("precisa de permissão de pasta POSIX e de não ser root")
+	}
+	raiz := t.TempDir()
+	if err := os.WriteFile(filepath.Join(raiz, "a.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	modulos := filepath.Join(raiz, "app", "node_modules")
+	trancada := filepath.Join(modulos, "pacote", "trancada")
+	if err := os.MkdirAll(trancada, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(modulos, "pacote", "index.js"), []byte("y"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(trancada, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(trancada, 0o755) })
+	cache := filepath.Join(raiz, ".cache")
+	if err := os.MkdirAll(cache, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cache, "c.bin"), []byte("z"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	arquivos, erros := Walk(context.Background(), "/", []string{raiz}, []string{"node_modules", ".cache"})
+	var vistos []string
+	for f := range arquivos {
+		vistos = append(vistos, f.AbsolutePath)
+	}
+	if err := <-erros; err != nil {
+		t.Fatalf("erro dentro de pasta excluída não deveria deixar o backup parcial: %v", err)
+	}
+	if len(vistos) != 1 || filepath.Base(vistos[0]) != "a.txt" {
+		t.Fatalf("esperava só a.txt, veio %v", vistos)
 	}
 }

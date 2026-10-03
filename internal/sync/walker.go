@@ -79,6 +79,14 @@ func Walk(ctx context.Context, hostRoot string, sourcePaths []string, excludeGlo
 					if path == root {
 						return fmt.Errorf("não consegui ler %s: %w", root, err)
 					}
+					// O que está excluído do plano não entra na conta: não ia
+					// para o backup de qualquer jeito.
+					if matchesAny(path, excludeGlobs) {
+						if d != nil && d.IsDir() {
+							return filepath.SkipDir
+						}
+						return nil
+					}
 					// Apagado durante a leitura: não há o que copiar, e não é
 					// falha. O resto (permissão, erro de disco) entra na conta.
 					if !errors.Is(err, fs.ErrNotExist) {
@@ -89,10 +97,21 @@ func Walk(ctx context.Context, hostRoot string, sourcePaths []string, excludeGlo
 				if ctx.Err() != nil {
 					return ctx.Err()
 				}
-				if d.IsDir() {
+				// Pasta excluída (node_modules, .cache) nem é aberta: entrar
+				// nela lia milhares de arquivos à toa, e um erro de leitura lá
+				// dentro deixava todo backup "parcial". Mesma regra dos
+				// arquivos (nome ou segmento do caminho); a pasta do plano em
+				// si nunca é pulada.
+				if matchesAny(path, excludeGlobs) {
+					if d.IsDir() {
+						if path == root {
+							return nil
+						}
+						return filepath.SkipDir
+					}
 					return nil
 				}
-				if matchesAny(path, excludeGlobs) {
+				if d.IsDir() {
 					return nil
 				}
 				leitura := path
