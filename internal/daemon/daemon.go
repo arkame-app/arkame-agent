@@ -916,6 +916,12 @@ func processarFilaDeRestore(ctx context.Context, c *api.Client, s3c *s3.Client, 
 			if errors.Is(err, restore.ErrDestinoLink) {
 				update.ErrorCode = restore.CodigoDestinoLink
 			}
+			// Destino só de leitura (/etc no serviço nativo do Linux): a
+			// mensagem diz por quê e o que fazer.
+			if restore.DestinoSomenteLeitura(err) {
+				update.ErrorCode = restore.CodigoDestinoSomenteLeitura
+				update.ErrorMessage = restore.MensagemDestinoSomenteLeitura + " (" + err.Error() + ")"
+			}
 			slog.Error("restore item falhou",
 				"item_id", item.ItemID, "key", item.SourceKey, "err", err)
 		}

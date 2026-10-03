@@ -25,7 +25,9 @@ import (
 // saía vazio, e a restauração para /tmp gravava no /tmp privado, que some ao
 // parar o serviço. Efeito conhecido do ProtectSystem=full: restaurar para
 // /usr, /boot ou /etc falha com "read-only file system" — falha visível no
-// painel, e não arquivo perdido; quem precisar restaura em outra pasta.
+// painel (error_code read_only_destination, com a explicação; ver
+// restore.CodigoDestinoSomenteLeitura e o README), e não arquivo perdido;
+// quem precisar restaura em outra pasta, ou usa o agente em Docker.
 const systemUnitTmpl = `[Unit]
 Description=Arkame Backup Agent (%[1]s)
 Documentation=https://arkame.app/docs

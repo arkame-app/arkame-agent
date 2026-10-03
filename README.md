@@ -183,6 +183,13 @@ O `curl.exe` vem no Windows 10 (1803+), 11 e Server 2019+. No Server 2016, use o
 > Windows bloqueia o agente, que ainda não tem assinatura de código. Windows 10 e
 > Windows Server funcionam normalmente.
 
+> **Restaurar no lugar original em `/etc`, `/usr` ou `/boot` (Linux nativo):** o
+> serviço do systemd roda com `ProtectSystem=full`, que deixa essas pastas só de
+> leitura para o agente. A restauração para lá falha sempre ("read-only file
+> system"), e o item aparece no painel com o código `read_only_destination` e a
+> explicação. Restaure em outra pasta (`/restore`, por exemplo) e copie de lá. No
+> Docker o mesmo pedido funciona: a raiz do servidor vai montada com escrita.
+
 O arquivo gravado (`/etc/arkame/agent.env`; no Windows `C:\etc\arkame\agent.env`)
 fica legível só pelo administrador (0600; no Windows, Administradores e SYSTEM).
 Na instalação sem root (`--service-scope user`, o padrão de quem roda sem

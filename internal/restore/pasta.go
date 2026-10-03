@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"strings"
+	"syscall"
 )
 
 // ErrDestinoLink: o caminho até a pasta da restauração passa por um link
@@ -19,6 +20,22 @@ var ErrDestinoLink = errors.New("o destino passa por um link simbólico")
 
 // CodigoDestinoLink é o error_code do item recusado por ErrDestinoLink.
 const CodigoDestinoLink = "dest_symlink"
+
+// CodigoDestinoSomenteLeitura é o error_code do item cujo destino está num
+// sistema de arquivos só de leitura (EROFS). No Linux, o serviço nativo
+// (systemd, ProtectSystem=full) vê /etc, /usr e /boot só de leitura:
+// restaurar no lugar original ali sempre falha, e o painel precisa dizer por
+// quê, e não só "read-only file system". No Docker, o mesmo pedido funciona.
+const CodigoDestinoSomenteLeitura = "read_only_destination"
+
+// MensagemDestinoSomenteLeitura explica a falha por EROFS ao operador.
+const MensagemDestinoSomenteLeitura = "o destino é só de leitura para o agente. No Linux, o serviço do agente " +
+	"(systemd, ProtectSystem=full) não grava em /etc, /usr nem /boot: restaure em outra pasta e copie " +
+	"de lá, ou use o agente em Docker"
+
+// DestinoSomenteLeitura diz se a restauração falhou porque o destino é só de
+// leitura (EROFS).
+func DestinoSomenteLeitura(err error) bool { return errors.Is(err, syscall.EROFS) }
 
 // maxLinks limita a cadeia de links do sistema seguidos, como o kernel (ELOOP).
 const maxLinks = 40
