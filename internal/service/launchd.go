@@ -4,7 +4,6 @@ package service
 
 import (
 	"context"
-	"encoding/xml"
 	"fmt"
 	"log/slog"
 	"os"
@@ -14,38 +13,6 @@ import (
 
 	"github.com/arkame-app/agent/internal/config"
 )
-
-// plistTmpl monta o job do launchd. KeepAlive mantém o agent de pé; RunAtLoad
-// sobe junto com o sistema (LaunchDaemon) ou com o login (LaunchAgent).
-//
-// O launchd não tem EnvironmentFile: o env-file é lido pelo próprio agent via
-// --config, e o plist só precisa apontar para ele.
-const plistTmpl = `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-	<key>Label</key>
-	<string>%[1]s</string>
-	<key>ProgramArguments</key>
-	<array>
-		<string>%[2]s</string>
-		<string>run</string>
-		<string>--config</string>
-		<string>%[3]s</string>
-	</array>
-	<key>RunAtLoad</key>
-	<true/>
-	<key>KeepAlive</key>
-	<true/>
-	<key>ThrottleInterval</key>
-	<integer>10</integer>
-	<key>StandardOutPath</key>
-	<string>%[4]s</string>
-	<key>StandardErrorPath</key>
-	<string>%[4]s</string>
-</dict>
-</plist>
-`
 
 func defaultScope() Scope {
 	if os.Geteuid() == 0 {
@@ -84,8 +51,7 @@ func installPlatform(ctx context.Context, cfg *config.Config, opts Options) (*In
 		logPath = filepath.Join(logDir, opts.Name+".log")
 	}
 
-	plist := fmt.Sprintf(plistTmpl,
-		xmlEscape(lbl), xmlEscape(opts.BinaryPath), xmlEscape(cfg.ConfigPath), xmlEscape(logPath))
+	plist := montarPlist(lbl, opts.BinaryPath, cfg.ConfigPath, logPath, opts.Scope)
 
 	if err := os.WriteFile(plistPath, []byte(plist), 0o644); err != nil {
 		return nil, fmt.Errorf("escrevendo %s: %w", plistPath, err)
@@ -172,14 +138,6 @@ func domainTarget(scope Scope) string {
 		return "system"
 	}
 	return fmt.Sprintf("gui/%d", os.Getuid())
-}
-
-func xmlEscape(s string) string {
-	var b strings.Builder
-	if err := xml.EscapeText(&b, []byte(s)); err != nil {
-		return s
-	}
-	return b.String()
 }
 
 func uninstallPlatform(ctx context.Context, opts Options) error {

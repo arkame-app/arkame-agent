@@ -17,8 +17,9 @@ type Detected struct {
 	// Name é o nome do serviço/unit (ex.: "arkame-agent-aws"). Vazio se o
 	// processo não está sob um serviço reconhecido (rodando à mão).
 	Name string `json:"name,omitempty"`
-	// Scope: "user" (systemd --user) | "system" (systemd root) | "launchd" |
-	// "windows" | "" (desconhecido / execução manual).
+	// Scope: "user" (systemd --user) | "system" (systemd root) | "launchd"
+	// (LaunchDaemon) | "launchd-user" (LaunchAgent do usuário) | "windows" |
+	// "" (desconhecido / execução manual).
 	Scope string `json:"scope,omitempty"`
 }
 
@@ -30,11 +31,10 @@ func Detect() Detected {
 	case "linux":
 		return detectSystemd()
 	case "darwin":
-		// launchd: o label é fixo na instalação padrão.
-		if _, err := os.Stat("/Library/LaunchDaemons/app.arkame.agent.plist"); err == nil {
-			return Detected{Name: "app.arkame.agent", Scope: "launchd"}
-		}
-		return Detected{}
+		return detectLaunchd(os.Getenv, func(p string) bool {
+			_, err := os.Stat(p)
+			return err == nil
+		})
 	case "windows":
 		// O nome que o SCM entregou ao iniciar o serviço. Era a constante
 		// "ArkameAgent", que nunca existiu: o painel mostrava
@@ -46,6 +46,37 @@ func Detect() Detected {
 	default:
 		return Detected{}
 	}
+}
+
+// Variáveis que o plist do launchd entrega ao processo: o label do job e o
+// escopo da instalação (system/user). O launchd não tem nada como o cgroup do
+// systemd para o processo descobrir o próprio job.
+const (
+	envNomeDoServico   = "ARKAME_SERVICE_NAME"
+	envEscopoDoServico = "ARKAME_SERVICE_SCOPE"
+)
+
+// detectLaunchd reporta o label e o escopo que o plist passou. Era sempre
+// app.arkame.agent (e só se existisse o LaunchDaemon padrão): o agente com
+// --service-name (app.arkame.agent-<sufixo>) ou instalado no escopo do
+// usuário (~/Library/LaunchAgents) reportava o serviço errado — ou nenhum.
+//
+// O LaunchAgent do usuário vai como "launchd-user": o reinício dele é
+// gui/<uid>/<label>, sem sudo, e não o system/<label> do "launchd".
+//
+// Plist de instalação antiga, sem as variáveis: a detecção de antes.
+func detectLaunchd(getenv func(string) string, existe func(string) bool) Detected {
+	if n := getenv(envNomeDoServico); n != "" {
+		escopo := "launchd"
+		if getenv(envEscopoDoServico) == string(ScopeUser) {
+			escopo = "launchd-user"
+		}
+		return Detected{Name: n, Scope: escopo}
+	}
+	if existe("/Library/LaunchDaemons/app.arkame.agent.plist") {
+		return Detected{Name: "app.arkame.agent", Scope: "launchd"}
+	}
+	return Detected{}
 }
 
 // detectSystemd lê /proc/self/cgroup e extrai o nome do .service. Para serviços
