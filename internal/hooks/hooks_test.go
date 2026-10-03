@@ -2,6 +2,10 @@ package hooks
 
 import (
 	"context"
+	"errors"
+	"io/fs"
+	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -96,5 +100,26 @@ func TestBufferNaoCresceAlemDoTeto(t *testing.T) {
 	}
 	if got := truncar(b.String()); !strings.HasSuffix(got, "(saída truncada)") {
 		t.Fatal("a saída cortada tem de dizer que foi truncada")
+	}
+}
+
+// Sem o shell (Docker distroless), o Start falha e o erro dizia só "código
+// -1": a causa sumia do painel. Agora diz que o comando não iniciou, e por quê.
+func TestShellAusenteDizQueNaoIniciou(t *testing.T) {
+	antes := novoComando
+	novoComando = func(c string) *exec.Cmd {
+		return exec.Command(filepath.Join(t.TempDir(), "sh-inexistente"), "-c", c)
+	}
+	t.Cleanup(func() { novoComando = antes })
+
+	r, err := Run(context.Background(), "pg_dump banco > /tmp/d.sql", 5*time.Second)
+	if err == nil {
+		t.Fatal("shell ausente deveria falhar")
+	}
+	if !strings.Contains(err.Error(), "não iniciou") || !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("a causa se perdeu: %v", err)
+	}
+	if r.TimedOut {
+		t.Fatalf("não foi prazo: %+v", r)
 	}
 }

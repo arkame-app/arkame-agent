@@ -23,6 +23,7 @@ package hooks
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -80,7 +81,7 @@ func Run(ctx context.Context, comando string, prazo time.Duration) (Result, erro
 	// aqui o `/bin/sh` faz `exec` e o neto não existe; no Ubuntu do runner, não.
 	// O nome do teste já dizia a consequência para o cliente: o agendamento
 	// inteiro do servidor ficaria preso, e o próximo backup nunca começaria.
-	cmd := comandoDoShell(comando)
+	cmd := novoComando(comando)
 	grupoProprio(cmd)
 
 	buf := &bufferSeguro{}
@@ -100,7 +101,8 @@ func Run(ctx context.Context, comando string, prazo time.Duration) (Result, erro
 		return r, nil
 	}
 	var saida *exec.ExitError
-	if ok := asExitError(err, &saida); ok {
+	ok := asExitError(err, &saida)
+	if ok {
 		r.ExitCode = saida.ExitCode()
 	} else {
 		r.ExitCode = -1
@@ -108,8 +110,26 @@ func Run(ctx context.Context, comando string, prazo time.Duration) (Result, erro
 	if r.TimedOut {
 		return r, fmt.Errorf("comando excedeu o prazo de %s", prazo)
 	}
+	if !ok {
+		// Sem código de saída o comando nem chegou a rodar — no Docker
+		// distroless não há /bin/sh. "código -1" escondia a causa.
+		var inicio erroDeInicio
+		if errors.As(err, &inicio) {
+			return r, fmt.Errorf("comando não iniciou: %w", inicio.err)
+		}
+		return r, fmt.Errorf("comando falhou: %w", err)
+	}
 	return r, fmt.Errorf("comando terminou com código %d", r.ExitCode)
 }
+
+// novoComando monta o processo do shell; os testes o trocam.
+var novoComando = comandoDoShell
+
+// erroDeInicio marca a falha do Start: o processo não existiu.
+type erroDeInicio struct{ err error }
+
+func (e erroDeInicio) Error() string { return e.err.Error() }
+func (e erroDeInicio) Unwrap() error { return e.err }
 
 // truncar corta a saída pelo FIM, guardando o começo.
 //
@@ -141,7 +161,7 @@ const GraceDepoisDoKill = 5 * time.Second
 // executarComPrazo roda o comando e, estourado o prazo, derruba a árvore.
 func executarComPrazo(ctx context.Context, cmd *exec.Cmd) error {
 	if err := cmd.Start(); err != nil {
-		return err
+		return erroDeInicio{err}
 	}
 	terminou := make(chan error, 1)
 	go func() { terminou <- cmd.Wait() }()
