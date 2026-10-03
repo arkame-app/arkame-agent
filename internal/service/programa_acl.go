@@ -64,10 +64,17 @@ type aclDeArquivo struct {
 	aces    []aceDeArquivo
 }
 
-func sidConfiavel(sid string) bool {
+// sidConfiavel: os SIDs fixos e os extras — o administrador que roda o
+// install elevado (ver adminDoInstall em programa_windows.go).
+func sidConfiavel(sid string, extras []string) bool {
 	switch sid {
 	case sidSystem, sidAdministradores, sidTrustedInstaller:
 		return true
+	}
+	for _, e := range extras {
+		if sid == e {
+			return true
+		}
 	}
 	return false
 }
@@ -78,8 +85,14 @@ func sidConfiavel(sid string) bool {
 // escrita perigosa pode ser de outro SID. Entradas só para herdar não valem
 // para o próprio caminho; as de negação são ignoradas (o que pode errar só
 // para o lado de recusar).
-func problemaDaACL(caminho string, papel papelNoCaminho, a aclDeArquivo) string {
-	if !sidConfiavel(a.dono) {
+//
+// extras são SIDs também confiáveis, como dono e nas entradas. Com a política
+// "Proprietário padrão de objetos criados por membros do grupo
+// Administradores" em "Criador do objeto", o setup e o install.ps1 elevados
+// criam o programa com dono = o próprio administrador, e o CREATOR OWNER
+// herdado do Program Files vira uma entrada de Controle Total para ele.
+func problemaDaACL(caminho string, papel papelNoCaminho, a aclDeArquivo, extras []string) string {
+	if !sidConfiavel(a.dono, extras) {
 		return fmt.Sprintf("o dono de %s é %s, e não os Administradores, o SYSTEM ou o TrustedInstaller", caminho, a.dono)
 	}
 	if a.semDACL {
@@ -98,7 +111,7 @@ func problemaDaACL(caminho string, papel papelNoCaminho, a aclDeArquivo) string 
 		if e.tipo != tipoAcessoPermitido || e.flags&aceSoParaHerdar != 0 {
 			continue
 		}
-		if sidConfiavel(e.sid) || e.sid == sidCreatorOwner || e.sid == sidOwnerRights {
+		if sidConfiavel(e.sid, extras) || e.sid == sidCreatorOwner || e.sid == sidOwnerRights {
 			continue
 		}
 		if e.mascara&perigosa != 0 {

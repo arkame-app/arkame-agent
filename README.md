@@ -202,7 +202,9 @@ outra pasta do root:
 `curl -fsSL https://get.arkame.app/install.sh | sudo env ARKAME_BIN_DIR=/opt/arkame/bin sh -s -- --token=atk_...`.
 No Windows, o serviço roda como SYSTEM e o `install` confere a mesma coisa pela
 lista de permissões: o programa e as pastas acima dele só podem ser alteráveis
-pelos Administradores, pelo SYSTEM ou pelo TrustedInstaller. O `setup` (comando
+pelos Administradores, pelo SYSTEM, pelo TrustedInstaller ou pelo administrador
+que roda a instalação (dono do que ele cria, quando a política de dono padrão é
+"Criador do objeto"). O `setup` (comando
 do painel) e o `install.ps1` põem o programa em `C:\Program Files\Arkame`, que
 passa; um `install` rodado de Downloads é recusado.
 

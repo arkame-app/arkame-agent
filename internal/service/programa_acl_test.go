@@ -24,7 +24,7 @@ func TestACLDoProgramFilesPassa(t *testing.T) {
 		{flags: aceSoParaHerdar, mascara: acessoGenericoTotal, sid: sidCreatorOwner},
 	}
 	for _, papel := range []papelNoCaminho{papelPrograma, papelPastaDoPrograma, papelPastaAcima} {
-		if p := problemaDaACL(`C:\Program Files\Arkame`, papel, aclDeArquivo{dono: sidAdministradores, aces: herdadas}); p != "" {
+		if p := problemaDaACL(`C:\Program Files\Arkame`, papel, aclDeArquivo{dono: sidAdministradores, aces: herdadas}, nil); p != "" {
 			t.Errorf("papel %d recusado: %s", papel, p)
 		}
 	}
@@ -37,7 +37,7 @@ func TestACLDoProgramFilesPassa(t *testing.T) {
 		{mascara: acessoAcrescentar, sid: sidUsuariosAutenticados},
 		{flags: aceSoParaHerdar | 0x3, mascara: modificar, sid: sidUsuariosAutenticados},
 	}}
-	if p := problemaDaACL(`C:\`, papelPastaAcima, raiz); p != "" {
+	if p := problemaDaACL(`C:\`, papelPastaAcima, raiz, nil); p != "" {
 		t.Errorf("raiz do C:\\ recusada: %s", p)
 	}
 }
@@ -68,7 +68,7 @@ func TestACLRecusaQuemNaoEAdministrador(t *testing.T) {
 	}
 	for _, c := range casos {
 		t.Run(c.nome, func(t *testing.T) {
-			p := problemaDaACL(`C:\x`, c.papel, c.acl)
+			p := problemaDaACL(`C:\x`, c.papel, c.acl, nil)
 			if p == "" || !strings.Contains(p, c.quer) {
 				t.Fatalf("queria a recusa com %q, veio %q", c.quer, p)
 			}
@@ -82,7 +82,31 @@ func TestACLIgnoraNegacaoESoParaHerdar(t *testing.T) {
 		{tipo: 1, mascara: 0x1f01ff, sid: sidAna},
 		{flags: aceSoParaHerdar, mascara: 0x1f01ff, sid: sidAna},
 	}}
-	if p := problemaDaACL(`C:\x`, papelPrograma, a); p != "" {
+	if p := problemaDaACL(`C:\x`, papelPrograma, a, nil); p != "" {
 		t.Fatalf("recusado: %s", p)
+	}
+}
+
+// Com a política "Criador do objeto", o programa que o setup elevado copia
+// tem dono = o administrador que o rodou e Controle Total para ele (o
+// CREATOR OWNER herdado). Esse administrador vem em extras: passa. Outro
+// usuário, ou o mesmo sem estar em extras, segue recusado.
+func TestACLAceitaOAdministradorDoInstall(t *testing.T) {
+	const sidAdm = "S-1-5-21-1-2-3-500"
+	a := aclDeArquivo{dono: sidAdm, aces: []aceDeArquivo{
+		{mascara: 0x1f01ff, sid: sidSystem},
+		{mascara: 0x1f01ff, sid: sidAdministradores},
+		{mascara: 0x1f01ff, sid: sidAdm},
+		{mascara: leituraEExecucao, sid: sidUsuarios},
+	}}
+	if p := problemaDaACL(`C:\Program Files\Arkame\arkame-agent.exe`, papelPrograma, a, []string{sidAdm}); p != "" {
+		t.Fatalf("programa do administrador do install recusado: %s", p)
+	}
+	if p := problemaDaACL(`C:\x`, papelPrograma, a, nil); p == "" {
+		t.Fatal("dono que não é o administrador do install aceito")
+	}
+	a.aces = append(a.aces, aceDeArquivo{mascara: 0x1f01ff, sid: sidAna})
+	if p := problemaDaACL(`C:\x`, papelPrograma, a, []string{sidAdm}); p == "" || !strings.Contains(p, sidAna) {
+		t.Fatalf("Controle Total da ana aceito: %q", p)
 	}
 }

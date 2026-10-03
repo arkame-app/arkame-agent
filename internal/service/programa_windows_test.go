@@ -10,8 +10,9 @@ import (
 // O caminho inteiro é conferido, com o papel certo: o programa, a pasta dele
 // e as de cima.
 func TestConferirProgramaPercorreOCaminhoNoWindows(t *testing.T) {
-	antesACL, antesLinks := lerACL, resolverLinks
-	t.Cleanup(func() { lerACL, resolverLinks = antesACL, antesLinks })
+	antesACL, antesLinks, antesAdm := lerACL, resolverLinks, adminDoInstall
+	t.Cleanup(func() { lerACL, resolverLinks, adminDoInstall = antesACL, antesLinks, antesAdm })
+	adminDoInstall = func() []string { return nil }
 	resolverLinks = func(p string) (string, error) { return p, nil }
 	adm := aclDeArquivo{dono: sidAdministradores, aces: []aceDeArquivo{{mascara: 0x1200a9, sid: "S-1-5-32-545"}}}
 	arvore := map[string]aclDeArquivo{

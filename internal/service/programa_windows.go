@@ -47,6 +47,27 @@ var (
 	resolverLinks = filepath.EvalSymlinks
 )
 
+// adminDoInstall é o usuário que roda este install, se ele é administrador
+// com o privilégio em uso (elevado: a pertinência ao grupo Administradores só
+// vale no token elevado). É o dono do que o setup e o install.ps1 criam
+// quando a política de dono padrão é "Criador do objeto". Vazio fora disso.
+// Variável para os testes.
+var adminDoInstall = func() []string {
+	adm, err := windows.CreateWellKnownSid(windows.WinBuiltinAdministratorsSid)
+	if err != nil {
+		return nil
+	}
+	// Token 0: o CheckTokenMembership usa o token deste processo.
+	if eh, err := windows.Token(0).IsMember(adm); err != nil || !eh {
+		return nil
+	}
+	u, err := windows.GetCurrentProcessToken().GetTokenUser()
+	if err != nil || u.User.Sid == nil {
+		return nil
+	}
+	return []string{u.User.Sid.String()}
+}
+
 // conferirPrograma recusa registrar no SCM (o serviço roda como LocalSystem)
 // um programa que quem não é administrador pode trocar: quem o trocasse
 // viraria SYSTEM no próximo início do serviço. É o `install` rodado de
@@ -64,6 +85,7 @@ func conferirPrograma(programa string) error {
 	if real, err := resolverLinks(abs); err == nil && real != abs {
 		caminhos = append(caminhos, real)
 	}
+	extras := adminDoInstall()
 	for _, c := range caminhos {
 		papel := papelPrograma
 		for p := c; ; p = filepath.Dir(p) {
@@ -71,7 +93,7 @@ func conferirPrograma(programa string) error {
 			if a, err := lerACL(p); err != nil {
 				problema = fmt.Sprintf("não consegui ler as permissões de %s (%v)", p, err)
 			} else {
-				problema = problemaDaACL(p, papel, a)
+				problema = problemaDaACL(p, papel, a, extras)
 			}
 			if problema != "" {
 				return fmt.Errorf(
