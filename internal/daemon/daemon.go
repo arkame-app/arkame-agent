@@ -112,6 +112,39 @@ func enviarHeartbeat(ctx context.Context, c *api.Client, cfg *config.Config, svc
 	token.tratarRespostaDoHeartbeat(c, cfg, resp)
 }
 
+// corpoProbe é o POST /api/agents/{id}/probe.
+type corpoProbe struct {
+	StorageID   string          `json:"storage_id"`
+	Versioning  string          `json:"versioning"`
+	ObjectLock  *api.ObjectLock `json:"object_lock,omitempty"`
+	Lifecycle   []api.Lifecycle `json:"lifecycle,omitempty"`
+	UsedBytes   *int64          `json:"used_bytes,omitempty"`
+	ObjectCount *int64          `json:"object_count,omitempty"`
+	Error       string          `json:"error,omitempty"`
+}
+
+// corpoDoProbe monta o relato. Ocupação que não pôde ser medida vai ausente:
+// o painel guarda só número e mostra "—", em vez de "0 B".
+func corpoDoProbe(r api.ProbeReport) corpoProbe {
+	return corpoProbe{
+		StorageID:   r.StorageID,
+		Versioning:  r.Versioning,
+		ObjectLock:  r.ObjectLock,
+		Lifecycle:   r.Lifecycle,
+		UsedBytes:   r.UsedBytes,
+		ObjectCount: r.ObjectCount,
+		Error:       r.Error,
+	}
+}
+
+// valorOuNada é o número para o log, ou "?" quando não foi medido.
+func valorOuNada(n *int64) any {
+	if n == nil {
+		return "?"
+	}
+	return *n
+}
+
 // probeLoop chama Probe periodicamente (1×/h) e também atende solicitações
 // on-demand ("Testar conexão" no painel) via poll a cada 30s do endpoint
 // /probe-request — assim o usuário não espera até 1h pra ver o resultado.
@@ -126,23 +159,7 @@ func probeLoop(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config.C
 			return
 		}
 		report := storage.Probe(ctx, s3c, cfg.StorageBucket, cfg.StorageID)
-		body := struct {
-			StorageID   string          `json:"storage_id"`
-			Versioning  string          `json:"versioning"`
-			ObjectLock  *api.ObjectLock `json:"object_lock,omitempty"`
-			Lifecycle   []api.Lifecycle `json:"lifecycle,omitempty"`
-			UsedBytes   int64           `json:"used_bytes"`
-			ObjectCount int64           `json:"object_count"`
-			Error       string          `json:"error,omitempty"`
-		}{
-			StorageID:   report.StorageID,
-			Versioning:  report.Versioning,
-			ObjectLock:  report.ObjectLock,
-			Lifecycle:   report.Lifecycle,
-			UsedBytes:   report.UsedBytes,
-			ObjectCount: report.ObjectCount,
-			Error:       report.Error,
-		}
+		body := corpoDoProbe(report)
 		if err := c.POST(ctx, "/api/agents/"+cfg.AgentID+"/probe", body, nil); err != nil {
 			slog.Warn("probe POST falhou", "err", err)
 			return
@@ -150,8 +167,8 @@ func probeLoop(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config.C
 		slog.Info("probe reportado",
 			"versioning", report.Versioning,
 			"lifecycle_rules", len(report.Lifecycle),
-			"used_bytes", report.UsedBytes,
-			"objects", report.ObjectCount)
+			"used_bytes", valorOuNada(report.UsedBytes),
+			"objects", valorOuNada(report.ObjectCount))
 	}
 
 	// Verifica se há probe on-demand pendente para o storage deste agent.

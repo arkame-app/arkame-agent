@@ -160,13 +160,15 @@ type FileEntry struct {
 
 // --- Storage probe (discovered config) ---
 
+// ProbeReport.UsedBytes e ObjectCount são nil quando a listagem do bucket
+// falhou: vão ausentes no JSON, e não 0 ("0 B" no painel).
 type ProbeReport struct {
 	StorageID   string      `json:"storage_id"`
 	Versioning  string      `json:"versioning"` // "Enabled" | "Suspended" | "Off"
 	ObjectLock  *ObjectLock `json:"object_lock,omitempty"`
 	Lifecycle   []Lifecycle `json:"lifecycle,omitempty"`
-	UsedBytes   int64       `json:"used_bytes"`   // somatório dos objetos do bucket (ocupação real)
-	ObjectCount int64       `json:"object_count"` // nº de objetos somados
+	UsedBytes   *int64      `json:"used_bytes,omitempty"`   // soma de todas as versões do bucket (ocupação real)
+	ObjectCount *int64      `json:"object_count,omitempty"` // nº de arquivos presentes (versões atuais)
 	ProbedAt    time.Time   `json:"probed_at"`
 	Error       string      `json:"error,omitempty"`
 }

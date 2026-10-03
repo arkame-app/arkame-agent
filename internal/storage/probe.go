@@ -73,34 +73,41 @@ func Probe(ctx context.Context, client *s3.Client, bucket, storageID string) api
 		}
 	}
 
-	// Ocupação real: soma o tamanho de todos os objetos (ListObjectsV2 paginado).
-	// Não fatal se falhar — o resto do probe ainda é útil.
+	// Ocupação real: soma o tamanho de todas as versões (ListObjectVersions
+	// paginado). O bucket é versionado e a cobrança do provedor conta cada
+	// versão antiga; o ListObjectsV2 só via a atual e subestimava a ocupação.
+	// Não fatal se falhar — o resto do probe ainda é útil —, mas aí os campos
+	// vão ausentes: um 0 aparecia no painel como "0 B", bucket vazio.
 	if used, count, err := measureUsage(ctx, client, bucket); err == nil {
-		report.UsedBytes = used
-		report.ObjectCount = count
+		report.UsedBytes = &used
+		report.ObjectCount = &count
 	}
 
 	return report
 }
 
-// measureUsage pagina ListObjectsV2 somando Size de cada objeto (versão corrente).
-// Para buckets muito grandes isto pode ser caro; o probe roda só 1×/h ou on-demand.
-func measureUsage(ctx context.Context, client *s3.Client, bucket string) (int64, int64, error) {
-	var totalBytes, count int64
-	p := s3.NewListObjectsV2Paginator(client, &s3.ListObjectsV2Input{Bucket: &bucket})
+// measureUsage pagina ListObjectVersions: bytes é a soma de todas as versões
+// (a ocupação que o provedor cobra) e objects é o nº de arquivos presentes
+// (versões atuais; delete marker não tem tamanho nem conta como arquivo).
+// Para buckets muito grandes isto pode ser caro; o probe roda só 1×/h ou
+// on-demand.
+func measureUsage(ctx context.Context, client *s3.Client, bucket string) (bytes, objects int64, err error) {
+	p := s3.NewListObjectVersionsPaginator(client, &s3.ListObjectVersionsInput{Bucket: &bucket})
 	for p.HasMorePages() {
 		page, err := p.NextPage(ctx)
 		if err != nil {
-			return totalBytes, count, err
+			return 0, 0, err
 		}
-		for _, obj := range page.Contents {
-			if obj.Size != nil {
-				totalBytes += *obj.Size
+		for _, v := range page.Versions {
+			if v.Size != nil {
+				bytes += *v.Size
 			}
-			count++
+			if v.IsLatest != nil && *v.IsLatest {
+				objects++
+			}
 		}
 	}
-	return totalBytes, count, nil
+	return bytes, objects, nil
 }
 
 // IsBenignProbeError identifica erros S3 que indicam "config ausente" em vez de erro real.
