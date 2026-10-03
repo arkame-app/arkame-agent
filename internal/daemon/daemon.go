@@ -412,9 +412,10 @@ var finalizacaoGraca = 30 * time.Second
 // serviço roda, não tem prazo próprio; quando o ctx é cancelado, ganha
 // finalizacaoGraca para terminar.
 func contextoDeFinalizacao(ctx context.Context) (context.Context, context.CancelFunc) {
+	graca := finalizacaoGraca
 	fctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	parar := context.AfterFunc(ctx, func() {
-		time.AfterFunc(finalizacaoGraca, cancel)
+		time.AfterFunc(graca, cancel)
 	})
 	return fctx, func() {
 		parar()
