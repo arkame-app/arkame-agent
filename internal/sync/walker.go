@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,6 +45,10 @@ func Walk(ctx context.Context, hostRoot string, sourcePaths []string, excludeGlo
 		// backup termina parcial com exemplos do que ficou de fora.
 		naoLidos := 0
 		var exemplos []string
+		// Arquivos do OneDrive que só estão na nuvem: ficam de fora sem
+		// deixar o backup parcial; vão só para o log, num resumo.
+		soNaNuvem := 0
+		exemploNuvem := ""
 		anotar := func(p string, err error) {
 			naoLidos++
 			if len(exemplos) < maxExemplosNaoLidos {
@@ -109,8 +114,15 @@ func Walk(ctx context.Context, hostRoot string, sourcePaths []string, excludeGlo
 						return nil
 					}
 					leitura, info = alvo, st
-				} else if st, ok := irregularLegivel(caminho.Windows, path, info.Mode()); ok {
+				} else if st, classe := irregularLegivel(caminho.Windows, path, info.Mode()); classe == reparseCopiar {
 					info = st
+				} else if classe == reparseSoNaNuvem {
+					// Só na nuvem: não é falha, e lê-lo baixaria o arquivo.
+					soNaNuvem++
+					if exemploNuvem == "" {
+						exemploNuvem = path
+					}
+					return nil
 				} else if !info.Mode().IsRegular() {
 					// Socket, pipe, dispositivo: não há conteúdo a guardar, e
 					// abrir um pipe trava o backup.
@@ -137,6 +149,10 @@ func Walk(ctx context.Context, hostRoot string, sourcePaths []string, excludeGlo
 				return
 			}
 		}
+		if soNaNuvem > 0 {
+			slog.Info("arquivos só na nuvem (OneDrive) ficaram de fora do backup",
+				"quantidade", soNaNuvem, "exemplo", exemploNuvem)
+		}
 		if naoLidos > 0 {
 			ilegiveis = append(ilegiveis, fmt.Sprintf("%d itens não puderam ser lidos, ex.: %s",
 				naoLidos, strings.Join(exemplos, "; ")))
@@ -150,40 +166,47 @@ func Walk(ctx context.Context, hostRoot string, sourcePaths []string, excludeGlo
 }
 
 // irregularLegivel diz se uma entrada que o Go marca como irregular é, no
-// Windows, um arquivo comum para o backup — e devolve a ficha dele.
+// Windows, um arquivo de nuvem para o backup — e devolve a ficha dele.
 //
 // Desde o Go 1.23, no Windows, todo reparse point que não é link simbólico (nem
 // soquete, nem arquivo deduplicado) sai com fs.ModeIrregular. É o caso dos
 // arquivos do OneDrive (IO_REPARSE_TAG_CLOUD_*, inclusive os "sempre manter
-// neste dispositivo") e de outros filtros de arquivo. O walker pulava tudo o que
-// não era regular, calado: com a Área de Trabalho e os Documentos redirecionados
-// para o OneDrive — o padrão do Windows 11 —, o backup dessas pastas saía vazio
-// e "concluído".
+// neste dispositivo"). O walker pulava tudo o que não era regular, calado: com
+// a Área de Trabalho e os Documentos redirecionados para o OneDrive — o padrão
+// do Windows 11 —, o backup dessas pastas saía vazio e "concluído".
 //
 // Escolha: tratar aqui, só no Windows, em vez de `//go:debug winsymlink=0` no
 // main. O godebug volta o programa inteiro ao comportamento de antes do 1.23
 // (junções viram links simbólicos também no navegador de pastas e na
 // restauração), e o Go avisa que essas chaves de compatibilidade saem um dia.
-// Aqui a regra fica explícita e testada: segue-se o reparse point (os.Stat) e
-// copia-se o que for arquivo; o que der em pasta (junção, ponto de montagem)
-// não é seguido — como os links de pasta —, e o que não abre fica de fora.
-// Ler um arquivo do OneDrive que só está na nuvem baixa o conteúdo: é o que o
-// backup precisa.
-func irregularLegivel(windows bool, path string, modo fs.FileMode) (fs.FileInfo, bool) {
+//
+// Só entra o que classificarReparse aceita pela tag (Cloud Files API) e que
+// tem o conteúdo no disco; os outros reparse points (AppExecLink, filtros de
+// terceiros) continuam de fora, calados. O que é de nuvem mas só está na
+// nuvem volta reparseSoNaNuvem, para o walker contar sem baixar.
+func irregularLegivel(windows bool, path string, modo fs.FileMode) (fs.FileInfo, classeReparse) {
 	if !windows || modo&fs.ModeIrregular == 0 || modo.IsDir() {
-		return nil, false
+		return nil, reparseIgnorar
+	}
+	atributos, tag, err := lerReparse(path)
+	if err != nil {
+		return nil, reparseIgnorar
+	}
+	classe := classificarReparse(atributos, tag)
+	if classe != reparseCopiar {
+		return nil, classe
 	}
 	st, err := os.Stat(path)
 	if err != nil || st.IsDir() {
-		return nil, false
+		return nil, reparseIgnorar
 	}
 	// O próprio Stat do Go devolve de novo ModeIrregular para esses reparse
 	// points (ele não os segue); o que importa é não ser pasta, pipe nem
 	// dispositivo.
 	if st.Mode().Type()&^fs.ModeIrregular != 0 {
-		return nil, false
+		return nil, reparseIgnorar
 	}
-	return st, true
+	return st, reparseCopiar
 }
 
 // prepararExclusoes limpa os padrões uma vez por backup (e não uma vez por

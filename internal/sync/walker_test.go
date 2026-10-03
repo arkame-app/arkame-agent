@@ -103,6 +103,14 @@ func TestWalkOrigemQueELink(t *testing.T) {
 	}
 }
 
+// lerReparseFalso troca a leitura do disco por atributos e tag fixos.
+func lerReparseFalso(t *testing.T, atributos, tag uint32) {
+	t.Helper()
+	antes := lerReparse
+	lerReparse = func(string) (uint32, uint32, error) { return atributos, tag, nil }
+	t.Cleanup(func() { lerReparse = antes })
+}
+
 // No Windows (Go ≥ 1.23), arquivo do OneDrive é ModeIrregular: tem de entrar no
 // backup como arquivo comum. Pasta (junção) não é seguida, e fora do Windows a
 // regra não vale.
@@ -112,21 +120,79 @@ func TestIrregularLegivelNoWindows(t *testing.T) {
 	if err := os.WriteFile(arq, []byte("conteúdo do OneDrive"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	st, ok := irregularLegivel(true, arq, fs.ModeIrregular|0o666)
-	if !ok || st.Size() != int64(len("conteúdo do OneDrive")) {
-		t.Fatalf("arquivo irregular legível no Windows deveria entrar: ok=%v st=%v", ok, st)
+	lerReparseFalso(t, 0x20|0x400, 0x9000601A) // ARCHIVE|REPARSE_POINT, CLOUD_6
+	st, classe := irregularLegivel(true, arq, fs.ModeIrregular|0o666)
+	if classe != reparseCopiar || st.Size() != int64(len("conteúdo do OneDrive")) {
+		t.Fatalf("arquivo do OneDrive no disco deveria entrar: classe=%v st=%v", classe, st)
 	}
-	if _, ok := irregularLegivel(true, dir, fs.ModeIrregular|0o666); ok {
+	if _, classe := irregularLegivel(true, dir, fs.ModeIrregular|0o666); classe == reparseCopiar {
 		t.Fatal("reparse point que dá em pasta (junção) não deveria ser copiado como arquivo")
 	}
-	if _, ok := irregularLegivel(true, filepath.Join(dir, "sumiu"), fs.ModeIrregular); ok {
+	if _, classe := irregularLegivel(true, filepath.Join(dir, "sumiu"), fs.ModeIrregular); classe == reparseCopiar {
 		t.Fatal("o que não abre fica de fora")
 	}
-	if _, ok := irregularLegivel(false, arq, fs.ModeIrregular|0o666); ok {
+	if _, classe := irregularLegivel(false, arq, fs.ModeIrregular|0o666); classe != reparseIgnorar {
 		t.Fatal("fora do Windows, irregular continua de fora")
 	}
-	if _, ok := irregularLegivel(true, arq, 0o666); ok {
+	if _, classe := irregularLegivel(true, arq, 0o666); classe != reparseIgnorar {
 		t.Fatal("arquivo regular segue o caminho comum")
+	}
+}
+
+// O AppExecLink (%LOCALAPPDATA%\Microsoft\WindowsApps\*.exe) passa no
+// os.Stat mas não abre: entrava no backup, falhava, e todo plano com o perfil
+// do usuário saía parcial, todo dia. Não é arquivo de nuvem: fica de fora.
+func TestIrregularLegivelAppExecLinkFicaDeFora(t *testing.T) {
+	arq := filepath.Join(t.TempDir(), "winget.exe")
+	if err := os.WriteFile(arq, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	lerReparseFalso(t, 0x20|0x400, 0x8000001B) // IO_REPARSE_TAG_APPEXECLINK
+	if st, classe := irregularLegivel(true, arq, fs.ModeIrregular|0o666); classe != reparseIgnorar {
+		t.Fatalf("AppExecLink não é arquivo de nuvem: classe=%v st=%v", classe, st)
+	}
+}
+
+// Arquivo do OneDrive só na nuvem: não é copiado (baixaria o arquivo) nem é
+// falha — o walker conta à parte.
+func TestIrregularLegivelSoNaNuvem(t *testing.T) {
+	arq := filepath.Join(t.TempDir(), "grande.mp4")
+	if err := os.WriteFile(arq, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	lerReparseFalso(t, 0x400|0x00400000|0x1000, 0x9000001A)
+	if _, classe := irregularLegivel(true, arq, fs.ModeIrregular|0o666); classe != reparseSoNaNuvem {
+		t.Fatalf("arquivo só na nuvem deveria ser contado à parte, veio %v", classe)
+	}
+}
+
+func TestClassificarReparse(t *testing.T) {
+	const reparse = 0x400
+	casos := []struct {
+		nome      string
+		atributos uint32
+		tag       uint32
+		quer      classeReparse
+	}{
+		{"CLOUD no disco", reparse, 0x9000001A, reparseCopiar},
+		{"CLOUD_1 no disco", reparse | 0x20, 0x9000101A, reparseCopiar},
+		{"CLOUD_F no disco (fixado)", reparse | 0x00080000, 0x9000F01A, reparseCopiar},
+		{"CLOUD só na nuvem (recall on data access)", reparse | 0x00400000, 0x9000301A, reparseSoNaNuvem},
+		{"CLOUD só na nuvem (recall on open)", reparse | 0x00040000, 0x9000001A, reparseSoNaNuvem},
+		{"CLOUD offline", reparse | 0x1000, 0x9000201A, reparseSoNaNuvem},
+		{"CLOUD que é pasta", reparse | 0x10, 0x9000001A, reparseIgnorar},
+		{"AppExecLink", reparse, 0x8000001B, reparseIgnorar},
+		{"symlink", reparse, 0xA000000C, reparseIgnorar},
+		{"junção", reparse, 0xA0000003, reparseIgnorar},
+		{"dedup", reparse, 0x80000013, reparseIgnorar},
+		{"WOF (compactado)", reparse, 0x80000017, reparseIgnorar},
+		{"parecido com CLOUD em outro nibble", reparse, 0x9001001A, reparseIgnorar},
+		{"sem tag", 0x20, 0, reparseIgnorar},
+	}
+	for _, c := range casos {
+		if got := classificarReparse(c.atributos, c.tag); got != c.quer {
+			t.Errorf("%s (attr=%#x tag=%#x): veio %v, queria %v", c.nome, c.atributos, c.tag, got, c.quer)
+		}
 	}
 }
 
