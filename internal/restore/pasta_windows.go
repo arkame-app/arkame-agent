@@ -65,6 +65,34 @@ func (p *pasta) criarTemp(padrao string) (*os.File, string, error) {
 	return f, filepath.Base(f.Name()), nil
 }
 
+// infoDe lê o nome dentro da pasta sem seguir link (Lstat).
+func (p *pasta) infoDe(nome string) (infoArquivo, error) {
+	st, err := os.Lstat(filepath.Join(p.caminho, nome))
+	if err != nil {
+		return infoArquivo{}, err
+	}
+	return infoDeFileInfo(st), nil
+}
+
+func infoDeFileInfo(st fs.FileInfo) infoArquivo {
+	return infoArquivo{regular: st.Mode().IsRegular(), tamanho: st.Size(), modo: st.Mode().Perm()}
+}
+
+// abrirLeitura abre o arquivo nome da pasta para ler; devolve também o que o
+// handle aberto diz dele.
+func (p *pasta) abrirLeitura(nome string) (*os.File, infoArquivo, error) {
+	f, err := os.Open(filepath.Join(p.caminho, nome))
+	if err != nil {
+		return nil, infoArquivo{}, err
+	}
+	st, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, infoArquivo{}, err
+	}
+	return f, infoDeFileInfo(st), nil
+}
+
 func (p *pasta) remover(nome string) { _ = os.Remove(filepath.Join(p.caminho, nome)) }
 
 func (p *pasta) renomear(de, para string) error {

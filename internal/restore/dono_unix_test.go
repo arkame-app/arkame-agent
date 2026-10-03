@@ -28,7 +28,7 @@ func chownQueLimpaSetuid(t *testing.T) *[]string {
 	var chamadas []string
 	antes := trocarDono
 	t.Cleanup(func() { trocarDono = antes })
-	trocarDono = func(f *os.File, _ os.FileInfo) error {
+	trocarDono = func(f *os.File, _, _ int) error {
 		st, err := f.Stat()
 		if err != nil {
 			return err

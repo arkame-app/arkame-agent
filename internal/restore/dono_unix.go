@@ -2,20 +2,13 @@
 
 package restore
 
-import (
-	"os"
-	"syscall"
-)
+import "os"
 
 // copiarDono dá ao arquivo o dono e o grupo do existente. Só como root: outro
 // usuário não pode dar o arquivo a terceiros, e o que ele cria já é dele.
-func copiarDono(f *os.File, existente os.FileInfo) error {
+func copiarDono(f *os.File, uid, gid int) error {
 	if os.Geteuid() != 0 {
 		return nil
 	}
-	st, ok := existente.Sys().(*syscall.Stat_t)
-	if !ok {
-		return nil
-	}
-	return f.Chown(int(st.Uid), int(st.Gid))
+	return f.Chown(uid, gid)
 }

@@ -176,6 +176,55 @@ func (p *pasta) criarTemp(padrao string) (*os.File, string, error) {
 	return nil, "", fmt.Errorf("sem nome livre para o temporário em %s", p.caminho)
 }
 
+// infoDe lê o nome dentro da pasta aberta (fstatat, sem seguir link). O
+// caminho em texto não serve: quem manda numa pasta do caminho a troca por um
+// link depois da abertura, e o stat por texto passaria a ler um arquivo de
+// fora (o dono e o modo do /usr/bin/passwd, por exemplo).
+func (p *pasta) infoDe(nome string) (infoArquivo, error) {
+	var st unix.Stat_t
+	if err := unix.Fstatat(p.fd, nome, &st, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		return infoArquivo{}, &os.PathError{Op: "stat", Path: filepath.Join(p.caminho, nome), Err: err}
+	}
+	return infoDeStat(&st), nil
+}
+
+func infoDeStat(st *unix.Stat_t) infoArquivo {
+	m := uint32(st.Mode)
+	modo := os.FileMode(m & 0o777)
+	if m&unix.S_ISUID != 0 {
+		modo |= os.ModeSetuid
+	}
+	if m&unix.S_ISGID != 0 {
+		modo |= os.ModeSetgid
+	}
+	if m&unix.S_ISVTX != 0 {
+		modo |= os.ModeSticky
+	}
+	return infoArquivo{
+		regular: m&unix.S_IFMT == unix.S_IFREG,
+		tamanho: st.Size,
+		modo:    modo,
+		uid:     int(st.Uid),
+		gid:     int(st.Gid),
+	}
+}
+
+// abrirLeitura abre o arquivo comum nome da pasta aberta, sem seguir link
+// (O_NOFOLLOW) e sem travar num FIFO posto no lugar (O_NONBLOCK). Devolve
+// também o que o fstat do descritor diz dele.
+func (p *pasta) abrirLeitura(nome string) (*os.File, infoArquivo, error) {
+	fd, err := unix.Openat(p.fd, nome, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, infoArquivo{}, &os.PathError{Op: "open", Path: filepath.Join(p.caminho, nome), Err: err}
+	}
+	var st unix.Stat_t
+	if err := unix.Fstat(fd, &st); err != nil {
+		unix.Close(fd)
+		return nil, infoArquivo{}, &os.PathError{Op: "stat", Path: filepath.Join(p.caminho, nome), Err: err}
+	}
+	return os.NewFile(uintptr(fd), filepath.Join(p.caminho, nome)), infoDeStat(&st), nil
+}
+
 func (p *pasta) remover(nome string) { _ = unix.Unlinkat(p.fd, nome, 0) }
 
 // renomear troca o nome dentro da pasta aberta; um link no nome final é

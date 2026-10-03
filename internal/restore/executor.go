@@ -110,19 +110,23 @@ func Run(ctx context.Context, opts Options, item api.RestoreItem) error {
 		return err
 	}
 	defer dir.Close()
-	rootedDir := dir.caminho
+	aposAbrirPasta()
 
 	// Item refeito: a gravação deu certo, mas o PATCH final não chegou ao
 	// painel, e o item voltou na fila. O resolveConflict via o arquivo que
 	// esta mesma restauração acabou de gravar e, em suffix-version, gravava
 	// outra cópia (app.conf.vXXXX.1). Já no destino, inteiro, é concluído.
-	if feito, err := jaRestaurado(rootedDir, baseName, item); err != nil {
+	//
+	// Daqui até o rename, tudo o que se lê ou grava no destino vai pelo
+	// descritor da pasta aberta, nunca pelo caminho em texto: quem manda numa
+	// pasta do caminho pode trocá-la por um link a qualquer momento.
+	if feito, err := jaRestaurado(dir, baseName, item); err != nil {
 		return err
 	} else if feito {
 		return nil
 	}
 
-	finalName, err := resolveConflict(rootedDir, baseName, item.SourceVersionID, item.ConflictStrategy)
+	finalName, err := resolveConflict(dir, baseName, item.SourceVersionID, item.ConflictStrategy)
 	if err != nil {
 		return err
 	}
@@ -130,7 +134,6 @@ func Run(ctx context.Context, opts Options, item api.RestoreItem) error {
 		// skip: nada foi gravado, e o painel tem de saber disso.
 		return ErrPulado
 	}
-	finalPath := filepath.Join(rootedDir, finalName)
 
 	tmpFile, tmpNome, err := dir.criarTemp(padraoTemporario(finalName))
 	if err != nil {
@@ -159,13 +162,14 @@ func Run(ctx context.Context, opts Options, item api.RestoreItem) error {
 	if item.SourceSha256 != "" && !strings.EqualFold(written.sha256, item.SourceSha256) {
 		return fmt.Errorf("sha256 mismatch: esperado=%s baixado=%s", item.SourceSha256, written.sha256)
 	}
+	aposBaixar()
 
 	// O temporário nasce com 0600, e o rename levava isso ao destino: todo
 	// arquivo restaurado ficava 0600 (e root:root, com o agente como root),
 	// inclusive por cima de um arquivo que o serviço do cliente lia com outro
 	// usuário. Por cima de um arquivo existente, herda o modo e o dono dele;
 	// arquivo novo fica 0644. Pelo descritor, não pelo caminho.
-	if err := ajustarPermissoes(tmpFile, finalPath); err != nil {
+	if err := ajustarPermissoes(tmpFile, dir, finalName); err != nil {
 		return err
 	}
 	if err := tmpFile.Close(); err != nil {
@@ -189,6 +193,14 @@ func Run(ctx context.Context, opts Options, item api.RestoreItem) error {
 	return nil
 }
 
+// aposAbrirPasta e aposBaixar são os pontos do Run em que o teste troca uma
+// pasta do caminho por um link, como faria quem manda nela durante a
+// restauração.
+var (
+	aposAbrirPasta = func() {}
+	aposBaixar     = func() {}
+)
+
 // modoDeArquivoNovo é o modo de um arquivo restaurado que não substitui outro.
 const modoDeArquivoNovo os.FileMode = 0o644
 
@@ -203,13 +215,17 @@ var trocarDono = copiarDono
 // O chown vem antes do chmod: no Linux o chown limpa S_ISUID e S_ISGID, mesmo
 // feito pelo root, e o chmod antes dele deixava o binário setuid/setgid
 // restaurado sem os bits, calado.
-func ajustarPermissoes(tmp *os.File, finalPath string) error {
+//
+// O arquivo existente é lido pelo descritor da pasta (fstatat, sem seguir
+// link). Era um os.Lstat do caminho em texto: durante o download a pessoa
+// trocava a pasta por um link para /usr/bin, e o arquivo dela recebia o
+// 04755 root:root do /usr/bin/passwd — root local.
+func ajustarPermissoes(tmp *os.File, dir *pasta, finalName string) error {
 	modo := modoDeArquivoNovo
-	existente, err := os.Lstat(finalPath)
-	regular := err == nil && existente.Mode().IsRegular()
-	if regular {
-		modo = existente.Mode() & (os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky)
-		if err := trocarDono(tmp, existente); err != nil {
+	existente, err := dir.infoDe(finalName)
+	if err == nil && existente.regular {
+		modo = existente.modo
+		if err := trocarDono(tmp, existente.uid, existente.gid); err != nil {
 			return fmt.Errorf("chown %s: %w", tmp.Name(), err)
 		}
 	}
@@ -428,14 +444,15 @@ func splitDestFilename(destFilename string) (subDir, baseName string, err error)
 	return subDir, baseName, nil
 }
 
-// resolveConflict decide o nome final a usar dado o arquivo de destino.
-// Retorna nome vazio se a estratégia for "skip" e o arquivo já existir.
-func resolveConflict(dir, filename, versionID, strategy string) (string, error) {
-	full := filepath.Join(dir, filename)
-	if _, err := os.Stat(full); errors.Is(err, os.ErrNotExist) {
+// resolveConflict decide o nome final a usar dado o arquivo de destino, lido
+// na pasta aberta sem seguir link (um link no nome final conta como existente
+// e é substituído pelo rename, não seguido). Retorna nome vazio se a
+// estratégia for "skip" e o arquivo já existir.
+func resolveConflict(dir *pasta, filename, versionID, strategy string) (string, error) {
+	if _, err := dir.infoDe(filename); errors.Is(err, os.ErrNotExist) {
 		return filename, nil
 	} else if err != nil {
-		return "", fmt.Errorf("stat %s: %w", full, err)
+		return "", err
 	}
 
 	switch strategy {
@@ -451,12 +468,11 @@ func resolveConflict(dir, filename, versionID, strategy string) (string, error) 
 		// Nome com sufixo já ocupado: incrementa o contador.
 		for i := 0; ; i++ {
 			candidate := nomeComVersao(filename, short, i)
-			full := filepath.Join(dir, candidate)
-			if _, err := os.Stat(full); errors.Is(err, os.ErrNotExist) {
+			if _, err := dir.infoDe(candidate); errors.Is(err, os.ErrNotExist) {
 				return candidate, nil
 			}
 			if i > 1000 {
-				return "", fmt.Errorf("conflict resolution exaurido em %s", dir)
+				return "", fmt.Errorf("conflict resolution exaurido em %s", dir.caminho)
 			}
 		}
 	default:
@@ -487,7 +503,7 @@ func nomeComVersao(filename, short string, i int) string {
 // tamanho e o sha256 esperados no nome que a estratégia de conflito usaria
 // (o próprio nome e, em suffix-version, os nomes com o sufixo da versão).
 // Sem sha256 no item não há como confirmar, e a restauração segue.
-func jaRestaurado(dir, baseName string, item api.RestoreItem) (bool, error) {
+func jaRestaurado(dir *pasta, baseName string, item api.RestoreItem) (bool, error) {
 	if item.SourceSha256 == "" {
 		return false, nil
 	}
@@ -496,7 +512,7 @@ func jaRestaurado(dir, baseName string, item api.RestoreItem) (bool, error) {
 		if short := sufixoDeVersao(item.SourceVersionID); short != "" {
 			for i := 0; i <= 1000; i++ {
 				n := nomeComVersao(baseName, short, i)
-				if _, err := os.Lstat(filepath.Join(dir, n)); err != nil {
+				if _, err := dir.infoDe(n); err != nil {
 					break // o resolveConflict pararia aqui
 				}
 				nomes = append(nomes, n)
@@ -504,7 +520,7 @@ func jaRestaurado(dir, baseName string, item api.RestoreItem) (bool, error) {
 		}
 	}
 	for _, n := range nomes {
-		igual, err := mesmoConteudo(filepath.Join(dir, n), item)
+		igual, err := mesmoConteudo(dir, n, item)
 		if err != nil {
 			return false, err
 		}
@@ -515,26 +531,37 @@ func jaRestaurado(dir, baseName string, item api.RestoreItem) (bool, error) {
 	return false, nil
 }
 
-// mesmoConteudo compara o arquivo com o tamanho e o sha256 do item. Só lê o
-// arquivo se o tamanho bate.
-func mesmoConteudo(p string, item api.RestoreItem) (bool, error) {
-	st, err := os.Lstat(p)
+// mesmoConteudo compara o arquivo nome da pasta aberta com o tamanho e o
+// sha256 do item, sem seguir link. Só lê o arquivo se o tamanho bate; o que
+// vale é o que o descritor aberto diz (entre a conferência e a abertura o nome
+// pode ter virado outra coisa).
+func mesmoConteudo(dir *pasta, nome string, item api.RestoreItem) (bool, error) {
+	confere := func(st infoArquivo) bool {
+		return st.regular && (item.SourceSize <= 0 || st.tamanho == item.SourceSize)
+	}
+	st, err := dir.infoDe(nome)
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
 	} else if err != nil {
-		return false, fmt.Errorf("stat %s: %w", p, err)
+		return false, err
 	}
-	if !st.Mode().IsRegular() || (item.SourceSize > 0 && st.Size() != item.SourceSize) {
+	if !confere(st) {
 		return false, nil
 	}
-	f, err := os.Open(p)
+	f, st, err := dir.abrirLeitura(nome)
 	if err != nil {
-		return false, fmt.Errorf("abrindo %s: %w", p, err)
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, fmt.Errorf("abrindo %s: %w", nome, err)
 	}
 	defer f.Close()
+	if !confere(st) {
+		return false, nil
+	}
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {
-		return false, fmt.Errorf("lendo %s: %w", p, err)
+		return false, fmt.Errorf("lendo %s: %w", f.Name(), err)
 	}
 	return strings.EqualFold(hex.EncodeToString(h.Sum(nil)), item.SourceSha256), nil
 }

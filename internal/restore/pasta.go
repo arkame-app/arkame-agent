@@ -1,6 +1,9 @@
 package restore
 
-import "errors"
+import (
+	"errors"
+	"os"
+)
 
 // ErrDestinoLink: o caminho até a pasta da restauração passa por um link
 // simbólico (no Windows, link ou junção) que não é do sistema. O daemon o
@@ -18,3 +21,13 @@ const CodigoDestinoLink = "dest_symlink"
 
 // maxLinks limita a cadeia de links do sistema seguidos, como o kernel (ELOOP).
 const maxLinks = 40
+
+// infoArquivo é o que a restauração lê de um nome da pasta aberta, sem seguir
+// link: se é arquivo comum, o tamanho, o modo (permissões e setuid, setgid e
+// sticky) e o dono.
+type infoArquivo struct {
+	regular  bool
+	tamanho  int64
+	modo     os.FileMode
+	uid, gid int
+}
