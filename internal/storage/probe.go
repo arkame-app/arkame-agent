@@ -50,8 +50,14 @@ func Probe(ctx context.Context, client *s3.Client, bucket, storageID string) api
 	}
 	report.Versioning = v
 
-	// Object Lock — opcional, pode não estar habilitado
+	// Object Lock — opcional, pode não estar habilitado. "Sem configuração" é
+	// a resposta normal de bucket sem trava; qualquer outro erro (sem
+	// permissão, rede) vai em object_lock_error: sem ele o painel lia "sem
+	// trava" quando a sondagem só não conseguiu olhar.
 	olr, err := client.GetObjectLockConfiguration(ctx, &s3.GetObjectLockConfigurationInput{Bucket: &bucket})
+	if err != nil && !IsBenignProbeError(err) {
+		report.ObjectLockError = textoDoErro(err)
+	}
 	if err == nil && olr.ObjectLockConfiguration != nil && olr.ObjectLockConfiguration.ObjectLockEnabled == types.ObjectLockEnabledEnabled {
 		ol := &api.ObjectLock{Enabled: true}
 		if rule := olr.ObjectLockConfiguration.Rule; rule != nil && rule.DefaultRetention != nil {
@@ -63,10 +69,16 @@ func Probe(ctx context.Context, client *s3.Client, bucket, storageID string) api
 		report.ObjectLock = ol
 	}
 
-	// Lifecycle — opcional
+	// Lifecycle — opcional. Como no Object Lock, só "sem regras" é silêncio:
+	// uma chave sem s3:GetLifecycleConfiguration chegava ao painel como bucket
+	// sem ciclo de vida, e uma regra que apaga versões antigas em 30 dias
+	// passava sem o aviso de retenção maior que o bucket guarda.
 	lr, err := client.GetBucketLifecycleConfiguration(ctx, &s3.GetBucketLifecycleConfigurationInput{Bucket: &bucket})
-	if err == nil {
+	switch {
+	case err == nil:
 		report.Lifecycle, report.NoncurrentExpirationDays, report.NoncurrentTransitions = lerLifecycle(lr.Rules)
+	case !IsBenignProbeError(err):
+		report.LifecycleError = textoDoErro(err)
 	}
 
 	// Ocupação real: soma o tamanho de todas as versões (ListObjectVersions
@@ -159,8 +171,27 @@ func measureUsage(ctx context.Context, client *s3.Client, bucket string) (bytes,
 	return bytes, objects, nil
 }
 
-// IsBenignProbeError identifica erros S3 que indicam "config ausente" em vez de erro real.
-// Útil para reportes parciais bem-sucedidos.
+// textoDoErro resume o erro do S3 para o painel: o código e a mensagem do
+// provedor (AccessDenied: Access Denied), sem o RequestID e o HostID que o
+// SDK acrescenta. Erro sem código (rede, DNS) vai inteiro.
+func textoDoErro(err error) string {
+	var ae interface {
+		ErrorCode() string
+		ErrorMessage() string
+	}
+	if errors.As(err, &ae) {
+		if m := ae.ErrorMessage(); m != "" {
+			return ae.ErrorCode() + ": " + m
+		}
+		return ae.ErrorCode()
+	}
+	return err.Error()
+}
+
+// IsBenignProbeError identifica as respostas S3 que querem dizer "config
+// ausente" (bucket sem regras de ciclo de vida, sem Object Lock), e não erro:
+// a sondagem segue sem o campo. O resto vai no relato (lifecycle_error,
+// object_lock_error).
 func IsBenignProbeError(err error) bool {
 	if err == nil {
 		return true

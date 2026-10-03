@@ -177,6 +177,16 @@ type ProbeReport struct {
 	NoncurrentTransitions    []string  `json:"noncurrent_transitions,omitempty"`
 	ProbedAt                 time.Time `json:"probed_at"`
 	Error                    string    `json:"error,omitempty"`
+	// LifecycleError e ObjectLockError: a leitura das regras de ciclo de vida
+	// ou do Object Lock falhou por outro motivo que não "o bucket não tem"
+	// (tipicamente AccessDenied: a chave sem s3:GetLifecycleConfiguration ou
+	// s3:GetBucketObjectLockConfiguration). Texto "Código: mensagem" do
+	// provedor; ausente quando a leitura deu certo ou o bucket não tem a
+	// configuração. Com ele preenchido, Lifecycle/ObjectLock ausentes querem
+	// dizer "não sei", e não "não há" — o painel deve avisar. A partir do
+	// agente 0.4.11.
+	LifecycleError  string `json:"lifecycle_error,omitempty"`
+	ObjectLockError string `json:"object_lock_error,omitempty"`
 }
 
 type ObjectLock struct {

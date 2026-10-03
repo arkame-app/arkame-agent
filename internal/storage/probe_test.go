@@ -176,3 +176,52 @@ func TestProbeSemExpiracaoDeNaoAtuaisOmiteCampo(t *testing.T) {
 		t.Fatalf("o JSON leva campo de não-atuais sem regra: %s", b)
 	}
 }
+
+// Sem permissão para ler o ciclo de vida ou o Object Lock, a sondagem não pode
+// relatar "o bucket não tem": o erro vai no relato para o painel avisar. "Não
+// tem configuração" segue sem erro nenhum.
+func TestProbeSeparaSemPermissaoDeSemConfiguracao(t *testing.T) {
+	negado := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if q.Has("lifecycle") || q.Has("object-lock") {
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = io.WriteString(w, `<Error><Code>AccessDenied</Code><Message>Access Denied</Message><RequestId>r1</RequestId></Error>`)
+			return
+		}
+		(&bucketVersionado{}).ServeHTTP(w, r)
+	})
+	srv := httptest.NewServer(negado)
+	t.Cleanup(srv.Close)
+	c := s3.New(s3.Options{
+		Region:       "us-east-1",
+		BaseEndpoint: aws.String(srv.URL),
+		UsePathStyle: true,
+		Credentials:  credentials.NewStaticCredentialsProvider("ak", "sk", ""),
+		Retryer:      aws.NopRetryer{},
+	})
+
+	r := Probe(context.Background(), c, "b", "st")
+	if r.Error != "" || r.Versioning != "Enabled" {
+		t.Fatalf("o resto da sondagem deveria seguir: %+v", r)
+	}
+	if r.LifecycleError != "AccessDenied: Access Denied" {
+		t.Fatalf("lifecycle_error = %q, queria AccessDenied: Access Denied", r.LifecycleError)
+	}
+	if r.ObjectLockError != "AccessDenied: Access Denied" {
+		t.Fatalf("object_lock_error = %q, queria AccessDenied: Access Denied", r.ObjectLockError)
+	}
+	if r.Lifecycle != nil || r.ObjectLock != nil {
+		t.Fatalf("regras inventadas: lifecycle=%+v object_lock=%+v", r.Lifecycle, r.ObjectLock)
+	}
+
+	// Bucket sem regra nem trava: nenhum dos dois erros.
+	r = Probe(context.Background(), clienteDoBucket(t, &bucketVersionado{}), "b", "st")
+	if r.LifecycleError != "" || r.ObjectLockError != "" {
+		t.Fatalf("bucket sem configuração relatado como erro: lifecycle=%q object_lock=%q", r.LifecycleError, r.ObjectLockError)
+	}
+	b, _ := json.Marshal(r)
+	if strings.Contains(string(b), "_error") {
+		t.Fatalf("o JSON leva erro sem haver: %s", b)
+	}
+}
