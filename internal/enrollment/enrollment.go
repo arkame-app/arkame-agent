@@ -4,10 +4,14 @@
 //  1. Gera keypair Ed25519 local
 //  2. Calcula fingerprint (SHA-256 hex do pubkey)
 //  3. POST /api/agents/enroll com enrollment_token + pubkey + hostname
-//  4. Persiste private key em /etc/arkame/key.pem (0600)
-//  5. Imprime fingerprint para o usuário comparar visualmente no painel
-//  6. Long-poll em WaitURL até painel aprovar e emitir um JWT bearer
-//  7. Salva token em /etc/arkame/token.jwt (0600)
+//  4. Imprime fingerprint para o usuário comparar visualmente no painel
+//  5. Long-poll em WaitURL até painel aprovar e emitir um JWT bearer
+//  6. Grava a identidade nova de uma vez (Concluir): chave privada em
+//     /etc/arkame/key.pem (0600), agent.id, AGENT_ID no env-file e o token em
+//     /etc/arkame/token.jwt (0600)
+//
+// Até a aprovação nada vai ao disco: numa reinstalação que nunca é aprovada,
+// o agente segue com a identidade antiga (AGENT_ID e token casados).
 //
 // Para re-enrollment (trocar servidor físico mantendo agent_id), o fluxo
 // é o mesmo — o painel identifica pelo enrollment_token se é first-time
@@ -44,17 +48,25 @@ type Options struct {
 	InstallMethod string // "docker" | "binary"
 }
 
-// Result é o retorno do fluxo de enrollment.
+// Result é o retorno do fluxo de enrollment: a identidade nova, ainda
+// pendente — só em memória até Concluir.
 type Result struct {
 	AgentID     string
 	Fingerprint string
 	WaitURL     string
+
+	chave    *crypto.Keypair
+	resposta api.EnrollResponse
 }
 
 // Run executa o enrollment (não aguarda aprovação humana — retorna logo
-// após o painel confirmar recebimento). O caller deve fazer separadamente
-// o long-poll em Result.WaitURL para buscar o cert quando aprovado, ou
-// deixar isso para o daemon na primeira execução.
+// após o painel confirmar recebimento). O caller faz o long-poll com
+// WaitForApproval e, aprovado, grava tudo com Concluir.
+//
+// Run não grava nada: antes, o AGENT_ID novo ia para o agent.id e o env-file
+// já aqui, com o token antigo no disco. Uma reinstalação nunca aprovada (ou
+// interrompida) deixava o agente com AGENT_ID novo e token velho — 403 em
+// toda chamada depois do próximo reinício.
 func Run(ctx context.Context, cfg *config.Config, o Options) (*Result, error) {
 	if o.Hostname == "" {
 		h, err := os.Hostname()
@@ -70,16 +82,10 @@ func Run(ctx context.Context, cfg *config.Config, o Options) (*Result, error) {
 		return nil, err
 	}
 
-	// 2. Persistir private key (0600)
-	if err := kp.SaveToDisk(cfg.PrivateKeyPath); err != nil {
-		return nil, fmt.Errorf("salvando private key em %s: %w", cfg.PrivateKeyPath, err)
-	}
-	slog.Info("private key gravada", "path", cfg.PrivateKeyPath)
-
-	// 3. Calcular fingerprint
+	// 2. Calcular fingerprint
 	fp := crypto.Fingerprint(kp.Public)
 
-	// 4. Enviar ao painel
+	// 3. Enviar ao painel
 	client, err := api.New(api.Options{
 		BaseURL: cfg.PanelURL,
 		Timeout: 30 * time.Second,
@@ -108,19 +114,38 @@ func Run(ctx context.Context, cfg *config.Config, o Options) (*Result, error) {
 		"wait_url", resp.WaitURL,
 		"expires_at", resp.ExpiresAt)
 
-	// Persistir agent_id para o daemon usar depois
-	if err := persistAgentID(cfg, resp.AgentID); err != nil {
-		return nil, fmt.Errorf("persistindo agent_id: %w", err)
-	}
-	if err := persistirNoArquivo(cfg, resp); err != nil {
-		return nil, fmt.Errorf("gravando a identidade nova em %s: %w", cfg.ConfigPath, err)
+	if resp.AgentID == "" {
+		return nil, errors.New("o painel não devolveu o agent_id do enrollment")
 	}
 
 	return &Result{
 		AgentID:     resp.AgentID,
 		Fingerprint: fp,
 		WaitURL:     resp.WaitURL,
+		chave:       kp,
+		resposta:    resp,
 	}, nil
+}
+
+// Concluir grava a identidade aprovada de uma vez: a chave privada, o
+// agent.id, o AGENT_ID (e o armazenamento) no env-file e o token. O token
+// por último: sem ele, o daemon não sobe, em vez de subir com AGENT_ID e
+// token de identidades diferentes.
+func Concluir(cfg *config.Config, r *Result, token string) error {
+	if r == nil || r.chave == nil {
+		return errors.New("enrollment sem identidade pendente")
+	}
+	if err := r.chave.SaveToDisk(cfg.PrivateKeyPath); err != nil {
+		return fmt.Errorf("salvando private key em %s: %w", cfg.PrivateKeyPath, err)
+	}
+	slog.Info("private key gravada", "path", cfg.PrivateKeyPath)
+	if err := persistAgentID(cfg, r.AgentID); err != nil {
+		return fmt.Errorf("persistindo agent_id: %w", err)
+	}
+	if err := persistirNoArquivo(cfg, r.resposta); err != nil {
+		return fmt.Errorf("gravando a identidade nova em %s: %w", cfg.ConfigPath, err)
+	}
+	return PersistToken(cfg, token)
 }
 
 // WaitForApproval faz long-poll na WaitURL até o painel aprovar o agent
@@ -128,21 +153,18 @@ func Run(ctx context.Context, cfg *config.Config, o Options) (*Result, error) {
 //
 // O backend mantém a conexão aberta até ~30s — se ainda pending, responde 204
 // e o agent reabre. Se rejected/archived, responde 410 e o agent aborta.
-func WaitForApproval(ctx context.Context, cfg *config.Config, waitURL string) (*api.TokenResponse, error) {
-	// A chave que provamos possuir é a mesma gerada no enrollment. Sem ela não
-	// há como buscar o token: a rota deixou de aceitar quem só conhece o
+func WaitForApproval(ctx context.Context, cfg *config.Config, r *Result) (*api.TokenResponse, error) {
+	// A chave que provamos possuir é a gerada no enrollment, e o agent_id é
+	// o que ele devolveu — os dois ainda só em memória. Sem a chave não há
+	// como buscar o token: a rota deixou de aceitar quem só conhece o
 	// agent_id.
-	kp, err := crypto.LoadPrivate(cfg.PrivateKeyPath)
-	if err != nil {
-		return nil, fmt.Errorf("lendo chave privada em %s: %w", cfg.PrivateKeyPath, err)
+	if r == nil || r.chave == nil {
+		return nil, errors.New("enrollment sem identidade pendente")
 	}
-	agentID, err := readAgentID(cfg)
-	if err != nil {
-		return nil, err
-	}
-	// waitURL pode ser absoluto ou relativo ao painel
+	kp, agentID := r.chave, r.AgentID
+	// WaitURL pode ser absoluto ou relativo ao painel
 	base := cfg.PanelURL
-	u, parseErr := url.Parse(waitURL)
+	u, parseErr := url.Parse(r.WaitURL)
 	if parseErr != nil {
 		return nil, parseErr
 	}
@@ -256,22 +278,4 @@ func PersistToken(cfg *config.Config, token string) error {
 		return fmt.Errorf("salvando token: %w", err)
 	}
 	return nil
-}
-
-// readAgentID lê o agent.id gravado no enrollment. É o identificador que vai
-// no material assinado, e precisa ser exatamente o que o painel conhece.
-func readAgentID(cfg *config.Config) (string, error) {
-	path := cfg.AgentIDPath
-	if path == "" {
-		path = "/etc/arkame/agent.id"
-	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return "", fmt.Errorf("lendo agent.id em %s: %w", path, err)
-	}
-	id := strings.TrimSpace(string(raw))
-	if id == "" {
-		return "", fmt.Errorf("agent.id vazio em %s", path)
-	}
-	return id, nil
 }

@@ -4,8 +4,6 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -28,26 +26,16 @@ func TestWaitTokenJaEmitidoParaComOrientacao(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	dir := t.TempDir()
 	kp, err := crypto.Generate()
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := &config.Config{
-		PanelURL:       srv.URL,
-		PrivateKeyPath: filepath.Join(dir, "key.pem"),
-		AgentIDPath:    filepath.Join(dir, "agent.id"),
-	}
-	if err := kp.SaveToDisk(cfg.PrivateKeyPath); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(cfg.AgentIDPath, []byte("ag-1"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	cfg := &config.Config{PanelURL: srv.URL}
+	r := &Result{AgentID: "ag-1", WaitURL: "/api/agents/ag-1/wait-token", chave: kp}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, err = WaitForApproval(ctx, cfg, "/api/agents/ag-1/wait-token")
+	_, err = WaitForApproval(ctx, cfg, r)
 	if err == nil || ctx.Err() != nil {
 		t.Fatalf("deveria parar no 409, veio err=%v ctx=%v", err, ctx.Err())
 	}

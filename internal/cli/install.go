@@ -40,7 +40,9 @@ func newInstallCmd() *cobra.Command {
   2. Envia public_key + fingerprint ao painel com o --token (enrollment_token)
   3. Imprime fingerprint e link do painel para o usuário aprovar
   4. (default) Faz long-poll aguardando aprovação e recebe um JWT bearer
-  5. Salva o JWT em /etc/arkame/token.jwt (0600)
+  5. Aprovado, grava a identidade nova de uma vez: a chave privada, o
+     agent.id, o AGENT_ID no env-file e o JWT em /etc/arkame/token.jwt (0600).
+     Sem aprovação (ou com --wait=false), nada disso muda no disco
   6. Opcionalmente instala como serviço do SO (--install-service, default: true)
 
 Um host pode rodar mais de um agent — um por conjunto de credenciais de
@@ -135,11 +137,11 @@ agent_id existente, preservando histórico e path no bucket.`,
 
 			if waitApproval {
 				fmt.Fprintln(os.Stderr, "  Aguardando aprovação (Ctrl-C cancela)...")
-				tok, err := enrollment.WaitForApproval(ctx, cfg, result.WaitURL)
+				tok, err := enrollment.WaitForApproval(ctx, cfg, result)
 				if err != nil {
 					return fmt.Errorf("aguardando aprovação: %w", err)
 				}
-				if err := enrollment.PersistToken(cfg, tok.AgentToken); err != nil {
+				if err := enrollment.Concluir(cfg, result, tok.AgentToken); err != nil {
 					return err
 				}
 				slog.Info("aprovado — token persistido", "expires_at", tok.ExpiresAt)
@@ -201,7 +203,7 @@ agent_id existente, preservando histórico e path no bucket.`,
 	cmd.Flags().StringVar(&hostName, "hostname", "", "hostname reportado (default: hostname do sistema)")
 	cmd.Flags().BoolVar(&pausar, "pause", false, "esperar um Enter antes de sair (janela aberta pelo setup no Windows)")
 	cmd.Flags().BoolVar(&checkStorage, "check-storage", true, "testar a chave do bucket antes de registrar (sem chave no arquivo, pergunta no terminal)")
-	cmd.Flags().BoolVar(&waitApproval, "wait", true, "aguardar aprovação humana (long-poll). --wait=false retorna logo após enrollment")
+	cmd.Flags().BoolVar(&waitApproval, "wait", true, "aguardar aprovação humana (long-poll). --wait=false retorna logo após enrollment, sem gravar a identidade nova")
 
 	// Mantém alias antigo para compatibilidade com docs.
 	cmd.Flags().StringVar(&enrollmentToken, "enrollment-token", "", "(alias) enrollment_token")
