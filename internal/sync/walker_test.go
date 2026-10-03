@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -99,5 +100,32 @@ func TestWalkOrigemQueELink(t *testing.T) {
 	}
 	if got["home/hugo/conf-link"] != filepath.Join(raiz, "etc", "conf") {
 		t.Fatalf("link absoluto deveria apontar para o /etc do servidor: %v", got)
+	}
+}
+
+// No Windows (Go ≥ 1.23), arquivo do OneDrive é ModeIrregular: tem de entrar no
+// backup como arquivo comum. Pasta (junção) não é seguida, e fora do Windows a
+// regra não vale.
+func TestIrregularLegivelNoWindows(t *testing.T) {
+	dir := t.TempDir()
+	arq := filepath.Join(dir, "nuvem.docx")
+	if err := os.WriteFile(arq, []byte("conteúdo do OneDrive"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	st, ok := irregularLegivel(true, arq, fs.ModeIrregular|0o666)
+	if !ok || st.Size() != int64(len("conteúdo do OneDrive")) {
+		t.Fatalf("arquivo irregular legível no Windows deveria entrar: ok=%v st=%v", ok, st)
+	}
+	if _, ok := irregularLegivel(true, dir, fs.ModeIrregular|0o666); ok {
+		t.Fatal("reparse point que dá em pasta (junção) não deveria ser copiado como arquivo")
+	}
+	if _, ok := irregularLegivel(true, filepath.Join(dir, "sumiu"), fs.ModeIrregular); ok {
+		t.Fatal("o que não abre fica de fora")
+	}
+	if _, ok := irregularLegivel(false, arq, fs.ModeIrregular|0o666); ok {
+		t.Fatal("fora do Windows, irregular continua de fora")
+	}
+	if _, ok := irregularLegivel(true, arq, 0o666); ok {
+		t.Fatal("arquivo regular segue o caminho comum")
 	}
 }
