@@ -43,7 +43,7 @@ Binário Linux rodando local contra o painel em produção (`save.arkame.app`) +
 > `git tag --sort=-v:refname` (ou o GitHub Releases), não este texto. As seções datadas
 > acima são registro histórico e podem descrever comportamento que já mudou.
 >
-> **Até a v0.4.13:**
+> **Mudanças recentes** (a versão de cada uma está nas tags; `git tag --contains <commit>`):
 > - **v0.4.11:** o relato da sondagem leva `noncurrent_expiration_days` e
 >   `noncurrent_transitions` (prometidos desde a 0.4.10 e que não saíam do agente) e os
 >   campos novos `lifecycle_error` / `object_lock_error` (leitura negada ≠ bucket sem
@@ -62,7 +62,7 @@ Binário Linux rodando local contra o painel em produção (`save.arkame.app`) +
 >   chave com `/opt/arkame/bin` quando for o caso; o README cita esse caminho em trocar a
 >   chave e remover.
 >
-> **Desde então (entra na próxima versão):** backup e limpeza de retenção não rodam
+> **Também recentes:** backup e limpeza de retenção não rodam
 > juntos no mesmo bucket (`internal/daemon/exclusao.go`). Antes, a limpeza podia apagar
 > no meio de um backup a versão que ele reaproveitava por dedup, e a sessão gravava no
 > catálogo uma versão que já não existia. O backup espera a limpeza em curso; a limpeza
