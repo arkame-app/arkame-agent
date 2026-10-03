@@ -2,7 +2,7 @@
 
 Agent Go do SaaS [Arkame](https://arkame.app) — roda no servidor do cliente, lê arquivos e envia para o bucket BYOS, reportando status ao painel.
 
-**Status:** funcional. Enrollment (Ed25519 + bearer JWT), daemon com 4 loops (heartbeat, probe, plans/backup, restore), sync engine (walker + hash + dedup HeadObject + multipart upload), restore com escrita atômica + verify, e warming de cold storage estão implementados. Build limpo (`go vet ./...`). Resta hardening (mTLS, self-update, snapshots, observabilidade) — ver "O que falta".
+**Status:** funcional. Enrollment (Ed25519 + bearer JWT), daemon com 6 loops (heartbeat com renovação do token, probe, planos/backup, restauração, explorador de pastas, expurgo de retenção), sync engine (walker + hash + dedup HeadObject + multipart upload), restore com escrita atômica + verify, e warming de cold storage estão implementados. Build limpo (`go vet ./...`). Resta hardening (mTLS, self-update, snapshots, observabilidade) — ver "O que falta".
 
 ## About (English)
 
@@ -51,7 +51,7 @@ can be fully removed with `arkame-agent uninstall`.
 │  │  • enrollment (Ed25519)│  │
 │  │  • scheduler (windows) │  │          ┌──────────────────────┐
 │  │  • walker + hasher     │  │          │  Bucket BYOS do      │
-│  │  • S3 uploader         │──┼──────────┤  cliente (S3/R2/...) │
+│  │  • S3 uploader         │──┼──────────┤  cliente (S3/B2/...) │
 │  │  • probe periódico     │  │  direto  └──────────────────────┘
 │  └────────────────────────┘  │
 └─────────────────────────────┘
@@ -67,18 +67,26 @@ can be fully removed with `arkame-agent uninstall`.
 arkame-agent/
 ├── cmd/arkame-agent/main.go    # entry point (delega pro cobra root)
 ├── internal/
-│   ├── cli/                    # comandos: install, run, status, check-storage, set-storage-keys, service, version
+│   ├── cli/                    # comandos: install, setup, run, status, heartbeat, check-storage, set-storage-keys, service, uninstall, version
 │   ├── config/                 # env-file + flags + defaults
 │   ├── crypto/                 # Ed25519 keypair + fingerprint
 │   ├── enrollment/             # fluxo de registro (first-time + reinstall)
 │   ├── api/                    # HTTP client + types do painel
 │   ├── storage/                # S3 client + probe (GetBucketVersioning etc) + check
 │   ├── setup/                  # chave do bucket na instalação: painel, pergunta, teste, arquivo
+│   ├── segredo/                # gravação protegida de chave, token e identidade (0600; DACL no Windows)
 │   ├── terminal/               # perguntas no /dev/tty (CONIN$ no Windows), senha sem eco
+│   ├── caminho/                # caminhos entre painel, disco e bucket (unidade do Windows, HostRoot)
 │   ├── sync/                   # walker + hasher + engine de upload + throttle
+│   ├── hooks/                  # comandos de antes/depois do backup (ex.: pg_dump)
+│   ├── restore/                # executor de restauração (escrita atômica, sha256, cold storage)
+│   ├── purge/                  # expurgo de versões autorizado pelo painel (retenção)
+│   ├── fsbrowse/               # listagem de pastas para o explorador do painel
 │   ├── scheduler/              # janelas de tempo + decisão de "should run agora"
-│   ├── daemon/                 # loop principal (heartbeat, poll, execute)
-│   └── service/                # install como systemd/launchd/Windows Service
+│   ├── daemon/                 # loops do serviço (heartbeat, probe, planos, restauração, pastas, expurgo)
+│   ├── service/                # install como systemd/launchd/Windows Service
+│   ├── aplicativos/            # entrada em "Aplicativos instalados" do Windows e remoção do programa
+│   └── logarquivo/             # log em arquivo com rodízio (serviço do Windows)
 └── pkg/version/                # build info (injetada via -ldflags)
 ```
 
@@ -278,4 +286,4 @@ make test       # race + coverage
 go mod tidy
 ```
 
-Schema que este agent reporta ao painel está em `arkame/db/schema.sql` no repositório principal — mudanças nos types `api/` precisam bater com as rotas do Next.js em `apps/save/src/app/api/`.
+O schema do que este agent reporta ao painel está no repositório do painel (`arkame`), nas migrações em `db/migrations/` e no acesso a dados em `packages/db/` — mudanças nos types `api/` precisam bater com as rotas do Next.js em `apps/save/src/app/api/`.
