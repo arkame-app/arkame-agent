@@ -207,10 +207,18 @@ func uploadMultipart(ctx context.Context, s3c *s3.Client, bucket, key string, f 
 	}
 	uploadID := create.UploadId
 
+	// O abort usa um contexto desligado do cancelamento: a falha mais comum
+	// aqui é justamente o serviço parando no meio (ctx cancelado), e com o
+	// ctx original o abort nem saía — as partes ficavam órfãs no bucket,
+	// cobradas até alguma regra de ciclo de vida limpar.
 	abort := func() {
-		_, _ = s3c.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
+		actx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		if _, err := s3c.AbortMultipartUpload(actx, &s3.AbortMultipartUploadInput{
 			Bucket: &bucket, Key: &key, UploadId: uploadID,
-		})
+		}); err != nil {
+			slog.Warn("abort do multipart falhou; partes podem ter ficado no bucket", "key", key, "err", err)
+		}
 	}
 
 	var parts []s3types.CompletedPart

@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -85,5 +86,30 @@ func TestTamanhoDaParteCabeEmDezMilPartes(t *testing.T) {
 	}
 	if tamanhoDaParte(100*mib) != 16*mib {
 		t.Error("arquivo comum continua com partes de 16 MiB")
+	}
+}
+
+// Serviço parando no meio do multipart (ctx cancelado): o abort tem de chegar
+// ao bucket, senão as partes ficam órfãs e cobradas.
+func TestUploadMultipartAbortaMesmoComCtxCancelado(t *testing.T) {
+	falso, c := novoS3Falso(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	falso.falhar = func(r *http.Request) bool {
+		if r.Method == http.MethodPut && r.URL.Query().Get("partNumber") != "" {
+			cancel() // o serviço parou durante o envio da parte
+			return true
+		}
+		return false
+	}
+	conteudo := "parte única"
+	fi := arquivoDeTeste(t, conteudo)
+	f, _ := os.Open(fi.AbsolutePath)
+	defer f.Close()
+	if _, err := uploadMultipart(ctx, c, "b", "k", f, nil, 0, sha256Hex([]byte(conteudo)), fi.Size); err == nil {
+		t.Fatal("o envio da parte falhou; esperava erro")
+	}
+	if falso.abortados != 1 {
+		t.Fatalf("o abort não chegou ao bucket (abortados=%d)", falso.abortados)
 	}
 }
