@@ -53,7 +53,7 @@ func newUninstallCmd() *cobra.Command {
 				return nil
 			}
 
-			configFile, err := configDoAgente(cmd, configFile, serviceName)
+			configFile, err := configDoAgente(cmd, configFile, serviceName, serviceScope)
 			if err != nil {
 				return fmt.Errorf("%w — nada foi removido", err)
 			}

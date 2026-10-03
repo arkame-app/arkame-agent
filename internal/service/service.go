@@ -159,7 +159,7 @@ func chaveDoServico(goos, name string) string {
 func ConfigsDosOutros(name string) (configs []string, completo bool) {
 	completo = true
 	for _, n := range OutrosAgentes(name) {
-		c, ok := configDoServico(n)
+		c, ok := ConfigDoServico(n, "")
 		if !ok || c == "" {
 			completo = false
 			continue
@@ -170,10 +170,20 @@ func ConfigsDosOutros(name string) (configs []string, completo bool) {
 }
 
 // ConfigDoServico devolve o arquivo de configuração que o serviço name usa,
-// lido do registro dele (unit, plist, SCM). ok é false quando o serviço não
-// existe ou o registro não cita o arquivo.
-func ConfigDoServico(name string) (string, bool) {
-	return configDoServico(name)
+// lido do registro dele (unit, plist, SCM) no escopo pedido. Escopo vazio:
+// o padrão desta plataforma primeiro, depois o outro. ok é false quando o
+// serviço não existe ou o registro não cita o arquivo.
+func ConfigDoServico(name string, scope Scope) (string, bool) {
+	escopos := []Scope{scope}
+	if scope == "" {
+		escopos = []Scope{defaultScope(), ScopeSystem, ScopeUser}
+	}
+	for _, e := range escopos {
+		if c, ok := configDoServico(name, e); ok && c != "" {
+			return c, true
+		}
+	}
+	return "", false
 }
 
 // configDaUnit lê o env-file de uma unit do systemd gerada pelo agente

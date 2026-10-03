@@ -101,8 +101,9 @@ func servicosDoAgente() []string {
 	return nomes
 }
 
-// configDoServico lê o --config da linha de comando registrada no SCM.
-func configDoServico(nome string) (string, bool) {
+// configDoServico lê o --config da linha de comando registrada no SCM. O SCM
+// só tem serviços da máquina: o escopo não muda nada.
+func configDoServico(nome string, _ Scope) (string, bool) {
 	m, err := mgr.Connect()
 	if err != nil {
 		return "", false

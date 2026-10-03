@@ -128,7 +128,7 @@ chave nova (o comando aparece no fim).`,
 				pausar = false
 				return nil
 			}
-			configFile, err := configDoAgente(cmd, configFile, serviceName)
+			configFile, err := configDoAgente(cmd, configFile, serviceName, serviceScope)
 			if err != nil {
 				return err
 			}
@@ -180,18 +180,28 @@ chave nova (o comando aparece no fim).`,
 // configDoServico é o leitor do registro do serviço; os testes o trocam.
 var configDoServico = service.ConfigDoServico
 
-// configDoAgente decide de qual agente é o arquivo de configuração. Com
-// --service-name de outro agente e sem --config, o arquivo é o que o serviço
-// dele usa (unit, plist, SCM). Antes ficava o padrão — o do agente principal:
-// set-storage-keys testava e gravava a chave no agente errado, e o uninstall
-// apagava a configuração do vizinho.
-func configDoAgente(cmd *cobra.Command, configFile, serviceName string) (string, error) {
-	if cmd.Flags().Changed("config") || serviceName == "" || serviceName == service.DefaultName {
+// configDoAgente decide de qual agente é o arquivo de configuração. Sem
+// --config, o arquivo é o que o serviço pedido usa (unit, plist, SCM), no
+// escopo pedido. Antes ficava o padrão — o do agente principal: com
+// --service-name de outro agente, set-storage-keys testava e gravava a chave
+// no agente errado, e o uninstall apagava a configuração do vizinho.
+//
+// Vale também para o nome padrão: o agente rootless (--service-scope user)
+// usa ~/.config/arkame/agent.env, e o comando do painel não leva --config —
+// lia /etc/arkame/agent.env, que não existe, e falhava. Só o nome padrão sem
+// registro cai no arquivo padrão.
+func configDoAgente(cmd *cobra.Command, configFile, serviceName, serviceScope string) (string, error) {
+	if cmd.Flags().Changed("config") {
 		return configFile, nil
 	}
-	c, ok := configDoServico(serviceName)
-	if !ok || c == "" {
-		return "", fmt.Errorf("não achei o arquivo de configuração do serviço %s: use --config com o caminho da instalação dele", serviceName)
+	if serviceName == "" {
+		serviceName = service.DefaultName
 	}
-	return c, nil
+	if c, ok := configDoServico(serviceName, service.Scope(serviceScope)); ok && c != "" {
+		return c, nil
+	}
+	if serviceName == service.DefaultName {
+		return configFile, nil
+	}
+	return "", fmt.Errorf("não achei o arquivo de configuração do serviço %s: use --config com o caminho da instalação dele", serviceName)
 }

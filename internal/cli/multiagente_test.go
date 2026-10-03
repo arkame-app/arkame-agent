@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/arkame-app/agent/internal/config"
+	"github.com/arkame-app/agent/internal/service"
 )
 
 // Dois agentes na máquina com a identidade nos caminhos padrão: desinstalar
@@ -93,7 +94,7 @@ func TestServiceNameUsaOArquivoDoProprioServico(t *testing.T) {
 	}
 	pedidos := []string{}
 	antes := configDoServico
-	configDoServico = func(nome string) (string, bool) {
+	configDoServico = func(nome string, _ service.Scope) (string, bool) {
 		pedidos = append(pedidos, nome)
 		if nome == "arkame-agent-oci" {
 			return doOutro, true
@@ -120,17 +121,66 @@ func TestServiceNameUsaOArquivoDoProprioServico(t *testing.T) {
 		t.Fatalf("uninstall deveria parar sem achar o arquivo do serviço, veio %v", err)
 	}
 
-	// --config explícito vence, e o serviço padrão segue no arquivo padrão.
+	// --config explícito vence, e o serviço padrão sem registro segue no
+	// arquivo padrão.
 	c := newUninstallCmd()
 	_ = c.ParseFlags([]string{"--config", "/x/y.env", "--service-name", "arkame-agent-oci"})
-	if got, _ := configDoAgente(c, "/x/y.env", "arkame-agent-oci"); got != "/x/y.env" {
+	if got, _ := configDoAgente(c, "/x/y.env", "arkame-agent-oci", ""); got != "/x/y.env" {
 		t.Fatalf("--config explícito virou %s", got)
 	}
 	c = newUninstallCmd()
-	if got, _ := configDoAgente(c, config.DefaultPath, "arkame-agent"); got != config.DefaultPath {
+	if got, _ := configDoAgente(c, config.DefaultPath, "arkame-agent", ""); got != config.DefaultPath {
 		t.Fatalf("serviço padrão virou %s", got)
 	}
-	if !slices.Equal(pedidos, []string{"arkame-agent-oci", "arkame-agent-sumido"}) {
+	if !slices.Equal(pedidos, []string{"arkame-agent-oci", "arkame-agent-sumido", "arkame-agent"}) {
 		t.Fatalf("consultas ao registro: %v", pedidos)
+	}
+}
+
+// Agente rootless com o nome padrão: o comando do painel (`set-storage-keys
+// --restart --service-scope user`, sem --config) lia /etc/arkame/agent.env,
+// que não existe, em vez de ~/.config/arkame/agent.env da unit do usuário.
+func TestNomePadraoRootlessUsaOArquivoDoServicoDoUsuario(t *testing.T) {
+	t.Setenv("STORAGE_BUCKET", "")
+	dir := t.TempDir()
+	doUsuario := filepath.Join(dir, "agent.env")
+	if err := os.WriteFile(doUsuario, []byte("PANEL_URL=https://x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	type pedido struct {
+		nome   string
+		escopo service.Scope
+	}
+	var pedidos []pedido
+	antes := configDoServico
+	configDoServico = func(nome string, escopo service.Scope) (string, bool) {
+		pedidos = append(pedidos, pedido{nome, escopo})
+		if nome == service.DefaultName && escopo == service.ScopeUser {
+			return doUsuario, true
+		}
+		return "", false
+	}
+	t.Cleanup(func() { configDoServico = antes })
+
+	cmd := newSetStorageKeysCmd()
+	cmd.SetArgs([]string{"--restart", "--service-scope", "user"})
+	cmd.SilenceUsage, cmd.SilenceErrors = true, true
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), doUsuario) {
+		t.Fatalf("set-storage-keys deveria usar %s, veio %v", doUsuario, err)
+	}
+	if len(pedidos) != 1 || pedidos[0] != (pedido{service.DefaultName, service.ScopeUser}) {
+		t.Fatalf("consultas ao registro: %v", pedidos)
+	}
+
+	// uninstall também: a configuração do usuário é a que sai.
+	c := newUninstallCmd()
+	_ = c.ParseFlags([]string{"--service-scope", "user"})
+	if got, err := configDoAgente(c, config.DefaultPath, service.DefaultName, "user"); err != nil || got != doUsuario {
+		t.Fatalf("uninstall: %q, %v", got, err)
+	}
+	// Sem registro no escopo pedido, o nome padrão fica no arquivo padrão.
+	if got, err := configDoAgente(c, config.DefaultPath, service.DefaultName, "system"); err != nil || got != config.DefaultPath {
+		t.Fatalf("sem registro: %q, %v", got, err)
 	}
 }
