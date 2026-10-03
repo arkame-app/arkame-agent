@@ -66,21 +66,7 @@ func Probe(ctx context.Context, client *s3.Client, bucket, storageID string) api
 	// Lifecycle — opcional
 	lr, err := client.GetBucketLifecycleConfiguration(ctx, &s3.GetBucketLifecycleConfigurationInput{Bucket: &bucket})
 	if err == nil {
-		for _, rule := range lr.Rules {
-			lc := api.Lifecycle{}
-			if rule.Filter != nil && rule.Filter.Prefix != nil {
-				lc.Prefix = *rule.Filter.Prefix
-			}
-			for _, t := range rule.Transitions {
-				if t.StorageClass != "" {
-					lc.Transitions = append(lc.Transitions, string(t.StorageClass))
-				}
-			}
-			if rule.Expiration != nil && rule.Expiration.Days != nil {
-				lc.ExpirationDays = int(*rule.Expiration.Days)
-			}
-			report.Lifecycle = append(report.Lifecycle, lc)
-		}
+		report.Lifecycle, report.NoncurrentExpirationDays, report.NoncurrentTransitions = lerLifecycle(lr.Rules)
 	}
 
 	// Ocupação real: soma o tamanho de todas as versões (ListObjectVersions
@@ -94,6 +80,59 @@ func Probe(ctx context.Context, client *s3.Client, bucket, storageID string) api
 	}
 
 	return report
+}
+
+// lerLifecycle traduz as regras do bucket. Regra desativada não conta: o
+// provedor não a aplica. O prefixo vem do Filter ou, em regra antiga, do
+// campo Prefix da própria regra. Além da expiração e das transições da versão
+// atual, lê as de versões não-atuais — num bucket versionado são elas que
+// apagam ou congelam o histórico que a retenção promete. Devolve também o
+// menor NoncurrentDays (nil se nenhuma regra expira versões antigas) e as
+// classes de destino das transições de não-atuais, sem repetição.
+func lerLifecycle(rules []types.LifecycleRule) (regras []api.Lifecycle, menorNaoAtual *int, classesNaoAtuais []string) {
+	vistas := map[string]bool{}
+	for _, rule := range rules {
+		if rule.Status != types.ExpirationStatusEnabled {
+			continue
+		}
+		lc := api.Lifecycle{}
+		switch {
+		case rule.Filter != nil && rule.Filter.Prefix != nil:
+			lc.Prefix = *rule.Filter.Prefix
+		case rule.Filter != nil && rule.Filter.And != nil && rule.Filter.And.Prefix != nil:
+			lc.Prefix = *rule.Filter.And.Prefix
+		case rule.Prefix != nil:
+			lc.Prefix = *rule.Prefix
+		}
+		for _, t := range rule.Transitions {
+			if t.StorageClass != "" {
+				lc.Transitions = append(lc.Transitions, string(t.StorageClass))
+			}
+		}
+		if rule.Expiration != nil && rule.Expiration.Days != nil {
+			lc.ExpirationDays = int(*rule.Expiration.Days)
+		}
+		if ne := rule.NoncurrentVersionExpiration; ne != nil && ne.NoncurrentDays != nil && *ne.NoncurrentDays > 0 {
+			lc.NoncurrentExpirationDays = int(*ne.NoncurrentDays)
+			if menorNaoAtual == nil || lc.NoncurrentExpirationDays < *menorNaoAtual {
+				d := lc.NoncurrentExpirationDays
+				menorNaoAtual = &d
+			}
+		}
+		for _, t := range rule.NoncurrentVersionTransitions {
+			if t.StorageClass == "" {
+				continue
+			}
+			c := string(t.StorageClass)
+			lc.NoncurrentTransitions = append(lc.NoncurrentTransitions, c)
+			if !vistas[c] {
+				vistas[c] = true
+				classesNaoAtuais = append(classesNaoAtuais, c)
+			}
+		}
+		regras = append(regras, lc)
+	}
+	return regras, menorNaoAtual, classesNaoAtuais
 }
 
 // measureUsage pagina ListObjectVersions: bytes é a soma de todas as versões

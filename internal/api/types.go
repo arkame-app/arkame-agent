@@ -169,8 +169,14 @@ type ProbeReport struct {
 	Lifecycle   []Lifecycle `json:"lifecycle,omitempty"`
 	UsedBytes   *int64      `json:"used_bytes,omitempty"`   // soma de todas as versões do bucket (ocupação real)
 	ObjectCount *int64      `json:"object_count,omitempty"` // nº de arquivos presentes (versões atuais)
-	ProbedAt    time.Time   `json:"probed_at"`
-	Error       string      `json:"error,omitempty"`
+	// Resumo das regras ativas sobre versões não-atuais — o que de fato apaga
+	// ou congela o histórico de um bucket versionado. NoncurrentExpirationDays
+	// é o menor NoncurrentDays entre as regras ativas (ausente se nenhuma
+	// expira versões antigas); NoncurrentTransitions, as classes de destino.
+	NoncurrentExpirationDays *int      `json:"noncurrent_expiration_days,omitempty"`
+	NoncurrentTransitions    []string  `json:"noncurrent_transitions,omitempty"`
+	ProbedAt                 time.Time `json:"probed_at"`
+	Error                    string    `json:"error,omitempty"`
 }
 
 type ObjectLock struct {
@@ -179,10 +185,13 @@ type ObjectLock struct {
 	Days    int    `json:"days,omitempty"`
 }
 
+// Lifecycle é uma regra ativa (Status Enabled) do ciclo de vida do bucket.
 type Lifecycle struct {
-	Prefix         string   `json:"prefix,omitempty"`
-	Transitions    []string `json:"transitions,omitempty"`
-	ExpirationDays int      `json:"expiration_days,omitempty"`
+	Prefix                   string   `json:"prefix,omitempty"`
+	Transitions              []string `json:"transitions,omitempty"`
+	ExpirationDays           int      `json:"expiration_days,omitempty"`
+	NoncurrentExpirationDays int      `json:"noncurrent_expiration_days,omitempty"`
+	NoncurrentTransitions    []string `json:"noncurrent_transitions,omitempty"`
 }
 
 // --- Restore ---

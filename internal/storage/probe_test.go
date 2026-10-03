@@ -9,9 +9,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/arkame-app/agent/internal/api"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
 // bucketVersionado responde o mínimo do probe: versionamento ligado, sem
@@ -20,6 +22,7 @@ import (
 // pegar quem a usar.
 type bucketVersionado struct {
 	listagemFalha bool
+	lifecycle     string // corpo do GetBucketLifecycleConfiguration; vazio = sem lifecycle
 }
 
 func (b *bucketVersionado) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -28,6 +31,8 @@ func (b *bucketVersionado) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case q.Has("versioning"):
 		_, _ = io.WriteString(w, `<VersioningConfiguration><Status>Enabled</Status></VersioningConfiguration>`)
+	case q.Has("lifecycle") && b.lifecycle != "":
+		_, _ = io.WriteString(w, b.lifecycle)
 	case q.Has("object-lock"), q.Has("lifecycle"):
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = io.WriteString(w, `<Error><Code>NoSuchLifecycleConfiguration</Code></Error>`)
@@ -103,4 +108,71 @@ func valor(n *int64) any {
 		return nil
 	}
 	return *n
+}
+
+// Regras do bucket que a sondagem precisa ler: a desativada some, o prefixo
+// legado (fora do Filter) vale, e as de versões não-atuais — as que apagam o
+// histórico de um bucket versionado — chegam ao painel.
+const lifecycleDoBucket = `<LifecycleConfiguration>
+<Rule><ID>desligada</ID><Status>Disabled</Status><Filter><Prefix></Prefix></Filter>
+  <Expiration><Days>1</Days></Expiration>
+  <NoncurrentVersionExpiration><NoncurrentDays>2</NoncurrentDays></NoncurrentVersionExpiration></Rule>
+<Rule><ID>antigas-30d</ID><Status>Enabled</Status><Filter><Prefix>srv/</Prefix></Filter>
+  <NoncurrentVersionTransition><NoncurrentDays>7</NoncurrentDays><StorageClass>GLACIER</StorageClass></NoncurrentVersionTransition>
+  <NoncurrentVersionExpiration><NoncurrentDays>30</NoncurrentDays></NoncurrentVersionExpiration></Rule>
+<Rule><ID>legada</ID><Status>Enabled</Status><Prefix>velho/</Prefix>
+  <Transition><Days>60</Days><StorageClass>STANDARD_IA</StorageClass></Transition>
+  <NoncurrentVersionTransition><NoncurrentDays>10</NoncurrentDays><StorageClass>GLACIER</StorageClass></NoncurrentVersionTransition>
+  <NoncurrentVersionTransition><NoncurrentDays>40</NoncurrentDays><StorageClass>DEEP_ARCHIVE</StorageClass></NoncurrentVersionTransition>
+  <NoncurrentVersionExpiration><NoncurrentDays>90</NoncurrentDays></NoncurrentVersionExpiration></Rule>
+</LifecycleConfiguration>`
+
+func TestProbeLeRegrasDeVersoesNaoAtuais(t *testing.T) {
+	r := Probe(context.Background(), clienteDoBucket(t, &bucketVersionado{lifecycle: lifecycleDoBucket}), "b", "st")
+	if r.Error != "" {
+		t.Fatalf("erro no probe: %s", r.Error)
+	}
+	if len(r.Lifecycle) != 2 {
+		t.Fatalf("regras = %+v, queria só as 2 ativas (a desativada não vale)", r.Lifecycle)
+	}
+	if r.Lifecycle[0].Prefix != "srv/" || r.Lifecycle[1].Prefix != "velho/" {
+		t.Fatalf("prefixos = %q, %q; queria srv/ e o legado velho/", r.Lifecycle[0].Prefix, r.Lifecycle[1].Prefix)
+	}
+	if r.Lifecycle[0].ExpirationDays != 0 {
+		t.Fatalf("expiration_days da regra desativada vazou: %+v", r.Lifecycle[0])
+	}
+	if r.Lifecycle[0].NoncurrentExpirationDays != 30 || r.Lifecycle[1].NoncurrentExpirationDays != 90 {
+		t.Fatalf("noncurrent por regra = %+v", r.Lifecycle)
+	}
+	if r.NoncurrentExpirationDays == nil || *r.NoncurrentExpirationDays != 30 {
+		t.Fatalf("noncurrent_expiration_days = %v, queria 30 (o menor entre as ativas; o 2 é da desativada)", r.NoncurrentExpirationDays)
+	}
+	if got := strings.Join(r.NoncurrentTransitions, ","); got != "GLACIER,DEEP_ARCHIVE" {
+		t.Fatalf("noncurrent_transitions = %q, queria GLACIER,DEEP_ARCHIVE", got)
+	}
+	b, _ := json.Marshal(r)
+	for _, campo := range []string{`"noncurrent_expiration_days":30`, `"noncurrent_transitions":["GLACIER","DEEP_ARCHIVE"]`} {
+		if !strings.Contains(string(b), campo) {
+			t.Fatalf("o corpo do probe não leva %s: %s", campo, b)
+		}
+	}
+}
+
+// Sem regra que expire versões antigas o campo vai ausente — um 0 seria lido
+// como "apaga na hora".
+func TestProbeSemExpiracaoDeNaoAtuaisOmiteCampo(t *testing.T) {
+	regras, menor, classes := lerLifecycle([]types.LifecycleRule{
+		{Status: types.ExpirationStatusEnabled, Expiration: &types.LifecycleExpiration{Days: aws.Int32(365)}},
+		{Status: types.ExpirationStatusDisabled, NoncurrentVersionExpiration: &types.NoncurrentVersionExpiration{NoncurrentDays: aws.Int32(5)}},
+	})
+	if len(regras) != 1 || regras[0].ExpirationDays != 365 {
+		t.Fatalf("regras = %+v", regras)
+	}
+	if menor != nil || classes != nil {
+		t.Fatalf("menor=%v classes=%v; queria ausentes", menor, classes)
+	}
+	b, _ := json.Marshal(api.ProbeReport{Lifecycle: regras, NoncurrentExpirationDays: menor, NoncurrentTransitions: classes})
+	if strings.Contains(string(b), "noncurrent") {
+		t.Fatalf("o JSON leva campo de não-atuais sem regra: %s", b)
+	}
 }
