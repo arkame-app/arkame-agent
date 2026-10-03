@@ -202,7 +202,7 @@ main() {
       die "checksum não confere para $archive.
      esperado: $expected
      obtido:   $actual
-     Não instalei nada. Tente de novo; se persistir, avise suporte@arkame.app."
+     Não instalei nada. Tente de novo; se persistir, avise contato@arkame.app."
     else
       ok "Checksum conferido"
     fi
