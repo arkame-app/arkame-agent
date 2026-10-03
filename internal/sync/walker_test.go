@@ -167,6 +167,25 @@ func TestIrregularLegivelSoNaNuvem(t *testing.T) {
 	}
 }
 
+// Tag que não deu para ler: conta como pulado (não se sabe se é dado do
+// usuário). Apagado no meio da leitura: não há o que copiar nem contar.
+func TestIrregularLegivelTagIlegivel(t *testing.T) {
+	arq := filepath.Join(t.TempDir(), "x.dat")
+	if err := os.WriteFile(arq, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	antes := lerReparse
+	t.Cleanup(func() { lerReparse = antes })
+	lerReparse = func(string) (uint32, uint32, error) { return 0, 0, fs.ErrPermission }
+	if _, classe := irregularLegivel(true, arq, fs.ModeIrregular|0o666); classe != reparsePulado {
+		t.Fatalf("tag ilegível deveria contar como pulado, veio %v", classe)
+	}
+	lerReparse = func(string) (uint32, uint32, error) { return 0, 0, fs.ErrNotExist }
+	if _, classe := irregularLegivel(true, arq, fs.ModeIrregular|0o666); classe != reparseIgnorar {
+		t.Fatalf("apagado durante a leitura não conta, veio %v", classe)
+	}
+}
+
 func TestClassificarReparse(t *testing.T) {
 	const reparse = 0x400
 	casos := []struct {
@@ -185,10 +204,12 @@ func TestClassificarReparse(t *testing.T) {
 		{"AppExecLink", reparse, 0x8000001B, reparseIgnorar},
 		{"symlink", reparse, 0xA000000C, reparseIgnorar},
 		{"junção", reparse, 0xA0000003, reparseIgnorar},
-		{"dedup", reparse, 0x80000013, reparseIgnorar},
-		{"WOF (compactado)", reparse, 0x80000017, reparseIgnorar},
-		{"parecido com CLOUD em outro nibble", reparse, 0x9001001A, reparseIgnorar},
-		{"sem tag", 0x20, 0, reparseIgnorar},
+		{"dedup", reparse, 0x80000013, reparsePulado},
+		{"WOF (compactado)", reparse, 0x80000017, reparsePulado},
+		{"Azure File Sync em camada fria", reparse | 0x1000, 0x8000001E, reparsePulado},
+		{"HSM", reparse, 0xC0000004, reparsePulado},
+		{"parecido com CLOUD em outro nibble", reparse, 0x9001001A, reparsePulado},
+		{"sem tag", 0x20, 0, reparsePulado},
 	}
 	for _, c := range casos {
 		if got := classificarReparse(c.atributos, c.tag); got != c.quer {

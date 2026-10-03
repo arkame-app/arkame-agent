@@ -45,3 +45,37 @@ func TestCompleteLevaOsArquivosSoNaNuvem(t *testing.T) {
 		}
 	}
 }
+
+// Os reparse points fora do OneDrive que ficaram de fora (Azure File Sync em
+// camada fria, HSM, ilegíveis) vão ao /complete em reparse_skipped, sempre,
+// mesmo com 0.
+func TestCompleteLevaOsReparsePulados(t *testing.T) {
+	for _, n := range []int{4, 0} {
+		antes := rodarSync
+		rodarSync = func(context.Context, syncengine.EngineOptions) (*syncengine.Result, error) {
+			return &syncengine.Result{
+				VersionMap:     []api.FileEntry{{Key: "k", VersionID: "v1", Size: 1, SHA256: strings.Repeat("a", 64)}},
+				ReparseSkipped: n,
+			}, nil
+		}
+		painel, c := novoPainel(t)
+		cfg := &config.Config{AgentID: "a1", HostRoot: "/"}
+		err := executePlan(context.Background(), c, s3SemUso(t), cfg, api.Plan{ID: "p1", Kind: "backup", StorageRef: api.StorageRef{Bucket: "b"}})
+		rodarSync = antes
+		if err != nil {
+			t.Fatal(err)
+		}
+		corpo := painel.corpo("/api/agents/a1/sessions/s1/complete")
+		var got map[string]any
+		if err := json.Unmarshal([]byte(corpo), &got); err != nil {
+			t.Fatalf("corpo do /complete: %v", err)
+		}
+		v, tem := got["reparse_skipped"]
+		if !tem || v != float64(n) {
+			t.Fatalf("reparse_skipped = %v (presente=%v), queria %d; corpo: %s", v, tem, n, corpo)
+		}
+		if v := got["cloud_only_skipped"]; v != float64(0) {
+			t.Fatalf("cloud_only_skipped = %v, queria 0", v)
+		}
+	}
+}

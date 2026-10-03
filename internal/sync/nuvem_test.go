@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -39,5 +40,53 @@ func TestRunContaOsArquivosSoNaNuvem(t *testing.T) {
 	}
 	if r.CloudOnlySkipped != 2 {
 		t.Fatalf("CloudOnlySkipped = %d, queria 2", r.CloudOnlySkipped)
+	}
+}
+
+// Reparse point de outro filtro (Azure File Sync em camada fria, HSM) ou cuja
+// tag não deu para ler fica de fora, mas conta: antes saía calado, a sessão
+// terminava "completa" e o painel lia a falta como remoção na origem.
+func TestRunContaOsReparsePointsPulados(t *testing.T) {
+	antesLer := lerReparse
+	lerReparse = func(p string) (uint32, uint32, error) {
+		switch {
+		case strings.HasSuffix(p, ".afs"):
+			return 0x400 | 0x1000, 0x8000001E, nil // IO_REPARSE_TAG_STORAGE_SYNC
+		case strings.HasSuffix(p, ".hsm"):
+			return 0x400, 0xC0000004, nil // IO_REPARSE_TAG_HSM
+		case strings.HasSuffix(p, ".negado"):
+			return 0, 0, fs.ErrPermission
+		}
+		return 0, 0, errors.New("não é reparse point")
+	}
+	t.Cleanup(func() { lerReparse = antesLer })
+	antes := classificarEntrada
+	classificarEntrada = func(_ bool, path string, modo fs.FileMode) (fs.FileInfo, classeReparse) {
+		if strings.HasSuffix(path, ".txt") {
+			return antes(true, path, modo)
+		}
+		return irregularLegivel(true, path, modo|fs.ModeIrregular)
+	}
+	t.Cleanup(func() { classificarEntrada = antes })
+
+	dir := t.TempDir()
+	for _, n := range []string{"local.txt", "a.afs", "b.hsm", "c.negado"} {
+		if err := os.WriteFile(filepath.Join(dir, n), []byte(n), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, c := novoS3Falso(t)
+	r, err := Run(context.Background(), EngineOptions{S3: c, Bucket: "b", PrefixRoot: "data/a/", HostRoot: "/", SourcePaths: []string{dir}})
+	if err != nil {
+		t.Fatalf("reparse point de outro filtro não é falha: %v", err)
+	}
+	if len(r.VersionMap) != 1 || !strings.HasSuffix(r.VersionMap[0].Key, "local.txt") {
+		t.Fatalf("version_map = %+v, queria só local.txt", r.VersionMap)
+	}
+	if r.ReparseSkipped != 3 {
+		t.Fatalf("ReparseSkipped = %d, queria 3 (Azure File Sync, HSM, ilegível)", r.ReparseSkipped)
+	}
+	if r.CloudOnlySkipped != 0 {
+		t.Fatalf("CloudOnlySkipped = %d, queria 0", r.CloudOnlySkipped)
 	}
 }

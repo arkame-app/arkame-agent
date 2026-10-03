@@ -48,6 +48,10 @@ type Result struct {
 	// no /complete: a sessão não é um inventário completo da origem, e a
 	// falta desses arquivos não pode virar "removido na origem".
 	CloudOnlySkipped int
+	// ReparseSkipped conta os reparse points que não são do OneDrive (Azure
+	// File Sync em camada fria, HSM) ou que não deu para ler: ficam de fora e
+	// vão ao painel no /complete pelo mesmo motivo do CloudOnlySkipped.
+	ReparseSkipped int
 }
 
 // Run executa o sync de um plano.
@@ -69,8 +73,8 @@ func Run(ctx context.Context, o EngineOptions) (*Result, error) {
 	// não pode deixar o walker bloqueado no canal.
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	var soNaNuvem int
-	fileCh, errCh := walk(ctx, o.HostRoot, o.SourcePaths, o.ExcludeGlobs, &soNaNuvem)
+	var pulados puladosDoWalk
+	fileCh, errCh := walk(ctx, o.HostRoot, o.SourcePaths, o.ExcludeGlobs, &pulados)
 	result := &Result{}
 
 	for fi := range fileCh {
@@ -109,7 +113,8 @@ func Run(ctx context.Context, o EngineOptions) (*Result, error) {
 	// fechado.
 	for range errCh {
 	}
-	result.CloudOnlySkipped = soNaNuvem
+	result.CloudOnlySkipped = pulados.SoNaNuvem
+	result.ReparseSkipped = pulados.Reparse
 	// Cancelado no meio da varredura, o walker fecha o canal sem erro: sem
 	// esta checagem, a sessão saía "complete" com só parte dos arquivos.
 	if err := ctx.Err(); err != nil {

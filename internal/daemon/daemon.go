@@ -472,11 +472,15 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 		// desses arquivos não é remoção. Vai sempre, mesmo com 0: sem o
 		// campo, o painel não separa "nada pulado" de "agente antigo".
 		CloudOnlySkipped int `json:"cloud_only_skipped"`
+		// Reparse points fora do OneDrive (Azure File Sync em camada fria,
+		// HSM) ou ilegíveis que ficaram de fora. Mesma regra: vai sempre.
+		ReparseSkipped int `json:"reparse_skipped"`
 	}{
 		Status:           completeStatus,
 		Stats:            result.Stats,
 		VersionMap:       versionMap,
 		CloudOnlySkipped: result.CloudOnlySkipped,
+		ReparseSkipped:   result.ReparseSkipped,
 	}
 	if completeStatus == "partial" {
 		// A causa da sessão parcial ia embora: o painel via "parcial" sem

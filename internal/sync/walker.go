@@ -37,11 +37,18 @@ func Walk(ctx context.Context, hostRoot string, sourcePaths []string, excludeGlo
 	return walk(ctx, hostRoot, sourcePaths, excludeGlobs, nil)
 }
 
-// walk é o Walk que, com soNaNuvemOut, devolve quantos arquivos do OneDrive
-// ficaram de fora por estarem só na nuvem. O valor é gravado antes de o canal
-// de erros fechar: só se lê depois de vê-lo fechado (receber o erro não basta,
-// ele vai antes da gravação).
-func walk(ctx context.Context, hostRoot string, sourcePaths []string, excludeGlobs []string, soNaNuvemOut *int) (<-chan FileInfo, <-chan error) {
+// puladosDoWalk é o que ficou de fora da varredura sem deixar o backup
+// parcial, mas que o painel precisa saber para não ler a falta como remoção.
+type puladosDoWalk struct {
+	SoNaNuvem int // arquivos do OneDrive só na nuvem
+	Reparse   int // outros reparse points (Azure File Sync, HSM) ou ilegíveis
+}
+
+// walk é o Walk que, com puladosOut, devolve quantos arquivos ficaram de fora
+// por estarem só na nuvem ou por serem reparse points de outro filtro. O valor
+// é gravado antes de o canal de erros fechar: só se lê depois de vê-lo fechado
+// (receber o erro não basta, ele vai antes da gravação).
+func walk(ctx context.Context, hostRoot string, sourcePaths []string, excludeGlobs []string, puladosOut *puladosDoWalk) (<-chan FileInfo, <-chan error) {
 	out := make(chan FileInfo, 128)
 	errs := make(chan error, 1)
 
@@ -65,8 +72,13 @@ func walk(ctx context.Context, hostRoot string, sourcePaths []string, excludeGlo
 		// "completa" parecia arquivo removido na origem.
 		soNaNuvem := 0
 		exemploNuvem := ""
-		if soNaNuvemOut != nil {
-			defer func() { *soNaNuvemOut = soNaNuvem }()
+		// Reparse points que não são do OneDrive (Azure File Sync em camada
+		// fria, HSM) ou que não deu para ler: mesma regra, contados à parte
+		// (reparse_skipped). Antes ficavam de fora calados.
+		reparse := 0
+		exemploReparse := ""
+		if puladosOut != nil {
+			defer func() { *puladosOut = puladosDoWalk{SoNaNuvem: soNaNuvem, Reparse: reparse} }()
 		}
 		anotar := func(p string, err error) {
 			naoLidos++
@@ -158,6 +170,12 @@ func walk(ctx context.Context, hostRoot string, sourcePaths []string, excludeGlo
 						exemploNuvem = path
 					}
 					return nil
+				} else if classe == reparsePulado {
+					reparse++
+					if exemploReparse == "" {
+						exemploReparse = path
+					}
+					return nil
 				} else if !info.Mode().IsRegular() {
 					// Socket, pipe, dispositivo: não há conteúdo a guardar, e
 					// abrir um pipe trava o backup.
@@ -187,6 +205,10 @@ func walk(ctx context.Context, hostRoot string, sourcePaths []string, excludeGlo
 		if soNaNuvem > 0 {
 			slog.Info("arquivos só na nuvem (OneDrive) ficaram de fora do backup",
 				"quantidade", soNaNuvem, "exemplo", exemploNuvem)
+		}
+		if reparse > 0 {
+			slog.Warn("reparse points fora do OneDrive (Azure File Sync, HSM) ou ilegíveis ficaram de fora do backup",
+				"quantidade", reparse, "exemplo", exemploReparse)
 		}
 		if naoLidos > 0 {
 			ilegiveis = append(ilegiveis, fmt.Sprintf("%d itens não puderam ser lidos, ex.: %s",
@@ -220,22 +242,32 @@ var classificarEntrada = irregularLegivel
 // restauração), e o Go avisa que essas chaves de compatibilidade saem um dia.
 //
 // Só entra o que classificarReparse aceita pela tag (Cloud Files API) e que
-// tem o conteúdo no disco; os outros reparse points (AppExecLink, filtros de
-// terceiros) continuam de fora, calados. O que é de nuvem mas só está na
-// nuvem volta reparseSoNaNuvem, para o walker contar sem baixar.
+// tem o conteúdo no disco. O AppExecLink, link e junção ficam de fora calados;
+// os outros reparse points (Azure File Sync, HSM, filtros de terceiros) e os
+// que não deu para ler voltam reparsePulado, para o walker contar. O que é de
+// nuvem mas só está na nuvem volta reparseSoNaNuvem, para o walker contar sem
+// baixar.
 func irregularLegivel(windows bool, path string, modo fs.FileMode) (fs.FileInfo, classeReparse) {
 	if !windows || modo&fs.ModeIrregular == 0 || modo.IsDir() {
 		return nil, reparseIgnorar
 	}
 	atributos, tag, err := lerReparse(path)
 	if err != nil {
-		return nil, reparseIgnorar
+		// Sem a tag não há como saber se é dado do usuário: conta, a menos
+		// que tenha sido apagado no meio da leitura.
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, reparseIgnorar
+		}
+		return nil, reparsePulado
 	}
 	classe := classificarReparse(atributos, tag)
 	if classe != reparseCopiar {
 		return nil, classe
 	}
 	st, err := os.Stat(path)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nil, reparsePulado
+	}
 	if err != nil || st.IsDir() {
 		return nil, reparseIgnorar
 	}
