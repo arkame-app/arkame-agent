@@ -192,23 +192,29 @@ func Run(ctx context.Context, opts Options, item api.RestoreItem) error {
 // modoDeArquivoNovo é o modo de um arquivo restaurado que não substitui outro.
 const modoDeArquivoNovo os.FileMode = 0o644
 
+// trocarDono é o copiarDono da plataforma; variável para o teste simular,
+// sem root, o chown que limpa setuid/setgid.
+var trocarDono = copiarDono
+
 // ajustarPermissoes dá ao temporário o modo (e, como root fora do Windows, o
 // dono) do arquivo que ele vai substituir; sem arquivo regular no destino,
 // modoDeArquivoNovo.
+//
+// O chown vem antes do chmod: no Linux o chown limpa S_ISUID e S_ISGID, mesmo
+// feito pelo root, e o chmod antes dele deixava o binário setuid/setgid
+// restaurado sem os bits, calado.
 func ajustarPermissoes(tmp *os.File, finalPath string) error {
 	modo := modoDeArquivoNovo
 	existente, err := os.Lstat(finalPath)
 	regular := err == nil && existente.Mode().IsRegular()
 	if regular {
 		modo = existente.Mode() & (os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky)
+		if err := trocarDono(tmp, existente); err != nil {
+			return fmt.Errorf("chown %s: %w", tmp.Name(), err)
+		}
 	}
 	if err := tmp.Chmod(modo); err != nil {
 		return fmt.Errorf("chmod %s: %w", tmp.Name(), err)
-	}
-	if regular {
-		if err := copiarDono(tmp, existente); err != nil {
-			return fmt.Errorf("chown %s: %w", tmp.Name(), err)
-		}
 	}
 	return nil
 }
