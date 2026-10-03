@@ -28,6 +28,7 @@ SERVICE_NAME="arkame-agent"
 SERVICE_SCOPE=""
 CONFIG_FILE=""
 INSTALL_SERVICE="true"
+SKIP_CHECKSUM="false"
 
 # ── saída ────────────────────────────────────────────────────────────────────
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
@@ -61,6 +62,8 @@ Opções:
   --no-service          só instala o binário, sem registrar serviço
   --version=vX.Y.Z      instala uma versão específica
   --download-base=URL   espelho de onde baixar (exige --version)
+  --skip-checksum       instala sem conferir o SHA-256 do pacote (só quando o
+                        checksums.txt não pode ser baixado ou conferido)
   --help                mostra esta ajuda
 USAGE
 }
@@ -75,6 +78,7 @@ for arg in "$@"; do
     --version=*)       ARKAME_VERSION="${arg#*=}" ;;
     --download-base=*) DOWNLOAD_BASE="${arg#*=}" ;;
     --no-service)      INSTALL_SERVICE="false" ;;
+    --skip-checksum)   SKIP_CHECKSUM="true" ;;
     --help|-h)         usage; exit 0 ;;
     *) die "opção desconhecida: $arg (use --help)" ;;
   esac
@@ -191,23 +195,29 @@ main() {
   fetch "$base/$archive" "$TMP/$archive" || die "falha ao baixar $base/$archive"
 
   # Integridade: o checksums.txt vem do mesmo release e cobre todos os archives.
-  if fetch "$base/checksums.txt" "$TMP/checksums.txt" 2>/dev/null; then
+  # Sem conferir, para (como o setup do Windows): um proxy que bloqueasse só o
+  # checksums.txt fazia o binário ser instalado sem conferência, com um aviso
+  # que ninguém lê num curl | sh. Seguir sem conferir só com --skip-checksum.
+  sem_conferir="Não instalei nada. Tente de novo; para instalar assim mesmo, sem conferir, repita com --skip-checksum."
+  if [ "$SKIP_CHECKSUM" = "true" ]; then
+    warn "--skip-checksum: instalando sem conferir o checksum de $archive"
+  else
+    fetch "$base/checksums.txt" "$TMP/checksums.txt" 2>/dev/null \
+      || die "não consegui baixar $base/checksums.txt, e sem ele não dá para conferir o pacote.
+     $sem_conferir"
     expected=$(grep " $archive\$" "$TMP/checksums.txt" | awk '{print $1}' | head -n 1)
+    [ -n "$expected" ] || die "o checksums.txt não tem a linha de $archive.
+     $sem_conferir"
     actual=$(sha256_of "$TMP/$archive")
-    if [ -z "$actual" ]; then
-      warn "sem sha256sum/shasum nesta máquina — não deu para conferir o checksum"
-    elif [ -z "$expected" ]; then
-      warn "checksum de $archive não está no checksums.txt — seguindo sem conferir"
-    elif [ "$expected" != "$actual" ]; then
+    [ -n "$actual" ] || die "sem sha256sum nem shasum nesta máquina, não dá para conferir o checksum.
+     $sem_conferir"
+    if [ "$expected" != "$actual" ]; then
       die "checksum não confere para $archive.
      esperado: $expected
      obtido:   $actual
      Não instalei nada. Tente de novo; se persistir, avise contato@arkame.app."
-    else
-      ok "Checksum conferido"
     fi
-  else
-    warn "não consegui baixar checksums.txt — seguindo sem conferir a integridade"
+    ok "Checksum conferido"
   fi
 
   tar -xzf "$TMP/$archive" -C "$TMP" || die "falha ao extrair $archive"

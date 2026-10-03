@@ -39,6 +39,9 @@ param(
     # (um por credencial de bucket), cada um com o seu, junto de -ServiceName.
     [string]$Config      = '',
     [switch]$NoService,
+    # Instala sem conferir o SHA-256 do pacote. Só para quando o
+    # checksums.txt não pode ser baixado ou não tem a linha do pacote.
+    [switch]$SkipChecksum,
     # Onde este script mora, para se reabrir como administrador.
     [string]$ScriptUrl   = $(if ($env:ARKAME_SCRIPT_URL) { $env:ARKAME_SCRIPT_URL } else { 'https://get.arkame.app/install.ps1' }),
     # Marca a janela reaberta como administrador: ela espera um Enter no fim,
@@ -102,6 +105,7 @@ if (-not (Test-Administrator)) {
     }
     if ($Version)   { $partes += "-Version '$Version'" }
     if ($NoService) { $partes += '-NoService' }
+    if ($SkipChecksum) { $partes += '-SkipChecksum' }
     $comando = "&([scriptblock]::Create((Invoke-RestMethod -UseBasicParsing '$ScriptUrl'))) " + ($partes -join ' ')
     $codificado = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($comando))
     Write-Info "O Windows vai pedir permissao de administrador: clique em Sim."
@@ -154,25 +158,32 @@ try {
     $zipPath = Join-Path $tmp $archive
     Invoke-WebRequest -Uri "$base/$archive" -OutFile $zipPath -UseBasicParsing
 
-    # Integridade: checksums.txt cobre todos os pacotes do mesmo release.
-    try {
+    # Integridade: checksums.txt cobre todos os pacotes do mesmo release. Sem
+    # conferir, para, como o setup do agente: um proxy que bloqueasse so o
+    # checksums.txt fazia o binario ser instalado sem conferencia. Seguir sem
+    # conferir so com -SkipChecksum.
+    $semConferir = "Nao instalei nada. Tente de novo; para instalar assim mesmo, sem conferir, repita com -SkipChecksum."
+    if ($SkipChecksum) {
+        Write-Warn "-SkipChecksum: instalando sem conferir o checksum de $archive"
+    } else {
         $sumsPath = Join-Path $tmp 'checksums.txt'
-        Invoke-WebRequest -Uri "$base/checksums.txt" -OutFile $sumsPath -UseBasicParsing
+        try {
+            Invoke-WebRequest -Uri "$base/checksums.txt" -OutFile $sumsPath -UseBasicParsing
+        } catch {
+            Stop-WithError "nao consegui baixar $base/checksums.txt, e sem ele nao da para conferir o pacote ($($_.Exception.Message)).`n     $semConferir"
+        }
 
         $expected = (Get-Content $sumsPath |
             Where-Object { $_ -match "\s$([regex]::Escape($archive))$" } |
             Select-Object -First 1) -split '\s+' | Select-Object -First 1
-        $actual = (Get-FileHash -Path $zipPath -Algorithm SHA256).Hash.ToLower()
-
         if (-not $expected) {
-            Write-Warn "checksum de $archive nao esta no checksums.txt - seguindo sem conferir"
-        } elseif ($expected.ToLower() -ne $actual) {
-            Stop-WithError "checksum nao confere para $archive.`n     esperado: $expected`n     obtido:   $actual`n     Nao instalei nada."
-        } else {
-            Write-Ok "Checksum conferido"
+            Stop-WithError "o checksums.txt nao tem a linha de $archive.`n     $semConferir"
         }
-    } catch {
-        Write-Warn "nao consegui baixar checksums.txt - seguindo sem conferir a integridade"
+        $actual = (Get-FileHash -Path $zipPath -Algorithm SHA256).Hash.ToLower()
+        if ($expected.ToLower() -ne $actual) {
+            Stop-WithError "checksum nao confere para $archive.`n     esperado: $expected`n     obtido:   $actual`n     Nao instalei nada."
+        }
+        Write-Ok "Checksum conferido"
     }
 
     Expand-Archive -Path $zipPath -DestinationPath $tmp -Force

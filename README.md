@@ -169,9 +169,12 @@ cmd /c "curl -fsSLo "%TEMP%\arkame-agent.exe" https://get.arkame.app/agente.exe 
 ```
 
 Checksum diferente aborta sem instalar nada. Se o `checksums.txt` não pode ser
-baixado (sem acesso a `github.com`, por exemplo), o `setup` também para; para
-instalar assim mesmo, sem conferir, acrescente `--skip-checksum` depois do
-`setup`.
+baixado (sem acesso a `github.com`, por exemplo), não tem a linha do pacote ou
+não há como calcular o SHA-256, os instaladores também param sem instalar nada.
+Para instalar assim mesmo, sem conferir, é preciso pedir: `--skip-checksum`
+depois do `setup` (Windows), `--skip-checksum` no `install.sh`
+(`… | sudo sh -s -- --token=atk_... --skip-checksum`) ou `-SkipChecksum` no
+`install.ps1`.
 
 O `curl.exe` vem no Windows 10 (1803+), 11 e Server 2019+. No Server 2016, use o
 `install.ps1` (PowerShell como administrador).
