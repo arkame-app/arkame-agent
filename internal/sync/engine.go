@@ -195,7 +195,7 @@ func processFile(ctx context.Context, o EngineOptions, fi FileInfo) (*api.FileEn
 // provedores S3-compat como a OCI (501 NotImplemented). Em qualquer falha,
 // aborta o multipart pra não deixar partes órfãs no bucket.
 func uploadMultipart(ctx context.Context, s3c *s3.Client, bucket, key string, f *os.File, meta map[string]string, maxMbps int, hashEsperado string, tamanho int64) (string, error) {
-	const partSize = 16 * 1024 * 1024 // 16 MiB
+	partSize := tamanhoDaParte(tamanho)
 
 	create, err := s3c.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
 		Bucket:   &bucket,
@@ -274,6 +274,23 @@ func uploadMultipart(ctx context.Context, s3c *s3.Client, bucket, key string, f 
 		return *comp.VersionId, nil
 	}
 	return "", nil
+}
+
+const (
+	parteMinima  = 16 * 1024 * 1024 // 16 MiB
+	maximoPartes = 10000            // limite do S3 por upload multipart
+)
+
+// tamanhoDaParte escolhe o tamanho das partes do multipart.
+//
+// Era fixo em 16 MiB: acima de ~156 GiB o arquivo passava das 10.000 partes
+// que o S3 aceita, e o upload falhava na parte 10.001 depois de horas. Agora é
+// o maior entre 16 MiB e tamanho/10.000, arredondado para cima em MiB.
+func tamanhoDaParte(tamanho int64) int64 {
+	const mib = 1024 * 1024
+	p := (tamanho + maximoPartes - 1) / maximoPartes
+	p = (p + mib - 1) / mib * mib
+	return max(p, parteMinima)
 }
 
 // ErrArquivoMudou: o conteúdo enviado não é o que foi hasheado — o arquivo foi

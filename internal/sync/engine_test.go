@@ -70,3 +70,20 @@ func TestUploadMultipartArquivoMudou(t *testing.T) {
 		t.Fatalf("esperava abort sem complete; err=%v completos=%d abortados=%d", err, falso.completos, falso.abortados)
 	}
 }
+
+// Acima de ~156 GiB, partes fixas de 16 MiB passavam das 10.000 que o S3 aceita.
+func TestTamanhoDaParteCabeEmDezMilPartes(t *testing.T) {
+	const mib, gib = int64(1 << 20), int64(1 << 30)
+	for _, tam := range []int64{100 * mib, 156 * gib, 157 * gib, 500 * gib, 4 * 1024 * gib} {
+		p := tamanhoDaParte(tam)
+		if p < 16*mib || p%mib != 0 {
+			t.Errorf("%d bytes: parte %d (mín. 16 MiB, múltiplo de MiB)", tam, p)
+		}
+		if partes := (tam + p - 1) / p; partes > 10000 {
+			t.Errorf("%d bytes: %d partes de %d — passa de 10.000", tam, partes, p)
+		}
+	}
+	if tamanhoDaParte(100*mib) != 16*mib {
+		t.Error("arquivo comum continua com partes de 16 MiB")
+	}
+}
