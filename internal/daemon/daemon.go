@@ -359,15 +359,23 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 	var completeResp struct {
 		FilesIndexed int `json:"files_indexed"`
 	}
-	// Com o serviço parando, o backup já subiu: o /complete ainda vai.
+	// O /complete carrega o version_map inteiro — é o que torna o backup
+	// restaurável. Perdê-lo num erro passageiro jogava fora o trabalho todo
+	// (e a sessão ficava "running" para sempre): tenta de novo com recuo,
+	// com prazo maior, e mesmo com o serviço parando.
 	cctx, ccancel := contextoDeFinalizacao(ctx)
 	defer ccancel()
-	if err := c.POST(
-		cctx,
+	if err := concluirSessao(cctx, c,
 		"/api/agents/"+cfg.AgentID+"/sessions/"+startResp.SessionID+"/complete",
-		completeBody,
-		&completeResp,
+		completeBody, &completeResp,
 	); err != nil {
+		marcarFalha(ctx, c, cfg, startResp.SessionID, struct {
+			ErrorCode    string `json:"error_code"`
+			ErrorMessage string `json:"error_message"`
+		}{
+			ErrorCode:    "complete_failed",
+			ErrorMessage: fmt.Sprintf("os arquivos subiram, mas não consegui registrar a conclusão no painel: %v", err),
+		})
 		return fmt.Errorf("session complete: %w", err)
 	}
 	slog.Info("session concluída",
@@ -404,6 +412,47 @@ func marcarFalha(ctx context.Context, c *api.Client, cfg *config.Config, session
 	defer cancel()
 	if err := c.POST(fctx, "/api/agents/"+cfg.AgentID+"/sessions/"+sessionID+"/fail", body, nil); err != nil {
 		slog.Warn("não consegui marcar a sessão como falha no painel", "session_id", sessionID, "err", err)
+	}
+}
+
+// Tentativas do /complete: a primeira e mais quatro, com 2, 4, 8 e 16 s de
+// recuo; cada uma com até prazoDoComplete (o version_map de um servidor
+// grande leva mais que os 30 s padrão para o painel gravar).
+var (
+	recuosDoComplete = []time.Duration{2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second}
+	prazoDoComplete  = 5 * time.Minute
+)
+
+// concluirSessao envia o /complete com novas tentativas em erro passageiro
+// (rede, prazo, 5xx, 408, 429). Erro 4xx do painel não melhora tentando de
+// novo; e "not_running" quer dizer que uma tentativa anterior chegou e só a
+// resposta se perdeu — a sessão já está concluída.
+func concluirSessao(ctx context.Context, c *api.Client, path string, body, out any) error {
+	longo := c.ComPrazo(prazoDoComplete)
+	var err error
+	for tentativa := 0; ; tentativa++ {
+		err = longo.POST(ctx, path, body, out)
+		if err == nil {
+			return nil
+		}
+		var he *api.HTTPError
+		if errors.As(err, &he) && he.Status >= 400 && he.Status < 500 &&
+			he.Status != 408 && he.Status != 429 {
+			if strings.Contains(he.Body, "not_running") {
+				slog.Info("o painel já tinha a sessão concluída (resposta anterior perdida)", "path", path)
+				return nil
+			}
+			return err
+		}
+		if tentativa >= len(recuosDoComplete) || ctx.Err() != nil {
+			return err
+		}
+		slog.Warn("/complete falhou; tentando de novo", "tentativa", tentativa+1, "err", err)
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(recuosDoComplete[tentativa]):
+		}
 	}
 }
 

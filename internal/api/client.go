@@ -55,6 +55,17 @@ func New(opts Options) (*Client, error) {
 	}, nil
 }
 
+// ComPrazo devolve um client igual (mesma conexão, mesmo token) com outro
+// prazo por requisição — para chamadas que levam mais que o padrão de 30 s,
+// como o /complete de um backup com centenas de milhares de arquivos.
+func (c *Client) ComPrazo(d time.Duration) *Client {
+	return &Client{
+		baseURL:    c.baseURL,
+		httpClient: &http.Client{Transport: c.httpClient.Transport, Timeout: d},
+		bearer:     c.bearer,
+	}
+}
+
 // POST faz um POST JSON e decodifica a resposta em out (se non-nil).
 func (c *Client) POST(ctx context.Context, path string, in, out any) error {
 	body, err := json.Marshal(in)
