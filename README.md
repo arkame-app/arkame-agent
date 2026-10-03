@@ -196,10 +196,11 @@ trocasse o arquivo viraria root no próximo reinício do serviço. É o caso de
 `~/.local/bin`, onde o `install.sh` sem sudo põe o programa. Com o programa no
 home, instale sem sudo (`~/.local/bin/arkame-agent install --token=atk_...`,
 escopo user) ou rode o instalador com sudo, que o põe em `/usr/local/bin`. No
-macOS (LaunchDaemon) vale o mesmo — inclusive para um `/usr/local/bin` cujo
-dono é o seu usuário, como deixa o Homebrew em Macs Intel; nesse caso, escolha
-outra pasta do root:
-`curl -fsSL https://get.arkame.app/install.sh | sudo env ARKAME_BIN_DIR=/opt/arkame/bin sh -s -- --token=atk_...`.
+macOS (LaunchDaemon) vale o mesmo. Quando o `/usr/local/bin` (ou uma pasta
+acima dele) não é só do root — o Homebrew, em Macs Intel, o deixa com o seu
+usuário —, o instalador com sudo põe o programa em `/opt/arkame/bin`, e o
+comando do painel funciona como está. Para outra pasta só do root:
+`curl -fsSL https://get.arkame.app/install.sh | sudo env ARKAME_BIN_DIR=/caminho sh -s -- --token=atk_...`.
 No Windows, o serviço roda como SYSTEM e o `install` confere a mesma coisa pela
 lista de permissões: o programa e as pastas acima dele só podem ser alteráveis
 pelos Administradores, pelo SYSTEM, pelo TrustedInstaller ou pelo administrador
@@ -230,7 +231,8 @@ powershell -Command "Get-Content -Tail 50 -Wait 'C:\etc\arkame\agent.log'"
 >
 > 1. Ajustes do Sistema → Privacidade e Segurança → Acesso Total ao Disco → **+**.
 > 2. No seletor, Cmd+Shift+G e cole o caminho do programa:
->    `/usr/local/bin/arkame-agent` (instalação com sudo) ou
+>    `/usr/local/bin/arkame-agent` (instalação com sudo; `/opt/arkame/bin/arkame-agent`
+>    com o `/usr/local/bin` do Homebrew) ou
 >    `~/.local/bin/arkame-agent` (instalação sem root). Ative a chave dele.
 > 3. Reinicie o serviço com o comando que o `install` mostrou
 >    (`sudo launchctl kickstart -k system/app.arkame.agent`, ou

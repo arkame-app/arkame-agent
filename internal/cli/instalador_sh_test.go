@@ -191,3 +191,45 @@ func TestInstallShSemTokenNoHomeSugereSemSudo(t *testing.T) {
 		t.Fatalf("fora do home, o próximo passo é com sudo:\n%s", out)
 	}
 }
+
+// Com root, o install.sh punha o programa em /usr/local/bin sem conferir: no
+// Mac Intel com Homebrew a pasta é do usuário, o agente recusava o programa
+// para o serviço root, e o comando do painel falhava sempre. Agora, se a
+// pasta (ou uma acima) não é só do root, vai para /opt/arkame/bin.
+func TestInstallShComRootEscolheUmaPastaSoDoRoot(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("install.sh é do Linux e do macOS")
+	}
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sem sh")
+	}
+	script, err := filepath.Abs(filepath.Join("..", "..", "install.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	escolha := func(padrao string) string {
+		t.Helper()
+		cmd := exec.Command("sh", "-c", `s=$1 p=$2; set --; . "$s"; BIN_DIR_ROOT=$p; bin_dir_de_root`, "sh", script, padrao)
+		cmd.Env = append(os.Environ(), "ARKAME_INSTALL_SEM_MAIN=1", "NO_COLOR=1")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("bin_dir_de_root %s: %v\n%s", padrao, err, out)
+		}
+		return string(out)
+	}
+
+	// Uma pasta do sistema (do root, 0755 até a raiz) fica.
+	if got := escolha("/bin"); got != "/bin" {
+		t.Errorf("/bin, do root, trocado por %q", got)
+	}
+	// Do usuário (como o /usr/local/bin do Homebrew): /opt/arkame/bin.
+	if os.Geteuid() != 0 {
+		if got := escolha(t.TempDir()); got != "/opt/arkame/bin" {
+			t.Errorf("pasta do usuário mantida: %q", got)
+		}
+	}
+	// Ainda não existe, debaixo de uma pasta que todos gravam (/tmp).
+	if got := escolha("/tmp/arkame-nao-existe/bin"); got != "/opt/arkame/bin" {
+		t.Errorf("pasta debaixo do /tmp mantida: %q", got)
+	}
+}

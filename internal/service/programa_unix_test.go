@@ -145,3 +145,19 @@ func TestServicoDoSistemaRecusaProgramaDoUsuarioNoDisco(t *testing.T) {
 		t.Fatalf("%s, do usuário, aceito para o serviço root", p)
 	}
 }
+
+// No Mac Intel com Homebrew, o /usr/local/bin é do usuário: a recusa mandava
+// rodar o mesmo `| sudo sh` que acabara de falhar. Agora diz onde o
+// instalador põe nesse caso e como escolher a pasta (ARKAME_BIN_DIR).
+func TestRecusaDoProgramaDizComoEscolherAPasta(t *testing.T) {
+	arvore(t, raizDoSistema(), nil)
+	err := conferirPrograma("/home/ana/.local/bin/arkame-agent")
+	if err == nil {
+		t.Fatal("programa no home da ana aceito para o serviço root")
+	}
+	for _, trecho := range []string{"/opt/arkame/bin", "sudo env ARKAME_BIN_DIR="} {
+		if !strings.Contains(err.Error(), trecho) {
+			t.Errorf("a mensagem não diz %q: %v", trecho, err)
+		}
+	}
+}

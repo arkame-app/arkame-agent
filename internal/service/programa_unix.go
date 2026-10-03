@@ -60,8 +60,11 @@ func conferirPrograma(programa string) error {
 			if problema := problemaDoCaminho(p); problema != "" {
 				return fmt.Errorf(
 					"o serviço do sistema roda como root e chamaria %s, mas %s: quem pode trocar esse arquivo viraria root no próximo reinício do serviço. "+
-						"Instale o programa numa pasta só do root — o instalador com sudo põe em /usr/local/bin "+
-						"(curl -fsSL https://get.arkame.app/install.sh | sudo sh -s -- --token=SEU_CODIGO) —, "+
+						"Instale o programa numa pasta só do root — o instalador com sudo põe em /usr/local/bin, ou em /opt/arkame/bin "+
+						"quando /usr/local/bin não é só do root, como o do Homebrew "+
+						"(curl -fsSL https://get.arkame.app/install.sh | sudo sh -s -- --token=SEU_CODIGO); "+
+						"outra pasta só do root vai em ARKAME_BIN_DIR "+
+						"(curl -fsSL https://get.arkame.app/install.sh | sudo env ARKAME_BIN_DIR=/opt/arkame/bin sh -s -- --token=SEU_CODIGO) —, "+
 						"ou instale só para o seu usuário, sem sudo (escopo user): %s install --token=SEU_CODIGO",
 					abs, problema, abs)
 			}

@@ -10,7 +10,9 @@
 #
 # Variáveis reconhecidas:
 #   ARKAME_VERSION        versão a instalar (padrão: a mais recente)
-#   ARKAME_BIN_DIR        onde instalar (padrão: /usr/local/bin, ou ~/.local/bin sem root)
+#   ARKAME_BIN_DIR        onde instalar (padrão: /usr/local/bin — ou /opt/arkame/bin,
+#                         quando /usr/local/bin não é só do root —, ou
+#                         ~/.local/bin sem root)
 #   PANEL_URL             painel a usar (padrão: https://save.arkame.app)
 #   ARKAME_DOWNLOAD_BASE  espelho de onde baixar os pacotes (padrão: releases do
 #                         GitHub). Serve a parceiros whitelabel e a redes que
@@ -168,6 +170,45 @@ sha256_of() { # sha256_of <arquivo>
   fi
 }
 
+# ── destino ──────────────────────────────────────────────────────────────────
+BIN_DIR_ROOT="/usr/local/bin"
+BIN_DIR_ALTERNATIVO="/opt/arkame/bin"
+
+# so_do_root <pasta>: a pasta e cada uma acima dela (as que existem) são do
+# root e não aceitam escrita dos outros nem do grupo (salvo o grupo do root,
+# gid 0). É o que o agente exige do programa do serviço do sistema
+# (service.conferirPrograma): quem troca o arquivo vira root.
+so_do_root() {
+  d=$1
+  while :; do
+    if [ -e "$d" ]; then
+      linha=$(ls -ldnL "$d" 2>/dev/null) || return 1
+      perm=$(printf '%s\n' "$linha" | awk '{print $1}')
+      dono=$(printf '%s\n' "$linha" | awk '{print $3}')
+      grupo=$(printf '%s\n' "$linha" | awk '{print $4}')
+      [ "$dono" = "0" ] || return 1
+      case "$perm" in
+        ????????w*) return 1 ;; # escrita dos outros
+        ?????w*) [ "$grupo" = "0" ] || return 1 ;; # do grupo, só se for o do root
+      esac
+    fi
+    [ "$d" = "/" ] && return 0
+    d=$(dirname "$d")
+  done
+}
+
+# bin_dir_de_root: onde instalar com root. O /usr/local/bin, se for só do
+# root; senão o /opt/arkame/bin. No Mac Intel com Homebrew, o /usr/local/bin é
+# do usuário, o agente recusava o programa ali, e o comando do painel (o
+# mesmo `| sudo sh`) falhava sempre.
+bin_dir_de_root() {
+  if so_do_root "$BIN_DIR_ROOT"; then
+    printf '%s' "$BIN_DIR_ROOT"
+  else
+    printf '%s' "$BIN_DIR_ALTERNATIVO"
+  fi
+}
+
 # ── instalação ───────────────────────────────────────────────────────────────
 main() {
   printf '\n%s\n\n' "${BOLD}Instalador do agente Arkame${RESET}"
@@ -177,15 +218,21 @@ main() {
   info "Versão:     $VERSION"
   info "Plataforma: $OS/$ARCH"
 
-  # Onde instalar: com root vai para /usr/local/bin; sem root, ~/.local/bin.
+  # Onde instalar: com root vai para /usr/local/bin (ou /opt/arkame/bin, se
+  # ele não for só do root); sem root, ~/.local/bin.
   if [ -n "${ARKAME_BIN_DIR:-}" ]; then
     BIN_DIR="$ARKAME_BIN_DIR"
   elif [ "$(id -u)" = "0" ]; then
-    BIN_DIR="/usr/local/bin"
+    BIN_DIR=$(bin_dir_de_root)
+    if [ "$BIN_DIR" != "$BIN_DIR_ROOT" ]; then
+      info "$BIN_DIR_ROOT não é só do root (o do Homebrew, por exemplo): o serviço do"
+      info "sistema roda como root e recusa programa que outro usuário pode trocar."
+    fi
   else
     BIN_DIR="$HOME/.local/bin"
   fi
-  mkdir -p "$BIN_DIR" || die "não consegui criar $BIN_DIR"
+  # 0755: a pasta criada para o root não aceita escrita de mais ninguém.
+  (umask 022 && mkdir -p "$BIN_DIR") || die "não consegui criar $BIN_DIR"
   info "Destino:    $BIN_DIR/arkame-agent"
 
   TMP=$(mktemp -d)
@@ -282,4 +329,5 @@ main() {
   "$BIN_DIR/arkame-agent" "$@"
 }
 
-main "$@"
+# ARKAME_INSTALL_SEM_MAIN: só define as funções (para os testes as chamarem).
+[ -n "${ARKAME_INSTALL_SEM_MAIN:-}" ] || main "$@"
