@@ -37,7 +37,10 @@ func newServiceInstallCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			// Caminho absoluto, como no install: a unit (e o plist, e o SCM)
 			// recebe este texto, e um caminho relativo não aponta para nada
-			// quando o serviço sobe.
+			// quando o serviço sobe. Sem --config, o padrão do escopo.
+			if !cmd.Flags().Changed("config") {
+				configFile = configPadrao(scope)
+			}
 			if abs, err := filepath.Abs(configFile); err == nil {
 				configFile = abs
 			}
@@ -70,7 +73,7 @@ func newServiceInstallCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&configFile, "config", config.DefaultPath, "env-file que o serviço vai carregar")
+	cmd.Flags().StringVar(&configFile, "config", config.DefaultPath, "env-file que o serviço vai carregar (no escopo user, padrão $XDG_CONFIG_HOME/arkame/agent.env, ou ~/.config/arkame/agent.env)")
 	cmd.Flags().StringVar(&name, "name", service.DefaultName, "nome do serviço (um por credencial de storage no mesmo host)")
 	cmd.Flags().StringVar(&scope, "scope", "", "system (todo o host, exige root) ou user (sem sudo). Padrão: system se root, senão user")
 	cmd.Flags().BoolVar(&start, "start", true, "iniciar o serviço logo após instalar")

@@ -35,6 +35,15 @@ const (
 	ScopeUser Scope = "user"
 )
 
+// EscopoEfetivo é o escopo que a instalação usa: o pedido, ou o padrão da
+// plataforma (system como root, senão user; no Windows, sempre system).
+func EscopoEfetivo(s Scope) Scope {
+	if s == "" {
+		return defaultScope()
+	}
+	return s
+}
+
 // Options controla a instalação do serviço.
 type Options struct {
 	// Name identifica a unit. Um host pode ter mais de um agent (um por

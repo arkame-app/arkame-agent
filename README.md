@@ -185,6 +185,9 @@ O `curl.exe` vem no Windows 10 (1803+), 11 e Server 2019+. No Server 2016, use o
 
 O arquivo gravado (`/etc/arkame/agent.env`; no Windows `C:\etc\arkame\agent.env`)
 fica legível só pelo administrador (0600; no Windows, Administradores e SYSTEM).
+Na instalação sem root (`--service-scope user`, o padrão de quem roda sem
+sudo), sem `--config`, o arquivo é `$XDG_CONFIG_HOME/arkame/agent.env`
+(`~/.config/arkame/agent.env`), com o token, a chave e o agent.id ao lado.
 
 No Windows, o serviço grava o log ao lado da configuração, em
 `C:\etc\arkame\agent.log` (rodízio aos 10 MB; o anterior fica em

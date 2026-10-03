@@ -26,8 +26,10 @@ vencimento dele). Não consulta o painel: o último sinal do servidor aparece
 lá, na página do servidor.
 
 Sem --config, lê o arquivo que o serviço usa (unit, plist, SCM): o do agente
-sem root fica em ~/.config/arkame, e o de um segundo agente, onde a
-instalação dele pôs.`,
+sem root fica em $XDG_CONFIG_HOME/arkame/agent.env (~/.config/arkame/agent.env
+sem XDG_CONFIG_HOME), e o de um segundo agente, onde a instalação dele pôs.
+Sem serviço registrado, o padrão do escopo: /etc/arkame/agent.env no system,
+o do usuário no user.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			// O arquivo padrão (/etc/arkame/agent.env) só vale para o agente
 			// principal instalado como root: o sem root e um segundo agente

@@ -84,6 +84,9 @@ agent_id existente, preservando histórico e path no bucket.`,
 				}
 			}
 			ctx := cmd.Context()
+			if !cmd.Flags().Changed("config") {
+				configFile = configPadrao(serviceScope)
+			}
 			// Caminho absoluto: no Windows o padrão (/etc/arkame/agent.env) não
 			// tem unidade, e o serviço recebe exatamente este texto.
 			if abs, err := filepath.Abs(configFile); err == nil {
@@ -218,7 +221,7 @@ agent_id existente, preservando histórico e path no bucket.`,
 		},
 	}
 
-	cmd.Flags().StringVar(&configFile, "config", config.DefaultPath, "caminho do env-file com credenciais de storage")
+	cmd.Flags().StringVar(&configFile, "config", config.DefaultPath, "caminho do env-file com credenciais de storage (no escopo user, padrão $XDG_CONFIG_HOME/arkame/agent.env, ou ~/.config/arkame/agent.env)")
 	cmd.Flags().StringVar(&enrollmentToken, "token", "", "enrollment_token gerado no painel (ex: atk_...)")
 	// Padrão vazio: com a URL aqui, a flag sempre vencia o PANEL_URL do
 	// env-file (painel de parceiro whitelabel). O padrão vem do config.

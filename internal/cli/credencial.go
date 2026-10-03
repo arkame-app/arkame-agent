@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 
 	"github.com/arkame-app/agent/internal/aplicativos"
@@ -264,9 +265,9 @@ var configDoServico = service.ConfigDoServico
 // no agente errado, e o uninstall apagava a configuração do vizinho.
 //
 // Vale também para o nome padrão: o agente rootless (--service-scope user)
-// usa ~/.config/arkame/agent.env, e o comando do painel não leva --config —
-// lia /etc/arkame/agent.env, que não existe, e falhava. Só o nome padrão sem
-// registro cai no arquivo padrão.
+// usa ~/.config/arkame/agent.env (config.UserPath), e o comando do painel não
+// leva --config — lia /etc/arkame/agent.env, que não existe, e falhava. Só o
+// nome padrão sem registro cai no arquivo padrão do escopo (configPadrao).
 func configDoAgente(cmd *cobra.Command, configFile, serviceName, serviceScope string) (string, error) {
 	if cmd.Flags().Changed("config") {
 		return configFile, nil
@@ -278,7 +279,21 @@ func configDoAgente(cmd *cobra.Command, configFile, serviceName, serviceScope st
 		return c, nil
 	}
 	if serviceName == service.DefaultName {
-		return configFile, nil
+		return configPadrao(serviceScope), nil
 	}
 	return "", fmt.Errorf("não achei o arquivo de configuração do serviço %s: use --config com o caminho da instalação dele", serviceName)
+}
+
+// configPadrao é o arquivo de configuração sem --config. No escopo user (o
+// padrão sem root, fora do Windows) é o config.UserPath —
+// $XDG_CONFIG_HOME/arkame/agent.env ou ~/.config/arkame/agent.env —, e não
+// /etc/arkame/agent.env: a instalação sem sudo parava em "permission denied"
+// nele. No escopo system, config.DefaultPath.
+func configPadrao(serviceScope string) string {
+	if runtime.GOOS != "windows" && service.EscopoEfetivo(service.Scope(serviceScope)) == service.ScopeUser {
+		if p, err := config.UserPath(); err == nil {
+			return p
+		}
+	}
+	return config.DefaultPath
 }

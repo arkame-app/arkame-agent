@@ -15,12 +15,29 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
 
 // DefaultPath é o arquivo de configuração padrão (no Windows, C:\etc\arkame\agent.env).
+// Na instalação sem root (escopo user), o padrão é UserPath.
 const DefaultPath = "/etc/arkame/agent.env"
+
+// UserPath é o arquivo de configuração do agente sem root (escopo user):
+// $XDG_CONFIG_HOME/arkame/agent.env, ou ~/.config/arkame/agent.env. O token,
+// a chave e o agent.id ficam ao lado dele. XDG_CONFIG_HOME relativo é
+// ignorado, como manda a especificação.
+func UserPath() (string, error) {
+	if x := os.Getenv("XDG_CONFIG_HOME"); filepath.IsAbs(x) {
+		return filepath.Join(x, "arkame", "agent.env"), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("descobrindo o home do usuário: %w", err)
+	}
+	return filepath.Join(home, ".config", "arkame", "agent.env"), nil
+}
 
 // Caminhos padrão da identidade do agente.
 const (

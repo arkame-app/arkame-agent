@@ -56,9 +56,11 @@ Opções:
   --panel-url=URL       painel a usar (padrão: https://save.arkame.app)
   --service-name=NOME   nome do serviço (use um por credencial de storage)
   --config=ARQUIVO      arquivo de configuração deste agente (padrão:
-                        /etc/arkame/agent.env). Com mais de um agente na
+                        /etc/arkame/agent.env; sem sudo, no escopo user,
+                        ~/.config/arkame/agent.env). Com mais de um agente na
                         máquina, um arquivo por agente, junto de --service-name
-  --service-scope=X     system (todo o host, exige sudo) ou user (sem sudo)
+  --service-scope=X     system (todo o host, exige sudo) ou user (sem sudo;
+                        padrão quando o script não roda como root)
   --no-service          só instala o binário, sem registrar serviço
   --version=vX.Y.Z      instala uma versão específica
   --download-base=URL   espelho de onde baixar (exige --version)

@@ -122,14 +122,14 @@ func TestServiceNameUsaOArquivoDoProprioServico(t *testing.T) {
 	}
 
 	// --config explícito vence, e o serviço padrão sem registro segue no
-	// arquivo padrão.
+	// arquivo padrão do escopo (/etc/arkame como root, o do usuário sem).
 	c := newUninstallCmd()
 	_ = c.ParseFlags([]string{"--config", "/x/y.env", "--service-name", "arkame-agent-oci"})
 	if got, _ := configDoAgente(c, "/x/y.env", "arkame-agent-oci", ""); got != "/x/y.env" {
 		t.Fatalf("--config explícito virou %s", got)
 	}
 	c = newUninstallCmd()
-	if got, _ := configDoAgente(c, config.DefaultPath, "arkame-agent", ""); got != config.DefaultPath {
+	if got, _ := configDoAgente(c, config.DefaultPath, "arkame-agent", ""); got != configPadrao("") {
 		t.Fatalf("serviço padrão virou %s", got)
 	}
 	if !slices.Equal(pedidos, []string{"arkame-agent-oci", "arkame-agent-sumido", "arkame-agent"}) {
