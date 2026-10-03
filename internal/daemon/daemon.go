@@ -264,7 +264,7 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 			ErrorMessage: msg,
 			HookOutput:   r.Output,
 		}
-		_ = c.POST(ctx, "/api/agents/"+cfg.AgentID+"/sessions/"+startResp.SessionID+"/fail", failBody, nil)
+		marcarFalha(ctx, c, cfg, startResp.SessionID, failBody)
 		return fmt.Errorf("%s", msg)
 	} else if r.Ran {
 		slog.Info("comando de antes concluído", "plan_id", plan.ID, "duracao", r.Duration)
@@ -284,7 +284,14 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 	// Comando de depois: roda com sucesso OU com falha, porque é ele que limpa
 	// o dump temporário — deixar o arquivo para trás encheria o disco do
 	// cliente justamente nos dias em que o backup deu errado.
-	if r, err := hooks.Run(ctx, plan.PostHook, prazo); err != nil {
+	//
+	// Com o serviço parando (ctx cancelado), o comando ainda roda: com o ctx
+	// original ele era morto antes de começar e o dump ficava no disco. Ganha
+	// até finalizacaoGraca depois do cancelamento.
+	hctx, hcancel := contextoDeFinalizacao(ctx)
+	r, err := hooks.Run(hctx, plan.PostHook, prazo)
+	hcancel()
+	if err != nil {
 		// Falha aqui não invalida o backup: os arquivos já subiram. Fica
 		// registrado para quem for investigar o disco cheio depois.
 		slog.Warn("comando de depois falhou", "plan_id", plan.ID, "err", err)
@@ -308,7 +315,7 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 			ErrorCode:    "sync_failed",
 			ErrorMessage: msg,
 		}
-		_ = c.POST(ctx, "/api/agents/"+cfg.AgentID+"/sessions/"+startResp.SessionID+"/fail", failBody, nil)
+		marcarFalha(ctx, c, cfg, startResp.SessionID, failBody)
 		if syncErr != nil {
 			return syncErr
 		}
@@ -352,8 +359,11 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 	var completeResp struct {
 		FilesIndexed int `json:"files_indexed"`
 	}
+	// Com o serviço parando, o backup já subiu: o /complete ainda vai.
+	cctx, ccancel := contextoDeFinalizacao(ctx)
+	defer ccancel()
 	if err := c.POST(
-		ctx,
+		cctx,
 		"/api/agents/"+cfg.AgentID+"/sessions/"+startResp.SessionID+"/complete",
 		completeBody,
 		&completeResp,
@@ -366,6 +376,35 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 		"files_uploaded", result.Stats.FilesUploaded,
 		"files_indexed", completeResp.FilesIndexed)
 	return nil
+}
+
+// finalizacaoGraca é quanto a finalização (comando de depois, /fail,
+// /complete, PATCH final da restauração) ainda tem depois que o serviço manda
+// parar. Com o ctx cancelado elas não saíam: a sessão ficava "running" no
+// painel para sempre e o comando de depois era morto.
+var finalizacaoGraca = 30 * time.Second
+
+// contextoDeFinalizacao é um contexto que não morre com o ctx: enquanto o
+// serviço roda, não tem prazo próprio; quando o ctx é cancelado, ganha
+// finalizacaoGraca para terminar.
+func contextoDeFinalizacao(ctx context.Context) (context.Context, context.CancelFunc) {
+	fctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	parar := context.AfterFunc(ctx, func() {
+		time.AfterFunc(finalizacaoGraca, cancel)
+	})
+	return fctx, func() {
+		parar()
+		cancel()
+	}
+}
+
+// marcarFalha avisa o painel que a sessão falhou, mesmo com o serviço parando.
+func marcarFalha(ctx context.Context, c *api.Client, cfg *config.Config, sessionID string, body any) {
+	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), finalizacaoGraca)
+	defer cancel()
+	if err := c.POST(fctx, "/api/agents/"+cfg.AgentID+"/sessions/"+sessionID+"/fail", body, nil); err != nil {
+		slog.Warn("não consegui marcar a sessão como falha no painel", "session_id", sessionID, "err", err)
+	}
 }
 
 // avaliarSessao decide como a sessão termina.
@@ -537,8 +576,18 @@ func restoreLoop(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 					"item_id", item.ItemID, "key", item.SourceKey, "err", err)
 			}
 
+			// Serviço parando no meio do item: não é falha do arquivo. Fica
+			// "running", e o próximo arranque o refaz (recuperação de crash).
+			if err != nil && ctx.Err() != nil {
+				return
+			}
+			// O resultado de um item que terminou tem de chegar ao painel
+			// mesmo que o serviço esteja parando.
 			var resp api.RestoreItemUpdateResponse
-			if perr := c.PATCH(ctx, "/api/agents/"+cfg.AgentID+"/restore-items/"+item.ItemID, update, &resp); perr != nil {
+			pctx, pcancel := context.WithTimeout(context.WithoutCancel(ctx), finalizacaoGraca)
+			perr := c.PATCH(pctx, "/api/agents/"+cfg.AgentID+"/restore-items/"+item.ItemID, update, &resp)
+			pcancel()
+			if perr != nil {
 				slog.Warn("PATCH final falhou", "item_id", item.ItemID, "err", perr)
 				continue
 			}
