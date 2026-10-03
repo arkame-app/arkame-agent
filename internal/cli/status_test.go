@@ -12,6 +12,8 @@ import (
 
 	"github.com/arkame-app/agent/internal/config"
 	"github.com/arkame-app/agent/internal/crypto"
+	"github.com/arkame-app/agent/internal/service"
+	"github.com/spf13/cobra"
 )
 
 func jwtQueVence(t *testing.T, venc time.Time) string {
@@ -86,5 +88,71 @@ func TestAjudaDoStatusNaoPrometeHeartbeat(t *testing.T) {
 	c := newStatusCmd()
 	if strings.Contains(c.Short, "heartbeat") {
 		t.Fatalf("a ajuda do status promete o heartbeat: %q", c.Short)
+	}
+}
+
+// Agente sem root (~/.config/arkame/agent.env) ou segundo agente: o status
+// lia só /etc/arkame/agent.env e dizia "NÃO INICIADO — rode install" de um
+// agente rodando. Sem --config, o arquivo é o do serviço, como no
+// set-storage-keys e no uninstall; o heartbeat segue a mesma regra.
+func TestStatusEHeartbeatLeemOArquivoDoServico(t *testing.T) {
+	for _, k := range []string{"AGENT_ID", "TOKEN_PATH", "ENROLLMENT_TOKEN", "PRIVATE_KEY_PATH", "PANEL_URL"} {
+		t.Setenv(k, "")
+	}
+	dir := t.TempDir()
+	escrever := func(nome, agentID string) string {
+		p := filepath.Join(dir, nome)
+		conteudo := "AGENT_ID=" + agentID + "\nTOKEN_PATH=" + filepath.Join(dir, nome+".token") +
+			"\nPRIVATE_KEY_PATH=" + filepath.Join(dir, nome+".pem") + "\nENROLLMENT_TOKEN=atk_x\nPANEL_URL=https://painel.invalid\n"
+		if err := os.WriteFile(p, []byte(conteudo), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	doUsuario := escrever("usuario.env", "ag-usuario")
+	doOutro := escrever("oci.env", "ag-oci")
+
+	antes := configDoServico
+	configDoServico = func(nome string, escopo service.Scope) (string, bool) {
+		switch {
+		case nome == service.DefaultName && escopo == "":
+			return doUsuario, true // escopo atual: o registro do usuário
+		case nome == "arkame-agent-oci":
+			return doOutro, true
+		}
+		return "", false
+	}
+	t.Cleanup(func() { configDoServico = antes })
+
+	rodar := func(c *cobra.Command, args ...string) (string, error) {
+		var b bytes.Buffer
+		c.SetOut(&b)
+		c.SetErr(&b)
+		c.SetArgs(args)
+		c.SilenceUsage, c.SilenceErrors = true, true
+		err := c.Execute()
+		return b.String(), err
+	}
+
+	out, err := rodar(newStatusCmd())
+	if err != nil || !strings.Contains(out, "ag-usuario") || !strings.Contains(out, doUsuario) || !strings.Contains(out, "PENDENTE") {
+		t.Fatalf("status sem flags deveria ler %s; err=%v\n%s", doUsuario, err, out)
+	}
+	out, err = rodar(newStatusCmd(), "--service-name", "arkame-agent-oci")
+	if err != nil || !strings.Contains(out, "ag-oci") {
+		t.Fatalf("status --service-name deveria ler %s; err=%v\n%s", doOutro, err, out)
+	}
+	if _, err := rodar(newStatusCmd(), "--service-name", "arkame-agent-sumido"); err == nil || !strings.Contains(err.Error(), "arkame-agent-sumido") {
+		t.Fatalf("serviço sem registro deveria dar erro, veio %v", err)
+	}
+	// --config explícito vence o registro.
+	if out, err := rodar(newStatusCmd(), "--config", doOutro); err != nil || !strings.Contains(out, "ag-oci") {
+		t.Fatalf("--config explícito: err=%v\n%s", err, out)
+	}
+
+	// heartbeat: chega até o token do arquivo do serviço (que não existe
+	// aqui) em vez de dizer que falta o AGENT_ID do arquivo padrão.
+	if _, err := rodar(newHeartbeatCmd(), "--service-name", "arkame-agent-oci"); err == nil || !strings.Contains(err.Error(), "bearer token ausente") {
+		t.Fatalf("heartbeat deveria ler %s, veio %v", doOutro, err)
 	}
 }

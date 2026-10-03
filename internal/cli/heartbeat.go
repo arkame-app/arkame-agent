@@ -14,7 +14,7 @@ import (
 // newHeartbeatCmd envia um heartbeat one-shot ao painel.
 // Útil pra testar autenticação bearer token sem subir o daemon completo.
 func newHeartbeatCmd() *cobra.Command {
-	var configFile string
+	var configFile, serviceName, serviceScope string
 
 	cmd := &cobra.Command{
 		Use:   "heartbeat",
@@ -22,6 +22,12 @@ func newHeartbeatCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 
+			// Como no status: sem --config, o arquivo do serviço (o agente
+			// sem root e um segundo agente não usam o padrão).
+			configFile, err := configDoAgente(cmd, configFile, serviceName, serviceScope)
+			if err != nil {
+				return err
+			}
 			cfg, err := config.Load(configFile, config.Overrides{})
 			if err != nil {
 				return fmt.Errorf("carregando config: %w", err)
@@ -67,5 +73,6 @@ func newHeartbeatCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&configFile, "config", config.DefaultPath, "env-file")
+	flagsDoServico(cmd, &serviceName, &serviceScope)
 	return cmd
 }

@@ -10,11 +10,12 @@ import (
 	"github.com/arkame-app/agent/internal/config"
 	"github.com/arkame-app/agent/internal/crypto"
 	"github.com/arkame-app/agent/internal/daemon"
+	"github.com/arkame-app/agent/internal/service"
 	"github.com/spf13/cobra"
 )
 
 func newStatusCmd() *cobra.Command {
-	var configFile string
+	var configFile, serviceName, serviceScope string
 
 	cmd := &cobra.Command{
 		Use:   "status",
@@ -22,8 +23,19 @@ func newStatusCmd() *cobra.Command {
 		Long: `Mostra o que está nesta máquina: agent_id, painel, fingerprint da chave
 privada, caminhos e se o registro foi aprovado (pelo token gravado e o
 vencimento dele). Não consulta o painel: o último sinal do servidor aparece
-lá, na página do servidor.`,
+lá, na página do servidor.
+
+Sem --config, lê o arquivo que o serviço usa (unit, plist, SCM): o do agente
+sem root fica em ~/.config/arkame, e o de um segundo agente, onde a
+instalação dele pôs.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			// O arquivo padrão (/etc/arkame/agent.env) só vale para o agente
+			// principal instalado como root: o sem root e um segundo agente
+			// saíam "NÃO INICIADO — rode install", rodando.
+			configFile, err := configDoAgente(cmd, configFile, serviceName, serviceScope)
+			if err != nil {
+				return err
+			}
 			cfg, err := config.Load(configFile, config.Overrides{})
 			if err != nil {
 				return err
@@ -34,6 +46,7 @@ lá, na página do servidor.`,
 	}
 
 	cmd.Flags().StringVar(&configFile, "config", config.DefaultPath, "env-file")
+	flagsDoServico(cmd, &serviceName, &serviceScope)
 	return cmd
 }
 
@@ -41,6 +54,7 @@ lá, na página do servidor.`,
 // não pelo ENROLLMENT_TOKEN: o código de instalação ficava no env-file depois
 // da aprovação, e um agente aprovado aparecia "PENDENTE" para sempre.
 func escreverStatus(w io.Writer, cfg *config.Config, agora time.Time) {
+	fmt.Fprintln(w, "Config:       ", orNA(cfg.ConfigPath))
 	fmt.Fprintln(w, "Agent ID:     ", orNA(cfg.AgentID))
 	fmt.Fprintln(w, "Painel:       ", cfg.PanelURL)
 	fmt.Fprintln(w, "Fingerprint:  ", fingerprintDaChave(cfg.PrivateKeyPath))
@@ -91,6 +105,13 @@ func situacaoDoRegistro(cfg *config.Config, agora time.Time) string {
 	default:
 		return "NÃO INICIADO — rode 'arkame-agent install'"
 	}
+}
+
+// flagsDoServico são --service-name e --service-scope dos comandos que leem a
+// configuração de um agente já instalado (configDoAgente).
+func flagsDoServico(cmd *cobra.Command, nome, escopo *string) {
+	cmd.Flags().StringVar(nome, "service-name", service.DefaultName, "nome do serviço do agente (para achar o arquivo de configuração dele)")
+	cmd.Flags().StringVar(escopo, "service-scope", "", "system ou user, como na instalação. Padrão: system se root, senão user")
 }
 
 func orNA(s string) string {
