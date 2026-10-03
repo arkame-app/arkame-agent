@@ -98,7 +98,16 @@ Binário Linux rodando local contra o painel em produção (`save.arkame.app`) +
 > como `.old-<aleatório>`, como no `install.ps1`, e na entrada saem todos os `.old*`
 > livres. E o `install.ps1` não para mais o serviço para trocar o exe (a troca é por
 > rename): antes, ao atualizar só o binário, o serviço ficava parado até o próximo boot.
-> Agora, nesse modo, o serviço que estava rodando é reiniciado já com a versão nova.
+> Agora, nesse modo (sem `-Token`), todos os serviços que estavam rodando esse exe (o
+> `-ServiceName` e um segundo agente, como `arkame-agent-oci`, achados pelo `PathName`
+> do Win32_Service) são reiniciados já com a versão nova; os que não reiniciarem saem
+> num aviso como ainda na versão antiga. Antes só o `-ServiceName` reiniciava, e o
+> outro seguia no `.old` sem aviso até o próximo boot.
+>
+> O `install.sh` não apaga mais o programa antes de copiar o novo: copia para
+> `.arkame-agent.novo.<pid>` na mesma pasta e troca por `mv -f`. Se a cópia falha (disco
+> cheio), sai só o temporário e o programa antigo continua; antes, o antigo sumia, o novo
+> ficava pela metade e o serviço não subia no próximo reinício.
 
 - **Enrollment Ed25519**: `internal/enrollment` gera keypair, POST `/api/agents/enroll`, long-poll na `wait-token` até receber JWT bearer
 - **Bearer auth**: client HTTP envia `Authorization: Bearer <token>` em todos os requests pós-approval; `ErrNotReady` (204) e `ErrGone` (410) pra long-poll handling
