@@ -78,8 +78,17 @@ func installPlatform(ctx context.Context, cfg *config.Config, opts Options) (*In
 	return installSystemd(ctx, cfg, opts)
 }
 
+// executar roda um comando e devolve a saída combinada; procurar acha o
+// executável no PATH. Variáveis para os testes trocarem o systemctl de verdade.
+var (
+	executar = func(ctx context.Context, nome string, args ...string) ([]byte, error) {
+		return exec.CommandContext(ctx, nome, args...).CombinedOutput()
+	}
+	procurar = exec.LookPath
+)
+
 func installSystemd(ctx context.Context, cfg *config.Config, opts Options) (*Installed, error) {
-	if _, err := exec.LookPath("systemctl"); err != nil {
+	if _, err := procurar("systemctl"); err != nil {
 		return nil, fmt.Errorf(
 			"systemctl não encontrado: esta máquina não usa systemd. Rode o agent com um supervisor próprio (ex.: `%s run --config %s`) ou use a imagem Docker",
 			opts.BinaryPath, cfg.ConfigPath)
@@ -128,8 +137,7 @@ func installSystemd(ctx context.Context, cfg *config.Config, opts Options) (*Ins
 
 	run := func(args ...string) error {
 		full := append(append([]string{}, sysctl[1:]...), args...)
-		cmd := exec.CommandContext(ctx, sysctl[0], full...)
-		out, err := cmd.CombinedOutput()
+		out, err := executar(ctx, sysctl[0], full...)
 		if err != nil {
 			return fmt.Errorf("systemctl %s: %w: %s", strings.Join(full, " "), err, strings.TrimSpace(string(out)))
 		}
@@ -140,12 +148,18 @@ func installSystemd(ctx context.Context, cfg *config.Config, opts Options) (*Ins
 		return nil, err
 	}
 
-	enableArgs := []string{"enable", opts.Name}
-	if opts.Start {
-		enableArgs = append(enableArgs, "--now")
-	}
-	if err := run(enableArgs...); err != nil {
+	if err := run("enable", opts.Name); err != nil {
 		return nil, err
+	}
+	// restart, e não `enable --now`: o --now não mexe numa unit já ativa, e na
+	// reinstalação (ou atualização) o processo antigo seguia de pé com o token
+	// e o AGENT_ID antigos na memória — e tomava 401 assim que a aprovação
+	// revogava os tokens anteriores. restart sobe a unit parada e troca a que
+	// está rodando.
+	if opts.Start {
+		if err := run("restart", opts.Name); err != nil {
+			return nil, err
+		}
 	}
 
 	inst := &Installed{
@@ -251,7 +265,7 @@ func userUnitDir() (string, error) {
 }
 
 func enableLinger(ctx context.Context) error {
-	if _, err := exec.LookPath("loginctl"); err != nil {
+	if _, err := procurar("loginctl"); err != nil {
 		return err
 	}
 	u := currentUsername()
@@ -259,13 +273,12 @@ func enableLinger(ctx context.Context) error {
 		return fmt.Errorf("usuário atual desconhecido")
 	}
 	// Já habilitado? Então não precisa de sudo.
-	if out, err := exec.CommandContext(ctx, "loginctl", "show-user", u, "--property=Linger").Output(); err == nil {
+	if out, err := executar(ctx, "loginctl", "show-user", u, "--property=Linger"); err == nil {
 		if strings.Contains(string(out), "Linger=yes") {
 			return nil
 		}
 	}
-	cmd := exec.CommandContext(ctx, "loginctl", "enable-linger", u)
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if out, err := executar(ctx, "loginctl", "enable-linger", u); err != nil {
 		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
