@@ -44,7 +44,8 @@ each backup's file index — path and name, size, modification date, SHA-256 and
 bucket version; and, when the user browses folders while creating a plan in
 the panel, the names of the folders and files opened and the size of each file.
 Never file contents. The agent can be fully removed with
-`arkame-agent uninstall`.
+`arkame-agent uninstall` (Docker: `docker rm -f arkame-agent` and delete
+`/etc/arkame`).
 
 ## Arquitetura
 
@@ -220,6 +221,12 @@ No Windows, o painel mostra a linha para o Windows + R
 
 ```bash
 sudo /usr/local/bin/arkame-agent uninstall   # pergunta "sim"; --yes para automação
+
+# Instalação sem root (Linux ou macOS)
+~/.local/bin/arkame-agent uninstall --service-scope user
+
+# Docker (o programa está só na imagem; não há uninstall no host)
+sudo docker rm -f arkame-agent && sudo rm -rf /etc/arkame
 ```
 
 Tira o serviço, o arquivo de configuração com a chave, a identidade (token,
