@@ -413,8 +413,9 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 		ErrorMessage string           `json:"error_message,omitempty"`
 		// Arquivos do OneDrive só na nuvem que ficaram de fora. Com ele, o
 		// painel não trata a sessão como inventário da origem: a falta
-		// desses arquivos não é remoção.
-		CloudOnlySkipped int `json:"cloud_only_skipped,omitempty"`
+		// desses arquivos não é remoção. Vai sempre, mesmo com 0: sem o
+		// campo, o painel não separa "nada pulado" de "agente antigo".
+		CloudOnlySkipped int `json:"cloud_only_skipped"`
 	}{
 		Status:           completeStatus,
 		Stats:            result.Stats,

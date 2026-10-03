@@ -13,7 +13,8 @@ import (
 
 // Os arquivos do OneDrive só na nuvem que ficaram de fora vão ao /complete
 // (cloud_only_skipped): o painel não trata a sessão como inventário da origem.
-// Sem nenhum, o campo nem vai.
+// Sem nenhum, o campo vai com 0: é o que separa "nada pulado" de "agente
+// antigo, que não conta".
 func TestCompleteLevaOsArquivosSoNaNuvem(t *testing.T) {
 	for _, n := range []int{3, 0} {
 		antes := rodarSync
@@ -36,11 +37,8 @@ func TestCompleteLevaOsArquivosSoNaNuvem(t *testing.T) {
 			t.Fatalf("corpo do /complete: %v", err)
 		}
 		v, tem := got["cloud_only_skipped"]
-		switch {
-		case n > 0 && (!tem || v != float64(n)):
+		if !tem || v != float64(n) {
 			t.Fatalf("cloud_only_skipped = %v (presente=%v), queria %d; corpo: %s", v, tem, n, corpo)
-		case n == 0 && tem:
-			t.Fatalf("sem arquivo só na nuvem o campo não vai; corpo: %s", corpo)
 		}
 		if got["status"] != "complete" {
 			t.Fatalf("status = %v", got["status"])
