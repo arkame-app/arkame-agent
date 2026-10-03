@@ -113,3 +113,67 @@ func TestUploadMultipartAbortaMesmoComCtxCancelado(t *testing.T) {
 		t.Fatalf("o abort não chegou ao bucket (abortados=%d)", falso.abortados)
 	}
 }
+
+// Arquivo que só cresce (log aberto): sobe o que o walker viu (fi.Size bytes),
+// com o hash desses bytes — antes o hash cobria também o que cresceu, e o
+// registro não conferia com o que foi para o bucket.
+func TestProcessFileArquivoCrescendoSobeOTamanhoDoWalk(t *testing.T) {
+	falso, c := novoS3Falso(t)
+	original := "linha 1\nlinha 2\n"
+	fi := arquivoDeTeste(t, original)
+	acrescentar := func(p string) {
+		a, err := os.OpenFile(p, os.O_APPEND|os.O_WRONLY, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer a.Close()
+		_, _ = a.WriteString("linha nova\n")
+	}
+	acrescentar(fi.AbsolutePath) // cresceu entre o walk e o hash
+	antesDoEnvio = acrescentar   // e entre o hash e o envio
+	t.Cleanup(func() { antesDoEnvio = nil })
+
+	e, _, err := processFile(context.Background(), EngineOptions{S3: c, Bucket: "b", PrefixRoot: "data/a/"}, fi)
+	if err != nil {
+		t.Fatalf("arquivo que só cresce não pode falhar: %v", err)
+	}
+	o := falso.objetos["data/a/dados.db"]
+	if string(o.dados) != original || e.SHA256 != sha256Hex([]byte(original)) || e.Size != int64(len(original)) {
+		t.Fatalf("esperava o conteúdo do walk; bucket=%q entry=%+v", o.dados, e)
+	}
+}
+
+// Multipart de arquivo que só cresce: antes lia até o fim, mandava bytes a
+// mais e abortava com ErrArquivoMudou todo dia; o PUT simples passava.
+func TestUploadMultipartArquivoCrescendo(t *testing.T) {
+	falso, c := novoS3Falso(t)
+	original := "conteúdo de um log grande\n"
+	fi := arquivoDeTeste(t, original)
+	a, err := os.OpenFile(fi.AbsolutePath, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = a.WriteString("mais uma linha que chegou depois\n")
+	a.Close()
+
+	f, _ := os.Open(fi.AbsolutePath)
+	defer f.Close()
+	if _, err := uploadMultipart(context.Background(), c, "b", "k", f, nil, 0, sha256Hex([]byte(original)), fi.Size); err != nil {
+		t.Fatalf("arquivo que só cresce não pode abortar: %v", err)
+	}
+	if falso.completos != 1 || string(falso.objetos["k"].dados) != original {
+		t.Fatalf("esperava o conteúdo do walk no bucket; completos=%d dados=%q", falso.completos, falso.objetos["k"].dados)
+	}
+}
+
+// Encolheu depois do walk: não há fi.Size bytes; falha como arquivo mudado.
+func TestProcessFileArquivoEncolheu(t *testing.T) {
+	_, c := novoS3Falso(t)
+	fi := arquivoDeTeste(t, "conteúdo comprido")
+	if err := os.WriteFile(fi.AbsolutePath, []byte("curto"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := processFile(context.Background(), EngineOptions{S3: c, Bucket: "b", PrefixRoot: "data/a/"}, fi); !errors.Is(err, ErrArquivoMudou) {
+		t.Fatalf("esperava ErrArquivoMudou, veio %v", err)
+	}
+}

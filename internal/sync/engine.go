@@ -107,9 +107,18 @@ func processFile(ctx context.Context, o EngineOptions, fi FileInfo) (*api.FileEn
 	}
 	defer f.Close()
 
-	// 1. SHA-256 streamed
+	// 1. SHA-256 streamed, só dos fi.Size bytes que o walker viu. Arquivo que
+	// só cresce (log) seguia sendo lido além disso: o hash cobria bytes que o
+	// envio (ContentLength = fi.Size) não manda, e o multipart, que lia até o
+	// fim, abortava com ErrArquivoMudou todo dia. Agora o backup é o começo do
+	// arquivo, até o tamanho do walk, em todos os caminhos; alteração no lugar
+	// dentro desse trecho continua pega pela conferência do hash.
 	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
+	if _, err := io.CopyN(h, f, fi.Size); err != nil {
+		if errors.Is(err, io.EOF) {
+			// Encolheu depois do walk: não há fi.Size bytes para enviar.
+			return nil, false, fmt.Errorf("hash: %w", ErrArquivoMudou)
+		}
 		return nil, false, fmt.Errorf("hash: %w", err)
 	}
 	hash := hex.EncodeToString(h.Sum(nil))
@@ -155,7 +164,7 @@ func processFile(ctx context.Context, o EngineOptions, fi FileInfo) (*api.FileEn
 		}
 	} else {
 		size := fi.Size
-		lido := newLeitorComHash(f)
+		lido := newLeitorComHash(io.NewSectionReader(f, 0, size))
 		putOut, err := o.S3.PutObject(ctx, &s3.PutObjectInput{
 			Bucket:        &o.Bucket,
 			Key:           &key,
@@ -221,6 +230,10 @@ func uploadMultipart(ctx context.Context, s3c *s3.Client, bucket, key string, f 
 		}
 	}
 
+	// Lê só os tamanho bytes que foram hasheados: o que o arquivo cresceu
+	// depois (log aberto) fica para o próximo backup, em vez de mudar o que
+	// sobe e abortar o envio.
+	r := io.LimitReader(f, tamanho)
 	var parts []s3types.CompletedPart
 	buf := make([]byte, partSize)
 	// O que sobe é exatamente o que passa por buf (o SDK reenvia o mesmo
@@ -228,7 +241,7 @@ func uploadMultipart(ctx context.Context, s3c *s3.Client, bucket, key string, f 
 	enviado := sha256.New()
 	var bytesEnviados int64
 	for partNum := int32(1); ; partNum++ {
-		n, rerr := io.ReadFull(f, buf)
+		n, rerr := io.ReadFull(r, buf)
 		if n > 0 {
 			enviado.Write(buf[:n])
 			bytesEnviados += int64(n)
