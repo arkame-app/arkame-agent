@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -24,7 +25,32 @@ import (
 type Client struct {
 	baseURL    string
 	httpClient *http.Client
-	bearer     string // JWT emitido pelo painel; vazio antes da aprovação
+	// JWT emitido pelo painel; vazio antes da aprovação. Compartilhado com os
+	// clients derivados (ComPrazo): a renovação pelo heartbeat vale para todos.
+	bearer *bearerAtual
+}
+
+// bearerAtual guarda o token em uso, trocável enquanto o daemon roda.
+type bearerAtual struct {
+	mu    sync.RWMutex
+	valor string
+}
+
+func (b *bearerAtual) get() string {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.valor
+}
+
+// Bearer devolve o token em uso.
+func (c *Client) Bearer() string { return c.bearer.get() }
+
+// SetBearer troca o token de todas as requisições seguintes (deste client e
+// dos derivados por ComPrazo).
+func (c *Client) SetBearer(token string) {
+	c.bearer.mu.Lock()
+	c.bearer.valor = token
+	c.bearer.mu.Unlock()
 }
 
 // Options configura o client.
@@ -51,7 +77,7 @@ func New(opts Options) (*Client, error) {
 	return &Client{
 		baseURL:    opts.BaseURL,
 		httpClient: &http.Client{Transport: transport, Timeout: opts.Timeout},
-		bearer:     opts.Bearer,
+		bearer:     &bearerAtual{valor: opts.Bearer},
 	}, nil
 }
 
@@ -131,8 +157,8 @@ func (c *Client) PATCH(ctx context.Context, path string, in, out any) error {
 
 func (c *Client) setHeaders(req *http.Request) {
 	req.Header.Set("User-Agent", "arkame-agent")
-	if c.bearer != "" {
-		req.Header.Set("Authorization", "Bearer "+c.bearer)
+	if b := c.bearer.get(); b != "" {
+		req.Header.Set("Authorization", "Bearer "+b)
 	}
 }
 

@@ -109,6 +109,15 @@ type HeartbeatRequest struct {
 	ServiceScope string `json:"service_scope,omitempty"`
 }
 
+// HeartbeatResponse é a resposta do heartbeat.
+type HeartbeatResponse struct {
+	OK         bool   `json:"ok"`
+	ServerTime string `json:"server_time,omitempty"`
+	// NewToken vem quando o token atual está perto de vencer (o painel renova
+	// com 90 dias de antecedência). Ausente: nada muda.
+	NewToken string `json:"new_token,omitempty"`
+}
+
 // --- Session / Manifest ---
 
 // SessionStart é enviado quando uma sessão de backup começa.

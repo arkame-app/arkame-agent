@@ -78,21 +78,8 @@ func heartbeatLoop(ctx context.Context, c *api.Client, cfg *config.Config) {
 	// mostrar o comando exato de reinício quando o agent cair.
 	svc := service.Detect()
 
-	send := func() {
-		hb := api.HeartbeatRequest{
-			AgentID:      cfg.AgentID,
-			AgentVersion: version.Version,
-			OS:           runtime.GOOS + "-" + runtime.GOARCH,
-			ReportedAt:   time.Now().UTC(),
-			ServiceName:  svc.Name,
-			ServiceScope: svc.Scope,
-		}
-		if err := c.POST(ctx, "/api/agents/"+cfg.AgentID+"/heartbeat", hb, nil); err != nil {
-			slog.Warn("heartbeat falhou", "err", err)
-			return
-		}
-		slog.Debug("heartbeat ok")
-	}
+	token := &estadoDoToken{}
+	send := func() { enviarHeartbeat(ctx, c, cfg, svc, token) }
 
 	send()
 	for {
@@ -103,6 +90,25 @@ func heartbeatLoop(ctx context.Context, c *api.Client, cfg *config.Config) {
 			send()
 		}
 	}
+}
+
+// enviarHeartbeat manda um heartbeat e trata a resposta (renovação do token).
+func enviarHeartbeat(ctx context.Context, c *api.Client, cfg *config.Config, svc service.Detected, token *estadoDoToken) {
+	hb := api.HeartbeatRequest{
+		AgentID:      cfg.AgentID,
+		AgentVersion: version.Version,
+		OS:           runtime.GOOS + "-" + runtime.GOARCH,
+		ReportedAt:   time.Now().UTC(),
+		ServiceName:  svc.Name,
+		ServiceScope: svc.Scope,
+	}
+	var resp api.HeartbeatResponse
+	if err := c.POST(ctx, "/api/agents/"+cfg.AgentID+"/heartbeat", hb, &resp); err != nil {
+		slog.Warn("heartbeat falhou", "err", err)
+		return
+	}
+	slog.Debug("heartbeat ok")
+	token.tratarRespostaDoHeartbeat(c, cfg, resp)
 }
 
 // probeLoop chama Probe periodicamente (1×/h) e também atende solicitações
