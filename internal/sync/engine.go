@@ -110,6 +110,11 @@ func Run(ctx context.Context, o EngineOptions) (*Result, error) {
 	for range errCh {
 	}
 	result.CloudOnlySkipped = soNaNuvem
+	// Cancelado no meio da varredura, o walker fecha o canal sem erro: sem
+	// esta checagem, a sessão saía "complete" com só parte dos arquivos.
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
 	if walkErr != nil {
 		return result, walkErr
 	}
