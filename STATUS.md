@@ -56,7 +56,7 @@ Binário Linux rodando local contra o painel em produção (`save.arkame.app`) +
 
 ## Versionado no GitHub
 
-Repo privado em [`arkame-app/arkame-agent`](https://github.com/arkame-app/arkame-agent). Branch principal `main`. Auth SSH (`hugolf`).
+Repo público (Apache 2.0) em [`arkame-app/arkame-agent`](https://github.com/arkame-app/arkame-agent). Branch principal `main`. Auth SSH (`hugolf`).
 
 ## O que falta (próximos passos)
 
