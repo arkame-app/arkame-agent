@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"io"
 	"log/slog"
 	"os"
 
@@ -65,12 +66,20 @@ func setupLogger() {
 		lvl = slog.LevelDebug
 	}
 
+	logNivel = lvl
+	logPara(os.Stderr)
+}
+
+var logNivel = slog.LevelInfo
+
+// logPara troca o destino do log, com o nível e o formato das flags.
+func logPara(w io.Writer) {
 	var handler slog.Handler
-	opts := &slog.HandlerOptions{Level: lvl}
+	opts := &slog.HandlerOptions{Level: logNivel}
 	if logJSON {
-		handler = slog.NewJSONHandler(os.Stderr, opts)
+		handler = slog.NewJSONHandler(w, opts)
 	} else {
-		handler = slog.NewTextHandler(os.Stderr, opts)
+		handler = slog.NewTextHandler(w, opts)
 	}
 	slog.SetDefault(slog.New(handler))
 }

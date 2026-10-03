@@ -100,6 +100,11 @@ func newUninstallCmd() *cobra.Command {
 					return fmt.Errorf("removendo %s: %w", p, rerr)
 				}
 			}
+			// O log do serviço do Windows (e o anterior, do rodízio).
+			if logs := service.ArquivoDeLog(configFile); logs != configFile {
+				_ = os.Remove(logs)
+				_ = os.Remove(logs + ".1")
+			}
 			_ = os.Remove(filepath.Dir(configFile)) // só sai se ficou vazia
 			fmt.Fprintln(os.Stderr, "  ✓ Configuração, chave e identidade removidas:", strings.Join(arquivos, ", "))
 			aplicativos.RemoverEntrada(serviceName)

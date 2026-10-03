@@ -76,7 +76,7 @@ func installPlatform(_ context.Context, cfg *config.Config, opts Options) (*Inst
 		UnitPath:  strings.Join([]string{`HKLM\SYSTEM\CurrentControlSet\Services`, opts.Name}, `\`),
 		StartCmd:  RestartCommand(opts.Name, ScopeSystem),
 		StatusCmd: fmt.Sprintf("Get-Service %s", opts.Name),
-		LogsCmd:   fmt.Sprintf(`Get-EventLog -LogName Application -Source %s -Newest 50`, opts.Name),
+		LogsCmd:   fmt.Sprintf(`Get-Content -Tail 50 -Wait '%s'`, ArquivoDeLog(cfg.ConfigPath)),
 	}, nil
 }
 

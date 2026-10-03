@@ -159,6 +159,14 @@ O `curl.exe` vem no Windows 10 (1803+), 11 e Server 2019+. No Server 2016, use o
 O arquivo gravado (`/etc/arkame/agent.env`; no Windows `C:\etc\arkame\agent.env`)
 fica legível só pelo administrador (0600; no Windows, Administradores e SYSTEM).
 
+No Windows, o serviço grava o log ao lado da configuração, em
+`C:\etc\arkame\agent.log` (rodízio aos 10 MB; o anterior fica em
+`agent.log.1`) — o Visualizador de Eventos não tem nada do agente:
+
+```text
+powershell -Command "Get-Content -Tail 50 -Wait 'C:\etc\arkame\agent.log'"
+```
+
 Sem terminal (automação), grave o arquivo antes: o `install` testa a chave que
 estiver lá e para com a causa se o bucket recusar. `--check-storage=false` pula
 o teste.

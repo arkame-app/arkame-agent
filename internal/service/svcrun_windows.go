@@ -57,6 +57,12 @@ func (s *arkameService) Execute(args []string, r <-chan svc.ChangeRequest, chang
 	}
 }
 
+// EmServicoWindows diz se o processo foi iniciado pelo Service Control Manager.
+func EmServicoWindows() bool {
+	ok, err := svc.IsWindowsService()
+	return err == nil && ok
+}
+
 // RunAsService roda `run` sob o SCM quando o processo foi iniciado como serviço
 // do Windows. Retorna handled=false quando é execução normal de terminal, e aí
 // o chamador segue o caminho comum.

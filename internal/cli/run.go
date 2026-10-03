@@ -10,6 +10,7 @@ import (
 
 	"github.com/arkame-app/agent/internal/config"
 	"github.com/arkame-app/agent/internal/daemon"
+	"github.com/arkame-app/agent/internal/logarquivo"
 	"github.com/arkame-app/agent/internal/segredo"
 	"github.com/arkame-app/agent/internal/service"
 	"github.com/spf13/cobra"
@@ -52,6 +53,16 @@ func newRunCmd() *cobra.Command {
 					if perr := segredo.Proteger(p); perr != nil {
 						slog.Warn("não consegui restringir o acesso a um arquivo sensível", "path", p, "err", perr)
 					}
+				}
+			}
+
+			// Sob o SCM a saída de erro não vai a lugar nenhum: o log vai
+			// para um arquivo ao lado da configuração, com rodízio.
+			if service.EmServicoWindows() {
+				caminho := service.ArquivoDeLog(cfg.ConfigPath)
+				if w, lerr := logarquivo.Abrir(caminho, logarquivo.TamanhoPadrao); lerr == nil {
+					defer w.Close()
+					logPara(w)
 				}
 			}
 

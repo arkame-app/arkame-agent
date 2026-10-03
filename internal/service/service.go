@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -45,6 +46,14 @@ type Options struct {
 	BinaryPath string
 	// Start sobe o serviço logo após instalar.
 	Start bool
+}
+
+// ArquivoDeLog é onde o serviço do Windows grava o log: ao lado do arquivo de
+// configuração, com o mesmo nome e extensão .log (C:\etc\arkame\agent.log).
+// Pela configuração, e não pelo nome do serviço: o SCM chama `run --config …`
+// sem o --service-name, e cada agente da máquina tem o seu arquivo.
+func ArquivoDeLog(configPath string) string {
+	return strings.TrimSuffix(configPath, filepath.Ext(configPath)) + ".log"
 }
 
 // Installed descreve o que foi criado, para a CLI poder dizer ao operador

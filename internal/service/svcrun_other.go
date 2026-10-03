@@ -10,3 +10,6 @@ import "context"
 func RunAsService(_ string, _ func(context.Context) error) (handled bool, err error) {
 	return false, nil
 }
+
+// EmServicoWindows: fora do Windows, nunca.
+func EmServicoWindows() bool { return false }
