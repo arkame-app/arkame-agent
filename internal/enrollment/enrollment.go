@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"net/url"
 	"os"
 	"strings"
@@ -172,6 +173,13 @@ func WaitForApproval(ctx context.Context, cfg *config.Config, waitURL string) (*
 			slog.Debug("long-poll: ainda pending, reabrindo")
 		case errors.Is(err, api.ErrGone):
 			return nil, fmt.Errorf("agent rejeitado ou arquivado pelo painel")
+		case jaEmitido(err):
+			// 409 token_already_issued: o token deste enrollment já foi
+			// entregue (a outra execução, ou a uma tentativa interrompida) e
+			// não sai de novo. Reabrir não muda a resposta — antes o agente
+			// ficava nisto para sempre, calado (log em Debug).
+			return nil, errors.New("o painel já entregou o token deste código de instalação e não o entrega de novo: " +
+				"gere um código novo no painel (Servidores → ⋯ → Reinstalar) e rode a instalação com ele")
 		default:
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
@@ -184,6 +192,13 @@ func WaitForApproval(ctx context.Context, cfg *config.Config, waitURL string) (*
 			}
 		}
 	}
+}
+
+// jaEmitido diz se o wait-token respondeu 409: o token já foi emitido para
+// este enrollment (token_already_issued).
+func jaEmitido(err error) bool {
+	var he *api.HTTPError
+	return errors.As(err, &he) && he.Status == http.StatusConflict
 }
 
 // persistirNoArquivo grava a identidade que o enrollment devolveu no
