@@ -143,25 +143,37 @@ func mesmoArmazenamento(a, b *config.Config) bool {
 }
 
 func newCheckStorageCmd() *cobra.Command {
-	var configFile string
+	var configFile, serviceName, serviceScope string
 	cmd := &cobra.Command{
 		Use:   "check-storage",
 		Short: "Testa se esta máquina alcança o bucket com a chave do arquivo de configuração",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			// Como no status: sem --config, o arquivo do serviço. Lia só o
+			// padrão, e no agente sem root ou num segundo agente testava a
+			// chave de outro (ou de nenhum) arquivo.
+			configFile, err := configDoAgente(cmd, configFile, serviceName, serviceScope)
+			if err != nil {
+				return err
+			}
 			cfg, err := config.Load(configFile, config.Overrides{})
 			if err != nil {
 				return fmt.Errorf("carregando config: %w", err)
 			}
-			if err := storage.Check(cmd.Context(), cfg); err != nil {
+			fmt.Fprintln(cmd.ErrOrStderr(), "  Arquivo:", configFile)
+			if err := checarStorage(cmd.Context(), cfg); err != nil {
 				return fmt.Errorf("✗ %s\n  (%v)", storage.Causa(err), err)
 			}
-			fmt.Fprintln(os.Stderr, "  ✓ O bucket", cfg.StorageBucket, "aceitou a chave.")
+			fmt.Fprintln(cmd.ErrOrStderr(), "  ✓ O bucket", cfg.StorageBucket, "aceitou a chave.")
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&configFile, "config", config.DefaultPath, "arquivo de configuração")
+	flagsDoServico(cmd, &serviceName, &serviceScope)
 	return cmd
 }
+
+// checarStorage é o teste do bucket do check-storage; os testes o trocam.
+var checarStorage = storage.Check
 
 func newSetStorageKeysCmd() *cobra.Command {
 	var (
