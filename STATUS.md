@@ -39,15 +39,22 @@ Binário Linux rodando local contra o painel em produção (`save.arkame.app`) +
 
 ## O que está pronto
 
-> Atualizado em 2026-10-03 conferindo o código (v0.4.9). As seções datadas acima são
+> Atualizado em 2026-10-03 conferindo o código (v0.4.10). As seções datadas acima são
 > registro histórico e podem descrever comportamento que já mudou.
+>
+> **Na próxima (0.4.11, ainda sem tag):** o relato da sondagem passa a levar
+> `noncurrent_expiration_days` e `noncurrent_transitions` (prometidos desde a 0.4.10 e
+> que não saíam do agente) e os campos novos `lifecycle_error` / `object_lock_error`
+> (leitura negada ≠ bucket sem regra); a unit do systemd põe aspas no `--config` e
+> escapa `%`; o serviço do sistema (root) recusa programa que outro usuário pode trocar
+> (Linux e macOS), e o `install.sh` com o programa no home sugere o install sem sudo.
 
 - **Enrollment Ed25519**: `internal/enrollment` gera keypair, POST `/api/agents/enroll`, long-poll na `wait-token` até receber JWT bearer
 - **Bearer auth**: client HTTP envia `Authorization: Bearer <token>` em todos os requests pós-approval; `ErrNotReady` (204) e `ErrGone` (410) pra long-poll handling
 - **Persistência local**: escopo system em `/etc/arkame/` — `token.jwt` (0600) + `key.pem` (0600) + `agent.id`, ao lado de `agent.env`; escopo user (instalação sem root e sem `--config`, fora do Windows) em `~/.config/arkame/` (ou `$XDG_CONFIG_HOME/arkame/`), com os mesmos arquivos
 - **Daemon completo** (`internal/daemon/daemon.go`), 6 loops paralelos:
   - Loop heartbeat a cada `HEARTBEAT_INTERVAL_SEC` (padrão 60s) `/api/agents/{id}/heartbeat`, gravando o token renovado que vier na resposta
-  - Loop probe 1h + on-demand (conferido a cada 30s em `/probe-request`): `storage.Probe` → POST `/probe` (versioning, object_lock, lifecycle, uso)
+  - Loop probe 1h + on-demand (conferido a cada 30s em `/probe-request`): `storage.Probe` → POST `/probe` (versioning, object_lock, lifecycle, noncurrent_*, uso e, se a leitura falhou por outro motivo que "não há", `lifecycle_error`/`object_lock_error`)
   - Loop plans a cada `POLL_INTERVAL_SEC` (padrão 60s): GET `/plans` → `scheduler.ShouldRun` → `executePlan` (backup)
   - Loop restore a cada `POLL_INTERVAL_SEC`: GET `/restore-items` → PATCH running → `restore.Run` → PATCH complete/failed
   - Loop do explorador de pastas (long-poll): lista pastas para o painel (`internal/fsbrowse`)
