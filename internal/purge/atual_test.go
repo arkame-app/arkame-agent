@@ -87,3 +87,61 @@ func TestDesbasteChaveSemVersaoAtual(t *testing.T) {
 		t.Fatalf("deleted=%+v failed=%+v", deleted, failed)
 	}
 }
+
+// deleted_file: o arquivo saiu da origem e o cliente desligou "manter a última
+// versão de arquivos apagados". O painel manda a versão atual para apagar, e
+// o agent obedece como no hard_delete.
+func TestArquivoApagadoApagaVersaoAtual(t *testing.T) {
+	f, c := novoS3Falso(t)
+	key := "arkame/data/agente/removido.txt"
+	f.versoes[key] = []string{"v1", "v2"} // v2 é a atual
+
+	deleted, failed := Run(context.Background(), Options{S3: c, Bucket: "b", PrefixRoot: "arkame/"},
+		[]Version{{Key: key, VersionID: "v2", Reason: "deleted_file"}})
+
+	if len(failed) != 0 || len(deleted) != 1 || f.existe(key, "v2") {
+		t.Fatalf("deleted_file deveria apagar a atual: deleted=%+v failed=%+v", deleted, failed)
+	}
+	if !f.existe(key, "v1") {
+		t.Fatal("a versão fora do plano sumiu")
+	}
+}
+
+// deleted_file continua passando pelas travas de VersionId e prefixo.
+func TestArquivoApagadoExigeVersaoEPrefixo(t *testing.T) {
+	f, c := novoS3Falso(t)
+	f.versoes["arkame/data/a.txt"] = []string{"v1"}
+	f.versoes["outro/b.txt"] = []string{"v1"}
+
+	deleted, failed := Run(context.Background(), Options{S3: c, Bucket: "b", PrefixRoot: "arkame/"},
+		[]Version{
+			{Key: "arkame/data/a.txt", VersionID: "", Reason: "deleted_file"},
+			{Key: "outro/b.txt", VersionID: "v1", Reason: "deleted_file"},
+		})
+
+	if len(deleted) != 0 || len(failed) != 2 {
+		t.Fatalf("esperava as duas recusadas: deleted=%+v failed=%+v", deleted, failed)
+	}
+	if !f.existe("arkame/data/a.txt", "v1") || !f.existe("outro/b.txt", "v1") {
+		t.Fatal("um item recusado mexeu no bucket")
+	}
+}
+
+// Motivo que o agent não conhece é recusado: um painel mais novo não pode
+// apagar a versão atual por uma regra que este agent nunca viu.
+func TestMotivoDesconhecidoRecusado(t *testing.T) {
+	f, c := novoS3Falso(t)
+	key := "arkame/data/agente/c.txt"
+	f.versoes[key] = []string{"v1"}
+
+	for _, motivo := range []string{"", "purge_all", "Thinning"} {
+		deleted, failed := Run(context.Background(), Options{S3: c, Bucket: "b", PrefixRoot: "arkame/"},
+			[]Version{{Key: key, VersionID: "v1", Reason: motivo}})
+		if len(deleted) != 0 || !f.existe(key, "v1") {
+			t.Fatalf("motivo %q apagou a versão atual", motivo)
+		}
+		if len(failed) != 1 || !strings.Contains(failed[0].Error, "motivo desconhecido") {
+			t.Fatalf("motivo %q: esperava recusa clara, veio %+v", motivo, failed)
+		}
+	}
+}

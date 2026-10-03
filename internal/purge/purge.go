@@ -17,7 +17,13 @@
 //     versão atual de arquivos que não mudavam — apagá-la deixaria a chave sem
 //     a cópia do estado presente. O agent confere com HeadObject (sem
 //     VersionId) antes de apagar. "hard_delete" (o arquivo saiu da origem e
-//     passou do prazo) apaga a atual de propósito e não passa por aqui.
+//     passou do prazo) e "deleted_file" (o arquivo saiu da origem e o cliente
+//     desligou "manter a última versão de arquivos apagados") apagam a atual
+//     de propósito e não passam por aqui — mas continuam exigindo o VersionId
+//     exato e o prefixo.
+//   - item com motivo desconhecido é recusado. Um painel mais novo pode
+//     inventar um motivo cuja regra este agent não conhece; apagar sem saber
+//     a regra é apostar com o dado do cliente.
 //
 // Um item recusado volta como falha, com o motivo. O painel registra e
 // ninguém descobre meses depois que a limpeza estava apagando o que não devia.
@@ -147,8 +153,13 @@ func Run(ctx context.Context, o Options, versions []Version) (deleted []Version,
 	return deleted, failed
 }
 
-// motivoDesbaste é o Reason dos itens que só podem ser versões antigas.
-const motivoDesbaste = "thinning"
+// Motivos que o painel manda. Só o desbaste é restrito a versões antigas; os
+// outros dois apagam a versão atual de propósito.
+const (
+	motivoDesbaste       = "thinning"
+	motivoHardDelete     = "hard_delete"
+	motivoArquivoApagado = "deleted_file"
+)
 
 // protegerVersaoAtual recusa os itens de desbaste que apontam para a versão
 // atual da chave. Um HeadObject por chave (sem VersionId) diz qual é a atual.
@@ -223,6 +234,11 @@ func validar(o Options, v Version) error {
 	}
 	if o.PrefixRoot != "" && !strings.HasPrefix(v.Key, o.PrefixRoot) {
 		return fmt.Errorf("key fora do prefixo do storage (%s)", o.PrefixRoot)
+	}
+	switch v.Reason {
+	case motivoDesbaste, motivoHardDelete, motivoArquivoApagado:
+	default:
+		return fmt.Errorf("motivo desconhecido (%q): este agent não sabe a regra e não apaga", v.Reason)
 	}
 	return nil
 }

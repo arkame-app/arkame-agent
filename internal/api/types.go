@@ -268,7 +268,7 @@ type PurgePlanVersion struct {
 	Key       string `json:"key"`
 	VersionID string `json:"version_id"`
 	Size      int64  `json:"size"`
-	Reason    string `json:"reason"` // thinning | hard_delete
+	Reason    string `json:"reason"` // thinning | hard_delete | deleted_file
 }
 
 // PurgePlanResponse é a resposta de GET /api/agents/{id}/purge-plan.

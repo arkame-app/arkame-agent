@@ -174,7 +174,7 @@ func TestRunRecusaItemSemVersionID(t *testing.T) {
 	subir(t, c, bucket, key, "conteúdo")
 
 	deleted, failed := Run(context.Background(), Options{S3: c, Bucket: bucket, PrefixRoot: "arkame/"},
-		[]Version{{Key: key, VersionID: "", Size: 8}})
+		[]Version{{Key: key, VersionID: "", Size: 8, Reason: "hard_delete"}})
 
 	if len(deleted) != 0 {
 		t.Fatal("apagou item sem version_id")
@@ -201,7 +201,7 @@ func TestRunRecusaKeyForaDoPrefixo(t *testing.T) {
 	id := subir(t, c, bucket, key, "declaração")
 
 	deleted, failed := Run(context.Background(), Options{S3: c, Bucket: bucket, PrefixRoot: "arkame/"},
-		[]Version{{Key: key, VersionID: id, Size: 10}})
+		[]Version{{Key: key, VersionID: id, Size: 10, Reason: "hard_delete"}})
 
 	if len(deleted) != 0 {
 		t.Fatal("apagou objeto fora do prefixo do storage")
@@ -223,7 +223,7 @@ func TestRunSeguraQuandoAVersãoJáNãoExiste(t *testing.T) {
 	// versão já saiu. O S3 trata como sucesso, e é o comportamento que
 	// queremos — reentregar um plano depois de um reinício não pode virar
 	// uma enxurrada de erros.
-	plano := []Version{{Key: key, VersionID: id, Size: 4}}
+	plano := []Version{{Key: key, VersionID: id, Size: 4, Reason: "hard_delete"}}
 	opts := Options{S3: c, Bucket: bucket, PrefixRoot: "arkame/"}
 
 	if _, failed := Run(context.Background(), opts, plano); len(failed) != 0 {
@@ -248,7 +248,7 @@ func TestRunEmLoteMaiorQueOTeto(t *testing.T) {
 	for i := 0; i < total; i++ {
 		key := fmt.Sprintf("arkame/data/agente/lote/%04d.bin", i)
 		id := subir(t, c, bucket, key, "x")
-		plano = append(plano, Version{Key: key, VersionID: id, Size: 1})
+		plano = append(plano, Version{Key: key, VersionID: id, Size: 1, Reason: "hard_delete"})
 	}
 
 	deleted, failed := Run(context.Background(), Options{S3: c, Bucket: bucket, PrefixRoot: "arkame/"}, plano)
@@ -278,8 +278,10 @@ func TestValidaSemBucket(t *testing.T) {
 		{"sem version id", Version{Key: "arkame/a"}, "arkame/", true},
 		{"sem key", Version{VersionID: "v1"}, "arkame/", true},
 		{"fora do prefixo", Version{Key: "outro/a", VersionID: "v1"}, "arkame/", true},
-		{"ok", Version{Key: "arkame/a", VersionID: "v1"}, "arkame/", false},
-		{"sem prefixo configurado", Version{Key: "qualquer", VersionID: "v1"}, "", false},
+		{"ok", Version{Key: "arkame/a", VersionID: "v1", Reason: "thinning"}, "arkame/", false},
+		{"sem motivo", Version{Key: "arkame/a", VersionID: "v1"}, "arkame/", true},
+		{"motivo desconhecido", Version{Key: "arkame/a", VersionID: "v1", Reason: "tudo"}, "arkame/", true},
+		{"sem prefixo configurado", Version{Key: "qualquer", VersionID: "v1", Reason: "hard_delete"}, "", false},
 	}
 	for _, c := range casos {
 		err := validar(Options{PrefixRoot: c.prefx}, c.v)
