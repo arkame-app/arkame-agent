@@ -1,9 +1,12 @@
 package cli
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -125,11 +128,15 @@ func discoDoSistema() string {
 // copiarPrograma copia para o destino por um arquivo temporário ao lado, e
 // troca de uma vez: um programa pela metade nunca fica no lugar do bom. O
 // programa em uso (o serviço rodando) não pode ser sobrescrito no Windows,
-// mas pode ser renomeado: vai para .old, e sai na próxima vez.
+// mas pode ser renomeado: vai para .old, e sai na próxima vez. Se o .old
+// anterior ainda estiver em uso (um segundo agente roda o mesmo exe, ou a
+// janela foi fechada no meio do setup), o rename não o substitui — volta
+// "Access is denied" —, e o atual sai com um nome único, como no install.ps1.
 func copiarPrograma(de, para string) error {
 	if err := os.MkdirAll(filepath.Dir(para), 0o755); err != nil {
 		return err
 	}
+	limparAntigos(para)
 	origem, err := os.Open(de)
 	if err != nil {
 		return err
@@ -149,8 +156,7 @@ func copiarPrograma(de, para string) error {
 		_ = os.Remove(tmp)
 		return err
 	}
-	antigo := para + ".old"
-	_ = os.Remove(antigo)
+	antigo := nomeDoAntigo(para)
 	if _, err := os.Stat(para); err == nil {
 		if err := os.Rename(para, antigo); err != nil {
 			_ = os.Remove(tmp)
@@ -164,4 +170,31 @@ func copiarPrograma(de, para string) error {
 	}
 	_ = os.Remove(antigo) // em uso, fica para a próxima
 	return nil
+}
+
+// limparAntigos tira os .old e .old-<aleatório> de trocas anteriores ao lado
+// do programa. O que ainda estiver em uso não sai, e fica para a próxima.
+func limparAntigos(para string) {
+	entradas, err := os.ReadDir(filepath.Dir(para))
+	if err != nil {
+		return
+	}
+	base := filepath.Base(para) + ".old"
+	for _, e := range entradas {
+		if n := e.Name(); n == base || strings.HasPrefix(n, base+"-") {
+			_ = os.Remove(filepath.Join(filepath.Dir(para), n))
+		}
+	}
+}
+
+// nomeDoAntigo é para onde o programa atual sai: .old, ou .old-<aleatório>
+// quando um .old que não saiu na limpeza (em uso) ainda ocupa o nome.
+func nomeDoAntigo(para string) string {
+	antigo := para + ".old"
+	if _, err := os.Lstat(antigo); errors.Is(err, fs.ErrNotExist) {
+		return antigo
+	}
+	b := make([]byte, 8)
+	_, _ = rand.Read(b) // nunca falha (crypto/rand, Go 1.24+)
+	return antigo + "-" + hex.EncodeToString(b)
 }
