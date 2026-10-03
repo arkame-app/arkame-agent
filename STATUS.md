@@ -73,7 +73,7 @@ Repo público (Apache 2.0) em [`arkame-app/arkame-agent`](https://github.com/ark
 
 ```bash
 cd ~/hugo-projects/arkame-agent
-docker run --rm -v "$PWD:/src" -w /src golang:1.24-alpine sh -c "go build ./..."
+docker run --rm -v "$PWD:/src" -w /src golang:1.25-alpine sh -c "go build ./..."
 ```
 
 ## Veja também
