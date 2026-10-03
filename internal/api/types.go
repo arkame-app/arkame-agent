@@ -107,6 +107,12 @@ type HeartbeatRequest struct {
 	// mostrar o comando exato de reinício quando ele cair. Vazio se rodando à mão.
 	ServiceName  string `json:"service_name,omitempty"`
 	ServiceScope string `json:"service_scope,omitempty"`
+	// ProgramPath: o executável deste agente, com links resolvidos. O
+	// instalador nem sempre o põe em /usr/local/bin (com root e um
+	// /usr/local/bin que não é só do root, vai a /opt/arkame/bin), e o painel
+	// precisa do caminho real para montar o comando de trocar a chave. Vazio
+	// se o SO não disse.
+	ProgramPath string `json:"program_path,omitempty"`
 }
 
 // HeartbeatResponse é a resposta do heartbeat.

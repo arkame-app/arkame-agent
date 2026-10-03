@@ -104,6 +104,7 @@ func enviarHeartbeat(ctx context.Context, c *api.Client, cfg *config.Config, svc
 		ReportedAt:   time.Now().UTC(),
 		ServiceName:  svc.Name,
 		ServiceScope: svc.Scope,
+		ProgramPath:  service.ProgramaAtual(),
 	}
 	var resp api.HeartbeatResponse
 	if err := c.POST(ctx, "/api/agents/"+cfg.AgentID+"/heartbeat", hb, &resp); err != nil {

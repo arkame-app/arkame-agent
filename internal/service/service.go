@@ -137,7 +137,7 @@ func RestartCommand(name string, scope Scope) string {
 // Esse serviço o uninstall já reconhece pelo programa (servicosDoAgente).
 func ValidarNome(name string) error {
 	return validarNome(name, func(n string) bool {
-		return servicoChamaPrograma(n, programaAtual())
+		return servicoChamaPrograma(n, ProgramaAtual())
 	})
 }
 
@@ -166,12 +166,12 @@ func validarNome(name string, existente func(string) bool) error {
 // qualquer nome (backup-oci), e o uninstall de outro agente apagava o
 // programa de que esse serviço depende.
 func OutrosAgentes(name string) []string {
-	return outrosEntre(runtime.GOOS, servicosDoAgente(programaAtual()), name)
+	return outrosEntre(runtime.GOOS, servicosDoAgente(ProgramaAtual()), name)
 }
 
-// programaAtual é o executável deste processo, com links resolvidos. Vazio
-// quando o SO não diz.
-func programaAtual() string {
+// ProgramaAtual é o executável deste processo, com links resolvidos. Vazio
+// quando o SO não diz. Vai ao painel no heartbeat (program_path).
+func ProgramaAtual() string {
 	exe, err := os.Executable()
 	if err != nil {
 		return ""

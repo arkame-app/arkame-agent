@@ -37,8 +37,9 @@ the user's own key, which is never sent anywhere else. To the Arkame panel it
 sends only what is needed to follow and restore the backups (section 3 of the
 [privacy policy](https://arkame.app/privacidade)): the server name, operating
 system, agent version and IP address; how it was installed (`install_method`:
-Docker or binary) and the service it runs as (`service_name`,
-`service_scope`); periodic heartbeats; bucket connection test results; when a
+Docker or binary), the service it runs as (`service_name`,
+`service_scope`) and the path of the agent program (`program_path`); periodic
+heartbeats; bucket connection test results; when a
 plan's pre- or post-backup command fails, up to 8 KB of that command's output;
 each backup's file index — path and name, size, modification date, SHA-256 and
 bucket version; and, when the user browses folders while creating a plan in
