@@ -106,7 +106,20 @@ Binário Linux rodando local contra o painel em produção (`save.arkame.app`) +
 > com código: o `setup` reinicia, logo depois de trocar o exe, os outros serviços que o
 > rodavam (menos o `arkame-agent`, que o `install` re-registra), e o `install.ps1
 > -Token` faz isso depois do `install` (menos o `-ServiceName`, salvo com `-NoService`);
-> os que falham saem num aviso.
+> os que falham saem num aviso. Se o `install` não termina (chave errada ou cancelada,
+> código vencido), ele não re-registra o serviço principal, que seguia no `.old` sem
+> aviso: o `install.ps1 -Token` passa a reiniciar também o `-ServiceName`, e o `setup`
+> avisa o `install` (flag oculta `--restart-on-failure=arkame-agent`, só quando o
+> serviço rodava o programa trocado), que o reinicia ao sair com erro. O que não
+> reinicia sai no aviso "Continuam na versão antiga".
+>
+> Plano de outro armazenamento (`storage.id` do `/plans` diferente do `STORAGE_ID` do
+> processo, e bucket fora de `SIBLING_BUCKETS`) não roda mais: o agente abre a sessão e
+> a falha logo em seguida (`/sessions/{sid}/fail`, `error_code` `wrong_storage`, com os
+> dois armazenamentos na mensagem), sem comando de antes nem envio. Antes, o backup
+> subia com a chave, a região e o endpoint do armazenamento instalado para um bucket
+> cuja restauração o próprio agente recusa (`wrong_bucket`) e cuja retenção ninguém
+> consulta. Sem `STORAGE_ID` (instalação antiga) ou sem id no plano, roda como antes.
 >
 > O `install.sh` não apaga mais o programa antes de copiar o novo: copia para
 > `.arkame-agent.novo.<pid>` na mesma pasta e troca por `mv -f`. Se a cópia falha (disco
