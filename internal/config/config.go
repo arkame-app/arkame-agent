@@ -50,7 +50,7 @@ type Config struct {
 	AgentIDPath    string // /etc/arkame/agent.id — agent_id persistido após enrollment (configurável p/ rootless)
 
 	// Filesystem
-	HostRoot string // raiz da máquina; em container Docker vira /host (read-only)
+	HostRoot string // raiz da máquina; em container Docker vira /host (leitura e escrita: a restauração grava no servidor)
 
 	// Storage BYOS — credenciais que NUNCA saem desta máquina
 	StorageAccessKey string
