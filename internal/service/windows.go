@@ -95,17 +95,31 @@ func servicosDoAgente(exe string) []string {
 	}
 	var nomes []string
 	for _, n := range todos {
-		if strings.HasPrefix(strings.ToLower(n), DefaultName) || servicoChamaPrograma(m, n, exe) {
+		if strings.HasPrefix(strings.ToLower(n), DefaultName) || servicoNoSCMChamaPrograma(m, n, exe) {
 			nomes = append(nomes, n)
 		}
 	}
 	return nomes
 }
 
-// servicoChamaPrograma diz se o BinaryPathName do serviço roda o programa
-// exe. Abre só com SERVICE_QUERY_CONFIG: o mgr.OpenService pede acesso total,
-// que serviços do sistema negam.
-func servicoChamaPrograma(m *mgr.Mgr, nome, exe string) bool {
+// servicoChamaPrograma diz se há no SCM um serviço nome que roda o programa
+// exe.
+func servicoChamaPrograma(nome, exe string) bool {
+	if exe == "" {
+		return false
+	}
+	m, err := mgr.Connect()
+	if err != nil {
+		return false
+	}
+	defer m.Disconnect()
+	return servicoNoSCMChamaPrograma(m, nome, exe)
+}
+
+// servicoNoSCMChamaPrograma diz se o BinaryPathName do serviço roda o
+// programa exe. Abre só com SERVICE_QUERY_CONFIG: o mgr.OpenService pede
+// acesso total, que serviços do sistema negam.
+func servicoNoSCMChamaPrograma(m *mgr.Mgr, nome, exe string) bool {
 	if exe == "" {
 		return false
 	}

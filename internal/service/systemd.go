@@ -219,6 +219,26 @@ func unitsDoAgente(dirs []string, exe string) []string {
 	return nomes
 }
 
+// servicoChamaPrograma diz se há uma unit nome, do sistema ou do usuário,
+// que roda o programa exe.
+func servicoChamaPrograma(nome, exe string) bool {
+	dirs := []string{"/etc/systemd/system"}
+	if d, err := userUnitDir(); err == nil {
+		dirs = append(dirs, d)
+	}
+	return unitEmChamaPrograma(dirs, nome, exe)
+}
+
+// unitEmChamaPrograma procura a unit nome nas pastas dadas.
+func unitEmChamaPrograma(dirs []string, nome, exe string) bool {
+	for _, d := range dirs {
+		if unitChamaPrograma(filepath.Join(d, nome+".service"), exe) {
+			return true
+		}
+	}
+	return false
+}
+
 // unitChamaPrograma diz se o ExecStart da unit roda o programa exe.
 func unitChamaPrograma(arquivo, exe string) bool {
 	if exe == "" {

@@ -114,17 +114,30 @@ func RestartCommand(name string, scope Scope) string {
 	return strings.TrimPrefix(cmd, "powershell -NoProfile -Command ")
 }
 
-// ValidarNome confere o nome de um serviço novo. Além da forma aceita pelo
-// SO, exige o prefixo arkame-agent: é por ele que o uninstall reconhece os
-// outros agentes da máquina — e um agente que ele não reconhece perde o
-// programa que divide com os outros.
+// ValidarNome confere o nome de um serviço. Além da forma aceita pelo SO,
+// exige o prefixo arkame-agent de um serviço novo: é por ele que o uninstall
+// reconhece os outros agentes da máquina — e um agente que ele não reconhece
+// perde o programa que divide com os outros.
+//
+// O prefixo não vale para o serviço que já existe com esse nome e chama este
+// mesmo programa: até a v0.4.3 o install aceitava qualquer nome (backup-oci),
+// e `service install --name backup-oci` para reinstalar em cima era recusado.
+// Esse serviço o uninstall já reconhece pelo programa (servicosDoAgente).
 func ValidarNome(name string) error {
+	return validarNome(name, func(n string) bool {
+		return servicoChamaPrograma(n, programaAtual())
+	})
+}
+
+// validarNome é o ValidarNome com a consulta ao SO trocável: existente diz se
+// já há um serviço com o nome que chama este programa.
+func validarNome(name string, existente func(string) bool) error {
 	if !nameRe.MatchString(name) {
 		return fmt.Errorf(
 			"nome de serviço inválido %q: use minúsculas, números, ponto, hífen ou underscore (até 63 caracteres)",
 			name)
 	}
-	if !strings.HasPrefix(name, DefaultName) {
+	if !strings.HasPrefix(name, DefaultName) && !existente(name) {
 		return fmt.Errorf(
 			"nome de serviço %q não começa com %q: use, por exemplo, %s-%s (é por esse prefixo que o agente reconhece os outros agentes desta máquina)",
 			name, DefaultName, DefaultName, strings.TrimPrefix(name, "arkame-"))
@@ -288,6 +301,24 @@ func configDoPlist(conteudo string) string {
 		resto = resto[j+len("</string>"):]
 	}
 	return configDosArgs(args)
+}
+
+// programaDoPlist lê o programa (o primeiro item do ProgramArguments) de um
+// plist gerado pelo agente. Vazio quando não há.
+func programaDoPlist(conteudo string) string {
+	_, resto, ok := strings.Cut(conteudo, "<key>ProgramArguments</key>")
+	if !ok {
+		return ""
+	}
+	_, resto, ok = strings.Cut(resto, "<string>")
+	if !ok {
+		return ""
+	}
+	v, _, ok := strings.Cut(resto, "</string>")
+	if !ok {
+		return ""
+	}
+	return xmlUnescape(v)
 }
 
 // configDosArgs acha o valor de --config (separado ou com =).

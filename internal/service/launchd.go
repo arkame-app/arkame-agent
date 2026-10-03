@@ -103,6 +103,25 @@ func servicosDoAgente(string) []string {
 	return nomes
 }
 
+// servicoChamaPrograma diz se há um plist do serviço nome, do sistema ou do
+// usuário, que roda o programa exe.
+func servicoChamaPrograma(nome, exe string) bool {
+	if exe == "" {
+		return false
+	}
+	dirs := []string{"/Library/LaunchDaemons"}
+	if h, err := os.UserHomeDir(); err == nil {
+		dirs = append(dirs, filepath.Join(h, "Library", "LaunchAgents"))
+	}
+	for _, d := range dirs {
+		b, err := os.ReadFile(filepath.Join(d, LaunchdLabel(nome)+".plist"))
+		if err == nil && mesmoPrograma("darwin", programaDoPlist(string(b)), exe) {
+			return true
+		}
+	}
+	return false
+}
+
 // configDoServico lê o --config do plist de um agente no escopo dado.
 func configDoServico(nome string, escopo Scope) (string, bool) {
 	var dir string

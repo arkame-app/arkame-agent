@@ -55,3 +55,29 @@ func TestUnitsDoAgentePeloPrograma(t *testing.T) {
 		t.Fatalf("sem programa: %v", got)
 	}
 }
+
+// A unit com o nome legado conta como existente só se chama este programa.
+func TestUnitEmChamaPrograma(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "arkame-agent")
+	if err := os.WriteFile(bin, []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	units := filepath.Join(dir, "units")
+	if err := os.MkdirAll(units, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for nome, exec := range map[string]string{"backup-oci": bin, "nginx": "/usr/sbin/nginx"} {
+		u := "[Service]\nExecStart=" + exec + " run --config /etc/arkame/x.env\n"
+		if err := os.WriteFile(filepath.Join(units, nome+".service"), []byte(u), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dirs := []string{filepath.Join(dir, "vazia"), units}
+	if !unitEmChamaPrograma(dirs, "backup-oci", bin) {
+		t.Fatal("backup-oci chama o programa")
+	}
+	if unitEmChamaPrograma(dirs, "nginx", bin) || unitEmChamaPrograma(dirs, "nao-existe", bin) || unitEmChamaPrograma(dirs, "backup-oci", "") {
+		t.Fatal("só a unit que chama o programa conta")
+	}
+}
