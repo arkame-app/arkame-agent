@@ -189,6 +189,18 @@ Na instalação sem root (`--service-scope user`, o padrão de quem roda sem
 sudo), sem `--config`, o arquivo é `$XDG_CONFIG_HOME/arkame/agent.env`
 (`~/.config/arkame/agent.env`), com o token, a chave e o agent.id ao lado.
 
+O serviço do sistema (instalação com sudo) roda como root, e o `install` recusa
+registrá-lo se o programa, ou alguma pasta acima dele, não for do root ou puder
+ser gravado por outro usuário (grupo ou outros; o grupo do root vale): quem
+trocasse o arquivo viraria root no próximo reinício do serviço. É o caso de
+`~/.local/bin`, onde o `install.sh` sem sudo põe o programa. Com o programa no
+home, instale sem sudo (`~/.local/bin/arkame-agent install --token=atk_...`,
+escopo user) ou rode o instalador com sudo, que o põe em `/usr/local/bin`. No
+macOS (LaunchDaemon) vale o mesmo — inclusive para um `/usr/local/bin` cujo
+dono é o seu usuário, como deixa o Homebrew em Macs Intel; nesse caso, escolha
+outra pasta do root:
+`curl -fsSL https://get.arkame.app/install.sh | sudo env ARKAME_BIN_DIR=/opt/arkame/bin sh -s -- --token=atk_...`.
+
 No Windows, o serviço grava o log ao lado da configuração, em
 `C:\etc\arkame\agent.log` (rodízio aos 10 MB; o anterior fica em
 `agent.log.1`) — o Visualizador de Eventos não tem nada do agente:

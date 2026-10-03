@@ -82,6 +82,10 @@ agent_id existente, preservando histórico e path no bucket.`,
 				if err := service.ValidarNome(serviceName); err != nil {
 					return err
 				}
+				// Pelo mesmo motivo, o programa que um serviço root chamaria.
+				if err := conferirDonoDoPrograma(service.Scope(serviceScope), ""); err != nil {
+					return err
+				}
 			}
 			ctx := cmd.Context()
 			if !cmd.Flags().Changed("config") {
@@ -314,6 +318,9 @@ var errSemEspera = errors.New("--wait=false não é aceito: a identidade nova s�
 
 // instalarServico é o service.Install; os testes o trocam.
 var instalarServico = service.Install
+
+// conferirDonoDoPrograma é o service.ConferirPrograma, trocável nos testes.
+var conferirDonoDoPrograma = service.ConferirPrograma
 
 // mantém contexto disponível para testes
 var _ = context.Background
