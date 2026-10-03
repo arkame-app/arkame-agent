@@ -362,7 +362,7 @@ Núcleo funcional entregue. Itens concluídos e pendências de hardening:
 - [ ] Self-update (agente baixa nova versão quando painel sinaliza)
 - [ ] mTLS hardening (fase 2) — substituir bearer JWT mantendo o contrato atual
 - [ ] Snapshot orquestrado (LVM / VSS / btrfs) — fora do escopo atual (PLAN.md), pode voltar como plugin
-- [ ] Testes: integration com MinIO local (scheduler já tem unit)
+- [x] Testes de integração contra S3 de verdade: a CI e a release rodam `go test -race ./...` com um RustFS 1.0.0 local (o MinIO deixou de ser baixável em 24/09)
 - [ ] Observabilidade: métricas Prometheus + traces OTEL (endpoint opcional)
 
 ## Contribuindo

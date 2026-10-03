@@ -39,15 +39,25 @@ Binário Linux rodando local contra o painel em produção (`save.arkame.app`) +
 
 ## O que está pronto
 
-> Atualizado em 2026-10-03 conferindo o código (v0.4.10). As seções datadas acima são
-> registro histórico e podem descrever comportamento que já mudou.
+> Atualizado em 2026-10-03 conferindo o código (v0.4.11, publicada em 03/10; tag no
+> `c7e95ab`). As seções datadas acima são registro histórico e podem descrever
+> comportamento que já mudou.
 >
-> **Na próxima (0.4.11, ainda sem tag):** o relato da sondagem passa a levar
-> `noncurrent_expiration_days` e `noncurrent_transitions` (prometidos desde a 0.4.10 e
-> que não saíam do agente) e os campos novos `lifecycle_error` / `object_lock_error`
-> (leitura negada ≠ bucket sem regra); a unit do systemd põe aspas no `--config` e
-> escapa `%`; o serviço do sistema (root; SYSTEM no Windows) recusa programa que outro usuário
-> pode trocar (Linux, macOS e, pela ACL, Windows), e o `install.sh` com o programa no home sugere o install sem sudo.
+> **Na v0.4.11:** o relato da sondagem leva `noncurrent_expiration_days` e
+> `noncurrent_transitions` (prometidos desde a 0.4.10 e que não saíam do agente) e os
+> campos novos `lifecycle_error` / `object_lock_error` (leitura negada ≠ bucket sem
+> regra); a unit do systemd põe aspas no `--config` e escapa `%`; o serviço do sistema
+> (root; SYSTEM no Windows) recusa programa que outro usuário pode trocar (Linux, macOS
+> e, pela ACL, Windows, onde o administrador que roda o install vale como dono), e o
+> `install.sh` com o programa no home sugere o install sem sudo.
+>
+> **Na próxima (sem tag):** arquivo e pasta novos da restauração ficam do dono da
+> pasta-mãe (no Windows, a DACL de segredo só na pasta de restauração nova, não no lugar
+> de origem); `install.sh` com root usa `/opt/arkame/bin` quando o `/usr/local/bin` não é
+> só do root (Homebrew em Mac Intel); o `setup` do Windows passa
+> `C:\Program Files\Arkame` aos Administradores (outro administrador reinstala); e
+> destino só de leitura (EROFS, `/etc` no serviço nativo) vai ao painel como
+> `read_only_destination`.
 
 - **Enrollment Ed25519**: `internal/enrollment` gera keypair, POST `/api/agents/enroll`, long-poll na `wait-token` até receber JWT bearer
 - **Bearer auth**: client HTTP envia `Authorization: Bearer <token>` em todos os requests pós-approval; `ErrNotReady` (204) e `ErrGone` (410) pra long-poll handling
