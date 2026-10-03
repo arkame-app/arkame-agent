@@ -141,11 +141,51 @@ func Run(ctx context.Context, opts Options, item api.RestoreItem) error {
 		return fmt.Errorf("sha256 mismatch: esperado=%s baixado=%s", item.SourceSha256, written.sha256)
 	}
 
+	// O CreateTemp cria com 0600, e o rename levava isso ao destino: todo
+	// arquivo restaurado ficava 0600 (e root:root, com o agente como root),
+	// inclusive por cima de um arquivo que o serviço do cliente lia com outro
+	// usuário. Por cima de um arquivo existente, herda o modo e o dono dele;
+	// arquivo novo fica 0644.
+	if err := ajustarPermissoes(tmpPath, finalPath); err != nil {
+		return err
+	}
+
 	if err := os.Rename(tmpPath, finalPath); err != nil {
 		return fmt.Errorf("rename tmp → final: %w", err)
 	}
 	cleanup = false
-	_ = os.Chtimes(finalPath, time.Now(), time.Now())
+	// A data do arquivo no backup, quando o painel a manda: a data de agora
+	// faz todo arquivo restaurado parecer recém-alterado (backup incremental,
+	// make, rsync e quem procura "o que mudou" passam a errar).
+	mtime := time.Now()
+	if item.SourceModifiedAt != nil && !item.SourceModifiedAt.IsZero() {
+		mtime = *item.SourceModifiedAt
+	}
+	_ = os.Chtimes(finalPath, time.Now(), mtime)
+	return nil
+}
+
+// modoDeArquivoNovo é o modo de um arquivo restaurado que não substitui outro.
+const modoDeArquivoNovo os.FileMode = 0o644
+
+// ajustarPermissoes dá ao temporário o modo (e, como root fora do Windows, o
+// dono) do arquivo que ele vai substituir; sem arquivo regular no destino,
+// modoDeArquivoNovo.
+func ajustarPermissoes(tmpPath, finalPath string) error {
+	modo := modoDeArquivoNovo
+	existente, err := os.Lstat(finalPath)
+	regular := err == nil && existente.Mode().IsRegular()
+	if regular {
+		modo = existente.Mode() & (os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky)
+	}
+	if err := os.Chmod(tmpPath, modo); err != nil {
+		return fmt.Errorf("chmod %s: %w", tmpPath, err)
+	}
+	if regular {
+		if err := copiarDono(tmpPath, existente); err != nil {
+			return fmt.Errorf("chown %s: %w", tmpPath, err)
+		}
+	}
 	return nil
 }
 

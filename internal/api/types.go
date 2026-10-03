@@ -200,6 +200,10 @@ type RestoreItem struct {
 	SourceSha256     string `json:"source_sha256"` // hex
 	DestFilename     string `json:"dest_filename"` // basename a escrever em dest_path
 	Status           string `json:"status"`        // queued | running | complete | failed
+	// SourceModifiedAt é a data de modificação do arquivo no backup
+	// (file_versions.modified_at). Opcional: sem ela, o arquivo restaurado
+	// fica com a data da restauração.
+	SourceModifiedAt *time.Time `json:"source_modified_at,omitempty"`
 }
 
 // ListRestoreItemsResponse é a resposta de GET /api/agents/<id>/restore-items.
