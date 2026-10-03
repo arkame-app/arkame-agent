@@ -20,6 +20,7 @@ import (
 
 	"github.com/arkame-app/agent/internal/api"
 	"github.com/arkame-app/agent/internal/config"
+	"github.com/arkame-app/agent/internal/segredo"
 	"github.com/arkame-app/agent/internal/storage"
 	"github.com/arkame-app/agent/internal/terminal"
 )
@@ -164,8 +165,8 @@ func PerguntarETestar(ctx context.Context, t *terminal.Terminal, base *config.Co
 // no Windows, Administradores e SYSTEM). O que o arquivo já tinha e não é
 // uma destas chaves fica — SIBLING_BUCKETS, caminhos próprios, proxy.
 func Gravar(caminho string, linhas []string) error {
-	if err := os.MkdirAll(filepath.Dir(caminho), 0o700); err != nil {
-		return fmt.Errorf("criando %s: %w", filepath.Dir(caminho), err)
+	if err := segredo.CriarPasta(filepath.Dir(caminho)); err != nil {
+		return err
 	}
 	novas := map[string]bool{}
 	for _, l := range linhas {
@@ -184,19 +185,7 @@ func Gravar(caminho string, linhas []string) error {
 		return fmt.Errorf("lendo %s: %w", caminho, err)
 	}
 	conteudo := strings.Join(append(mantidas, linhas...), "\n") + "\n"
-	tmp := caminho + ".novo"
-	if err := os.WriteFile(tmp, []byte(conteudo), 0o600); err != nil {
-		return fmt.Errorf("gravando %s: %w", caminho, err)
-	}
-	if err := protegerArquivo(tmp); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	if err := os.Rename(tmp, caminho); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("gravando %s: %w", caminho, err)
-	}
-	return nil
+	return segredo.Gravar(caminho, []byte(conteudo), 0o600)
 }
 
 // Chaves são as duas linhas da credencial.
@@ -209,7 +198,7 @@ func Chaves(ak, sk string) []string {
 // passar e só então esbarrava na permissão.
 func PodeGravar(caminho string) error {
 	dir := filepath.Dir(caminho)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := segredo.CriarPasta(dir); err != nil {
 		return fmt.Errorf("sem permissão para gravar em %s: rode com sudo (ou como administrador), ou aponte --config para um caminho seu", dir)
 	}
 	f, err := os.CreateTemp(dir, ".arkame-teste-*")

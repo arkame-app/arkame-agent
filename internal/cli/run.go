@@ -10,6 +10,7 @@ import (
 
 	"github.com/arkame-app/agent/internal/config"
 	"github.com/arkame-app/agent/internal/daemon"
+	"github.com/arkame-app/agent/internal/segredo"
 	"github.com/arkame-app/agent/internal/service"
 	"github.com/spf13/cobra"
 )
@@ -39,6 +40,16 @@ func newRunCmd() *cobra.Command {
 			}
 			if !cfg.TokenExists() {
 				return fmt.Errorf("agent ainda não foi aprovado — rode 'arkame-agent install' primeiro")
+			}
+			// Instalações anteriores gravaram o token e a chave privada com
+			// os.WriteFile(0600), que no Windows não restringe nada. Protege
+			// o que já está no disco a cada partida (idempotente).
+			for _, p := range []string{cfg.TokenPath, cfg.PrivateKeyPath} {
+				if _, serr := os.Stat(p); serr == nil {
+					if perr := segredo.Proteger(p); perr != nil {
+						slog.Warn("não consegui restringir o acesso a um arquivo sensível", "path", p, "err", perr)
+					}
+				}
 			}
 
 			start := func(ctx context.Context) error {

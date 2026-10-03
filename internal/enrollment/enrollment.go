@@ -31,6 +31,7 @@ import (
 	"github.com/arkame-app/agent/internal/api"
 	"github.com/arkame-app/agent/internal/config"
 	"github.com/arkame-app/agent/internal/crypto"
+	"github.com/arkame-app/agent/internal/segredo"
 	"github.com/arkame-app/agent/pkg/version"
 )
 
@@ -186,13 +187,13 @@ func persistAgentID(cfg *config.Config, id string) error {
 	if path == "" {
 		path = "/etc/arkame/agent.id"
 	}
-	if err := os.MkdirAll(parentDir(path), 0o755); err != nil {
-		return fmt.Errorf("criando diretório do agent.id: %w", err)
-	}
-	return os.WriteFile(path, []byte(id), 0o644)
+	// Não é segredo (0644 fora do Windows), mas no Windows ganha a mesma ACL:
+	// quem pudesse reescrevê-lo trocaria a identidade que o agente assina.
+	return segredo.Gravar(path, []byte(id), 0o644)
 }
 
-// PersistToken salva o JWT bearer no TokenPath com permissão 0600.
+// PersistToken salva o JWT bearer no TokenPath, legível só pelo administrador
+// (0600; no Windows, Administradores e SYSTEM).
 // O caller decide quando invocar (geralmente após WaitForApproval bem-sucedido).
 //
 // O TokenPath vem resolvido do config (env-file/env ou default), preservado
@@ -201,22 +202,10 @@ func PersistToken(cfg *config.Config, token string) error {
 	if cfg.TokenPath == "" {
 		cfg.TokenPath = "/etc/arkame/token.jwt"
 	}
-	if err := os.MkdirAll(parentDir(cfg.TokenPath), 0o755); err != nil {
-		return fmt.Errorf("criando diretório do token: %w", err)
-	}
-	if err := os.WriteFile(cfg.TokenPath, []byte(token), 0o600); err != nil {
+	if err := segredo.Gravar(cfg.TokenPath, []byte(token), 0o600); err != nil {
 		return fmt.Errorf("salvando token: %w", err)
 	}
 	return nil
-}
-
-func parentDir(p string) string {
-	for i := len(p) - 1; i >= 0; i-- {
-		if p[i] == '/' || p[i] == '\\' {
-			return p[:i]
-		}
-	}
-	return "."
 }
 
 // readAgentID lê o agent.id gravado no enrollment. É o identificador que vai

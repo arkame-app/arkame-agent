@@ -13,7 +13,8 @@ import (
 	"encoding/pem"
 	"fmt"
 	"os"
-	"path/filepath"
+
+	"github.com/arkame-app/agent/internal/segredo"
 )
 
 // Keypair representa um par Ed25519.
@@ -31,19 +32,16 @@ func Generate() (*Keypair, error) {
 	return &Keypair{Public: pub, Private: priv}, nil
 }
 
-// SaveToDisk grava a private key em PEM com permissão 600.
-// O diretório pai é criado com permissão 755 se não existir.
+// SaveToDisk grava a private key em PEM, legível só pelo administrador (0600;
+// no Windows, Administradores e SYSTEM — o 0600 sozinho não restringe nada lá).
 func (k *Keypair) SaveToDisk(privatePath string) error {
-	if err := os.MkdirAll(filepath.Dir(privatePath), 0o755); err != nil {
-		return err
-	}
 	der, err := x509.MarshalPKCS8PrivateKey(k.Private)
 	if err != nil {
 		return err
 	}
 	block := &pem.Block{Type: "PRIVATE KEY", Bytes: der}
 	pemData := pem.EncodeToMemory(block)
-	return os.WriteFile(privatePath, pemData, 0o600)
+	return segredo.Gravar(privatePath, pemData, 0o600)
 }
 
 // LoadPrivate carrega keypair a partir de um arquivo PEM.
