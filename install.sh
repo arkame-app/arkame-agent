@@ -209,6 +209,128 @@ bin_dir_de_root() {
   fi
 }
 
+# ── os agentes que rodam o programa ──────────────────────────────────────────
+# Depois do mv, o processo de cada agente segue com o programa antigo (o mv
+# troca o inode) até reiniciar. Os que rodam o programa são anotados antes da
+# troca e reiniciados depois dela; sem isso, um segundo agente (arkame-agent-oci)
+# ficava na versão antiga, sem aviso, até o próximo boot.
+LAUNCHD_DIR_SISTEMA="/Library/LaunchDaemons"
+LAUNCHD_DIR_USUARIO="${HOME:-/nenhum}/Library/LaunchAgents"
+
+# caminho_real <arquivo>: o caminho com a pasta resolvida (links), para comparar.
+caminho_real() {
+  _cr_d=$(cd -P "$(dirname "$1")" 2>/dev/null && pwd) || { printf '%s' "$1"; return 0; }
+  printf '%s/%s' "${_cr_d%/}" "$(basename "$1")"
+}
+
+# programa_do_execstart: o path= da saída de `systemctl show -p ExecStart
+# --value` ({ path=/usr/local/bin/arkame-agent ; argv[]=… }), lida da entrada.
+programa_do_execstart() {
+  sed -n 's/^[[:space:]]*{[[:space:]]*path=\([^;]*[^;[:space:]]\)[[:space:]]*;.*/\1/p' | head -n 1
+}
+
+# programa_do_plist <arquivo>: o primeiro item do ProgramArguments.
+programa_do_plist() {
+  sed -n '/<key>ProgramArguments<\/key>/,/<\/array>/s/.*<string>\(.*\)<\/string>.*/\1/p' "$1" 2>/dev/null \
+    | head -n 1 | sed 's/&lt;/</g; s/&gt;/>/g; s/&quot;/"/g; s/&apos;/'"'"'/g; s/&amp;/\&/g'
+}
+
+# label_launchd <nome>: arkame-agent-aws → app.arkame.agent-aws (como o agente).
+label_launchd() {
+  case "$1" in
+    app.arkame.*) printf '%s' "$1" ;;
+    *) printf 'app.arkame.%s' "${1#arkame-}" ;;
+  esac
+}
+
+# alvo_launchd <escopo> <label>: system/<label> ou gui/<uid>/<label>.
+alvo_launchd() {
+  if [ "$1" = "system" ]; then printf 'system/%s' "$2"; else printf 'gui/%s/%s' "$(id -u)" "$2"; fi
+}
+
+# units_ativas [--user]: as units arkame-agent* ativas, com o .service.
+units_ativas() {
+  systemctl "$@" list-units --type=service --state=active --no-legend --plain 'arkame-agent*' 2>/dev/null \
+    | awk '{for (i = 1; i <= NF; i++) if ($i ~ /\.service$/) { print $i; break }}'
+}
+
+# agentes_do_programa <programa>: os agentes arkame-agent* rodando agora que
+# chamam <programa>, um por linha: "<escopo> <nome>" (o nome da unit sem
+# .service no systemd; o label no launchd).
+agentes_do_programa() {
+  _ap_alvo=$(caminho_real "$1")
+  case "$OS" in
+    linux)
+      have systemctl || return 0
+      for _ap_escopo in system user; do
+        _ap_flag=""
+        [ "$_ap_escopo" = "user" ] && _ap_flag="--user"
+        for _ap_u in $(units_ativas $_ap_flag); do
+          _ap_p=$(systemctl $_ap_flag show -p ExecStart --value "$_ap_u" 2>/dev/null | programa_do_execstart)
+          [ -n "$_ap_p" ] || continue
+          [ "$(caminho_real "$_ap_p")" = "$_ap_alvo" ] || continue
+          printf '%s %s\n' "$_ap_escopo" "${_ap_u%.service}"
+        done
+      done ;;
+    darwin)
+      have launchctl || return 0
+      for _ap_escopo in system user; do
+        if [ "$_ap_escopo" = "system" ]; then _ap_dir=$LAUNCHD_DIR_SISTEMA; else _ap_dir=$LAUNCHD_DIR_USUARIO; fi
+        for _ap_f in "$_ap_dir"/app.arkame.agent*.plist; do
+          [ -f "$_ap_f" ] || continue
+          _ap_label=$(basename "$_ap_f" .plist)
+          _ap_p=$(programa_do_plist "$_ap_f")
+          [ -n "$_ap_p" ] || continue
+          [ "$(caminho_real "$_ap_p")" = "$_ap_alvo" ] || continue
+          launchctl print "$(alvo_launchd "$_ap_escopo" "$_ap_label")" 2>/dev/null | grep -q 'state = running' || continue
+          printf '%s %s\n' "$_ap_escopo" "$_ap_label"
+        done
+      done ;;
+  esac
+  return 0
+}
+
+# reiniciar_agente <escopo> <nome>
+reiniciar_agente() {
+  case "$OS" in
+    linux)
+      if [ "$1" = "user" ]; then systemctl --user restart "$2"; else systemctl restart "$2"; fi ;;
+    darwin)
+      launchctl kickstart -k "$(alvo_launchd "$1" "$2")" >/dev/null ;;
+    *) return 1 ;;
+  esac
+}
+
+# reiniciar_agentes <lista> [<escopo> <nome> a pular]: reinicia cada
+# "<escopo> <nome>" da lista (a de agentes_do_programa). Os que falham saem no
+# aviso "Continuam na versão antiga".
+reiniciar_agentes() {
+  _ra_falharam=""
+  while read -r _ra_escopo _ra_nome; do
+    [ -n "$_ra_nome" ] || continue
+    if [ "$_ra_escopo" = "${2:-}" ] && [ "$_ra_nome" = "${3:-}" ]; then
+      continue
+    fi
+    if reiniciar_agente "$_ra_escopo" "$_ra_nome" </dev/null; then
+      ok "Serviço $_ra_nome reiniciado com a versão nova"
+    else
+      warn "não consegui reiniciar o serviço $_ra_nome"
+      _ra_falharam="$_ra_falharam${_ra_falharam:+, }$_ra_nome"
+    fi
+  done <<LISTA
+$1
+LISTA
+  if [ -n "$_ra_falharam" ]; then
+    warn "Continuam na versão antiga: $_ra_falharam"
+    if [ "$OS" = "darwin" ]; then
+      warn "  Reinicie-os (sudo launchctl kickstart -k system/<label>) para a versão nova valer."
+    else
+      warn "  Reinicie-os (sudo systemctl restart <serviço>, ou systemctl --user restart <serviço>) para a versão nova valer."
+    fi
+  fi
+  return 0
+}
+
 # ── instalação ───────────────────────────────────────────────────────────────
 main() {
   printf '\n%s\n\n' "${BOLD}Instalador do agente Arkame${RESET}"
@@ -292,6 +414,8 @@ main() {
     die "$escrever"
   fi
   chmod 755 "$novo" 2>/dev/null || true
+  # Os agentes que rodam o programa agora: reiniciados depois da troca.
+  ANTES=$(agentes_do_programa "$BIN_DIR/arkame-agent")
   if ! mv -f "$novo" "$BIN_DIR/arkame-agent"; then
     rm -f "$novo" 2>/dev/null || true
     die "$escrever"
@@ -304,6 +428,17 @@ main() {
   esac
 
   if [ -z "$TOKEN" ]; then
+    # Atualização de um servidor já instalado: todos os agentes do programa,
+    # inclusive o principal, reiniciam com a versão nova, e não há o que
+    # registrar.
+    if [ -n "$ANTES" ]; then
+      printf '\n'
+      reiniciar_agentes "$ANTES"
+      printf '\n'
+      info "Atualização concluída: este servidor já está registrado no painel."
+      printf '\n'
+      return 0
+    fi
     printf '\n'
     info "Próximo passo — registre este servidor no painel:"
     printf '\n'
@@ -331,6 +466,22 @@ main() {
     return 0
   fi
 
+  # Os outros agentes do programa reiniciam já; o do --service-name, o
+  # install reinicia ao instalar o serviço (com --no-service, não: entra junto).
+  proprio_escopo=$SERVICE_SCOPE
+  if [ -z "$proprio_escopo" ]; then
+    if [ "$(id -u)" = "0" ]; then proprio_escopo="system"; else proprio_escopo="user"; fi
+  fi
+  proprio_nome=""
+  if [ "$INSTALL_SERVICE" = "true" ]; then
+    proprio_nome=$SERVICE_NAME
+    if [ "$OS" = "darwin" ]; then proprio_nome=$(label_launchd "$SERVICE_NAME"); fi
+  fi
+  if [ -n "$ANTES" ]; then
+    printf '\n'
+    reiniciar_agentes "$ANTES" "$proprio_escopo" "$proprio_nome"
+  fi
+
   # O agente pergunta a chave do bucket, testa e só então registra.
   printf '\n'
   set -- install --token="$TOKEN" --panel-url="$PANEL_URL" --service-name="$SERVICE_NAME"
@@ -338,7 +489,17 @@ main() {
   [ -n "$CONFIG_FILE" ] && set -- "$@" --config="$CONFIG_FILE"
   [ "$INSTALL_SERVICE" = "false" ] && set -- "$@" --install-service=false
 
-  "$BIN_DIR/arkame-agent" "$@"
+  status=0
+  "$BIN_DIR/arkame-agent" "$@" || status=$?
+  # O install que não termina (chave errada, código vencido) não chega a
+  # reiniciar o serviço: ele seguiria no programa antigo.
+  if [ "$status" -ne 0 ] && [ -n "$proprio_nome" ] &&
+     printf '%s\n' "$ANTES" | grep -qxF "$proprio_escopo $proprio_nome"; then
+    printf '\n'
+    warn "A instalação não terminou, mas o programa já foi trocado."
+    reiniciar_agentes "$proprio_escopo $proprio_nome"
+  fi
+  return "$status"
 }
 
 # ARKAME_INSTALL_SEM_MAIN: só define as funções (para os testes as chamarem).

@@ -13,18 +13,19 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 )
 
 // pacoteFalso monta o tar.gz do release com um arkame-agent que só responde
-// "version".
+// "version" (e sai com $ARKAME_FALSO_STATUS, para simular o install que falha).
 func pacoteFalso(t *testing.T) []byte {
 	t.Helper()
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
-	bin := []byte("#!/bin/sh\necho arkame-agent falso\n")
+	bin := []byte("#!/bin/sh\necho arkame-agent falso\nexit ${ARKAME_FALSO_STATUS:-0}\n")
 	if err := tw.WriteHeader(&tar.Header{Name: "arkame-agent", Mode: 0o755, Size: int64(len(bin))}); err != nil {
 		t.Fatal(err)
 	}
@@ -298,4 +299,216 @@ func TestInstallShCopiaQueFalhaMantemOProgramaAntigo(t *testing.T) {
 		}
 		semTemporario(t, binDir)
 	})
+}
+
+// systemctlFalso põe no PATH um systemctl que lista as units ativas dadas
+// (nome → programa do ExecStart; "u:" na frente é do --user), responde ao
+// show -p ExecStart e anota cada restart em restarts.log — com "novo" quando
+// o programa já é o novo no momento do restart. As units com "falha" no nome
+// não reiniciam.
+func systemctlFalso(t *testing.T, binDir string, units map[string]string) (path string, restarts func() []string) {
+	t.Helper()
+	dir := t.TempDir()
+	for nome, programa := range units {
+		escopo, unit := "system", nome
+		if u, ok := strings.CutPrefix(nome, "u:"); ok {
+			escopo, unit = "user", u
+		}
+		f, err := os.OpenFile(filepath.Join(dir, escopo+"-units"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fmt.Fprintf(f, "%s.service loaded active running Arkame Backup Agent (%s)\n", unit, unit)
+		f.Close()
+		exec := fmt.Sprintf("{ path=%s ; argv[]=%s run --config /etc/arkame/%s.env ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }\n", programa, programa, unit)
+		if err := os.WriteFile(filepath.Join(dir, escopo+"-exec-"+unit+".service"), []byte(exec), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	log := filepath.Join(dir, "restarts.log")
+	script := `#!/bin/sh
+d=` + dir + `
+escopo=system; prefixo=""
+if [ "$1" = "--user" ]; then escopo=user; prefixo="--user "; shift; fi
+case "$1" in
+  list-units) cat "$d/$escopo-units" 2>/dev/null ;;
+  show) for a in "$@"; do u=$a; done; cat "$d/$escopo-exec-$u" 2>/dev/null ;;
+  restart)
+    estado=antigo; grep -q falso "` + filepath.Join(binDir, "arkame-agent") + `" 2>/dev/null && estado=novo
+    echo "$prefixo$2 $estado" >> "$d/restarts.log"
+    case "$2" in *falha*) echo "Job for $2 failed" >&2; exit 1 ;; esac ;;
+esac
+exit 0
+`
+	if err := os.WriteFile(filepath.Join(dir, "systemctl"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return "PATH=" + dir + string(os.PathListSeparator) + os.Getenv("PATH"), func() []string {
+		b, _ := os.ReadFile(log)
+		return strings.Fields(strings.ReplaceAll(strings.TrimSpace(string(b)), "--user ", "--user:"))
+	}
+}
+
+// Trocar o programa no Linux não reiniciava ninguém: o mv troca o inode e
+// cada agente seguia rodando o programa antigo, sem aviso, até o próximo
+// boot. Agora os agentes ativos que rodam o programa instalado reiniciam
+// depois da troca; sem --token, todos (é atualização, e não há o que
+// registrar); com --token, todos menos o --service-name, que o install
+// reinicia.
+func TestInstallShReiniciaOsAgentesDoPrograma(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("systemd")
+	}
+	certo := func(pacote, sha string) string { return sha + "  " + pacote + "\n" }
+	antigo := []byte("#!/bin/sh\necho arkame-agent antigo\n")
+	preparar := func(t *testing.T) (string, string, func() []string) {
+		t.Helper()
+		binDir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(binDir, "arkame-agent"), antigo, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		bin := filepath.Join(binDir, "arkame-agent")
+		path, restarts := systemctlFalso(t, binDir, map[string]string{
+			"arkame-agent":       bin,
+			"arkame-agent-oci":   bin,
+			"arkame-agent-falha": bin,
+			"arkame-agent-outro": "/opt/outro/arkame-agent",
+			"u:arkame-agent-usr": bin,
+		})
+		return binDir, path, restarts
+	}
+	pares := func(r []string) map[string]string {
+		m := map[string]string{}
+		for i := 0; i+1 < len(r); i += 2 {
+			m[r[i]] = r[i+1]
+		}
+		return m
+	}
+
+	t.Run("sem token: todos, e não pede registro", func(t *testing.T) {
+		binDir, path, restarts := preparar(t)
+		out, terminou, _ := rodarInstallShEm(t, binDir, []string{path}, certo)
+		if !terminou {
+			t.Fatalf("não terminou:\n%s", out)
+		}
+		got := pares(restarts())
+		quer := map[string]string{"arkame-agent": "novo", "arkame-agent-oci": "novo", "arkame-agent-falha": "novo", "--user:arkame-agent-usr": "novo"}
+		if fmt.Sprint(got) != fmt.Sprint(quer) {
+			t.Fatalf("restarts = %v, queria %v (todos os do programa, depois da troca)\n%s", got, quer, out)
+		}
+		if !strings.Contains(out, "Continuam na versão antiga: arkame-agent-falha") {
+			t.Fatalf("sem o aviso dos que ficaram na versão antiga:\n%s", out)
+		}
+		if strings.Contains(out, "registre este servidor") {
+			t.Fatalf("atualização de servidor já instalado mandou registrar:\n%s", out)
+		}
+	})
+
+	t.Run("com token: todos menos o --service-name", func(t *testing.T) {
+		binDir, path, restarts := preparar(t)
+		out, terminou, _ := rodarInstallShEm(t, binDir, []string{path}, certo,
+			"--token=atk_abcdefghijklmnopqr", "--service-name=arkame-agent-oci", "--service-scope=system")
+		if !terminou {
+			t.Fatalf("não terminou:\n%s", out)
+		}
+		got := pares(restarts())
+		quer := map[string]string{"arkame-agent": "novo", "arkame-agent-falha": "novo", "--user:arkame-agent-usr": "novo"}
+		if fmt.Sprint(got) != fmt.Sprint(quer) {
+			t.Fatalf("restarts = %v, queria %v (o do install fica com o install)\n%s", got, quer, out)
+		}
+		if !strings.Contains(out, "Continuam na versão antiga: arkame-agent-falha") {
+			t.Fatalf("sem o aviso:\n%s", out)
+		}
+	})
+
+	t.Run("com token e install que falha: o próprio também", func(t *testing.T) {
+		binDir, path, restarts := preparar(t)
+		out, terminou, _ := rodarInstallShEm(t, binDir, []string{path, "ARKAME_FALSO_STATUS=3"}, certo,
+			"--token=atk_abcdefghijklmnopqr", "--service-name=arkame-agent-oci", "--service-scope=system")
+		if terminou {
+			t.Fatalf("o install falhou e o install.sh terminou bem:\n%s", out)
+		}
+		if got := pares(restarts()); got["arkame-agent-oci"] != "novo" {
+			t.Fatalf("o serviço do install que falhou não reiniciou: %v\n%s", got, out)
+		}
+	})
+}
+
+// O mesmo no macOS: os jobs app.arkame.agent* do launchd que rodam o programa
+// e estão rodando (launchctl print → state = running) reiniciam com
+// kickstart -k no domínio de cada um.
+func TestInstallShAgentesDoProgramaNoLaunchd(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("install.sh é do Linux e do macOS")
+	}
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sem sh")
+	}
+	script, err := filepath.Abs(filepath.Join("..", "..", "install.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	sistema, usuario, falso := filepath.Join(dir, "LaunchDaemons"), filepath.Join(dir, "LaunchAgents"), filepath.Join(dir, "falso")
+	for _, d := range []string{sistema, usuario, falso} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bin := filepath.Join(dir, "bin & cia", "arkame-agent")
+	if err := os.MkdirAll(filepath.Dir(bin), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	plist := func(d, label, programa string) {
+		t.Helper()
+		esc := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace
+		p := "<plist><dict><key>Label</key><string>" + label + "</string>\n<key>ProgramArguments</key>\n<array>\n\t<string>" +
+			esc(programa) + "</string>\n\t<string>run</string>\n</array></dict></plist>\n"
+		if err := os.WriteFile(filepath.Join(d, label+".plist"), []byte(p), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	plist(sistema, "app.arkame.agent", bin)
+	plist(sistema, "app.arkame.agent-oci", bin)
+	plist(sistema, "app.arkame.agent-parado", bin)
+	plist(sistema, "app.arkame.agent-outro", "/opt/outro/arkame-agent")
+	plist(usuario, "app.arkame.agent-usr", bin)
+	launchctl := `#!/bin/sh
+case "$1" in
+  print) case "$2" in *parado*) echo "state = not running" ;; *) printf '%s = {
+	state = running
+}
+' "$2" ;; esac ;;
+  kickstart) echo "$3" >> "` + filepath.Join(dir, "kick.log") + `" ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(falso, "launchctl"), []byte(launchctl), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("sh", "-c", `s=$1 sis=$2 usr=$3 bin=$4; set --; . "$s"
+OS=darwin; LAUNCHD_DIR_SISTEMA=$sis; LAUNCHD_DIR_USUARIO=$usr
+lista=$(agentes_do_programa "$bin")
+printf '%s
+' "$lista"
+echo ---
+reiniciar_agentes "$lista" system "$(label_launchd arkame-agent-oci)"`, "sh", script, sistema, usuario, bin)
+	cmd.Env = append(os.Environ(), "ARKAME_INSTALL_SEM_MAIN=1", "NO_COLOR=1",
+		"PATH="+falso+string(os.PathListSeparator)+os.Getenv("PATH"))
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	lista, _, _ := strings.Cut(string(out), "---")
+	linhas := strings.Split(strings.TrimSpace(lista), "\n")
+	slices.Sort(linhas)
+	if got := strings.Join(linhas, ","); got != "system app.arkame.agent,system app.arkame.agent-oci,user app.arkame.agent-usr" {
+		t.Fatalf("agentes do programa = %v\n%s", got, out)
+	}
+	kick, _ := os.ReadFile(filepath.Join(dir, "kick.log"))
+	uid := fmt.Sprint(os.Getuid())
+	kicks := strings.Fields(string(kick))
+	slices.Sort(kicks)
+	if got := fmt.Sprint(kicks); got != "[gui/"+uid+"/app.arkame.agent-usr system/app.arkame.agent]" {
+		t.Fatalf("kickstart = %v (o do --service-name fica com o install)\n%s", got, out)
+	}
 }
