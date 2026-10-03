@@ -199,6 +199,11 @@ func planLoop(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config.Co
 			if plan.Kind != "backup" {
 				continue
 			}
+			if planoDeOutroProcesso(cfg, plan) {
+				slog.Debug("plano de bucket atendido por outro processo deste agente",
+					"plan_id", plan.ID, "bucket", plan.StorageRef.Bucket)
+				continue
+			}
 			if !scheduler.ShouldRun(plan, now) {
 				continue
 			}
@@ -218,6 +223,17 @@ func planLoop(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config.Co
 			run()
 		}
 	}
+}
+
+// planoDeOutroProcesso: o plano é de um bucket que outro processo deste
+// agente atende (SIBLING_BUCKETS). Cada processo tem as credenciais de um
+// bucket só; sem este filtro, todos os processos rodavam todos os planos — o
+// irmão sem credencial abria uma sessão que falhava com 403, em paralelo com a
+// sessão certa. A restauração já filtrava assim.
+func planoDeOutroProcesso(cfg *config.Config, plan api.Plan) bool {
+	b := plan.StorageRef.Bucket
+	return cfg.StorageBucket != "" && b != "" && b != cfg.StorageBucket &&
+		slices.Contains(cfg.SiblingBuckets, b)
 }
 
 // executePlan implementa o ciclo backup completo:
