@@ -71,6 +71,16 @@ const loteMáximo = 1000
 // Erros de rede não interrompem a rodada: o que falhou volta como falha e a
 // próxima rodada recalcula. Uma limpeza que aborta na primeira falha nunca
 // termina em bucket grande.
+//
+// Com o ctx cancelado (serviço parando), Run para e devolve o que já saiu. O
+// lote cujo DeleteObjects o cancelamento cortou não entra em deleted nem em
+// failed: não há como saber se o provedor o apagou antes do corte. Em deleted
+// seria mentir — o painel daria baixa no catálogo de versões que podem
+// continuar no bucket, ocupando espaço sem ninguém as ver de novo. Em failed
+// o painel registraria como erro do bucket o que foi só a parada do serviço.
+// Fora das duas listas, as versões continuam no catálogo e a próxima rodada
+// as recalcula; se já tinham saído, o DeleteObjects de uma versão que não
+// existe responde como apagada e o catálogo se corrige ali.
 func Run(ctx context.Context, o Options, versions []Version) (deleted []Version, failed []Failure) {
 	aceitas := make([]Version, 0, len(versions))
 	for _, v := range versions {
@@ -116,6 +126,10 @@ func Run(ctx context.Context, o Options, versions []Version) (deleted []Version,
 			Delete: &types.Delete{Objects: objetos, Quiet: aws.Bool(false)},
 		})
 		if err != nil {
+			if ctx.Err() != nil {
+				// Cortado pela parada do serviço: ver o comentário de Run.
+				return deleted, failed
+			}
 			// A chamada inteira falhou (rede, credencial, permissão). Marca o
 			// lote como falho e segue: o resto do plano ainda pode sair, e o
 			// painel verá o motivo repetido em todas as linhas.
@@ -186,6 +200,9 @@ func protegerVersaoAtual(ctx context.Context, o Options, itens []Version) (aceit
 			consultadas[v.Key] = a
 		}
 		switch {
+		case a.err != nil && ctx.Err() != nil:
+			// A conferência foi cortada pela parada do serviço, não recusada:
+			// o item fica fora das duas listas, como o lote em voo de Run.
 		case a.err != nil:
 			recusadas = append(recusadas, Failure{Key: v.Key, VersionID: v.VersionID,
 				Error: "desbaste recusado: não consegui conferir a versão atual da chave: " + resumir(a.err)})

@@ -23,6 +23,11 @@ type s3Falso struct {
 	versoes  map[string][]string // chave → versões, a última é a atual
 	heads    int
 	headErro int // se != 0, HeadObject responde com este status
+	// antesDoDelete, se definida, roda antes de cada DeleteObjects (n conta
+	// a partir de 1), fora da trava; devolver false descarta a chamada sem
+	// apagar nem responder.
+	antesDoDelete func(n int, r *http.Request) bool
+	deletes       int
 }
 
 func novoS3Falso(t *testing.T) (*s3Falso, *s3.Client) {
@@ -43,6 +48,15 @@ func novoS3Falso(t *testing.T) (*s3Falso, *s3.Client) {
 }
 
 func (f *s3Falso) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost && r.URL.Query().Has("delete") {
+		f.mu.Lock()
+		f.deletes++
+		n, gancho := f.deletes, f.antesDoDelete
+		f.mu.Unlock()
+		if gancho != nil && !gancho(n, r) {
+			return
+		}
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	partes := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/"), "/", 2)

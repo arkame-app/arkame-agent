@@ -1242,8 +1242,21 @@ func expurgar(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config.Co
 		relato.Failed = append(relato.Failed, api.PurgeFailure{Key: f.Key, VersionID: f.VersionID, Error: f.Error})
 	}
 
+	if ctx.Err() != nil && len(relato.Deleted) == 0 && len(relato.Failed) == 0 {
+		// Parou antes de apagar qualquer coisa. Sem relato a rodada segue
+		// emitida e o painel a reentrega quando o agente voltar; um relato
+		// vazio a encerraria sem nada feito.
+		return
+	}
+
+	// O relato sai mesmo com o serviço parando, como o /complete e o /fail:
+	// com o ctx cancelado o POST falhava na hora e, se o agente não voltasse
+	// (desinstalado, arquivado), o catálogo seguia listando como restauráveis
+	// versões que já tinham saído do bucket.
+	fctx, fcancel := contextoDeFinalizacao(ctx)
+	defer fcancel()
 	var resposta api.PurgeResultResponse
-	if err := c.POST(ctx, "/api/agents/"+cfg.AgentID+"/purge-result", relato, &resposta); err != nil {
+	if err := c.POST(fctx, "/api/agents/"+cfg.AgentID+"/purge-result", relato, &resposta); err != nil {
 		// O relato se perdeu. As versões já saíram do bucket, mas o catálogo
 		// segue dizendo que existem. A rodada expira em algumas horas e a
 		// próxima recalcula — as versões já apagadas simplesmente não
