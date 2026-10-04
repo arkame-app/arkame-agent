@@ -88,6 +88,12 @@ Binário Linux rodando local contra o painel em produção (`save.arkame.app`) +
 > de depois não apagava o dump e o `/complete` ou `/fail` não chegava ao painel. Só
 > vale depois de reinstalar o serviço (o `install` reescreve a unit/plist); instalações
 > existentes seguem com o prazo antigo até lá.
+> No Docker, o mesmo prazo: os comandos do README passaram a subir o contêiner com
+> `--stop-timeout 150`, a trocar `docker rm -f` por `docker stop -t 150` + `docker rm`
+> (sem falhar se não existir) e a reiniciar com `docker restart -t 150`. Antes valiam os
+> 10 s padrão do Docker (ou SIGKILL na hora, no `rm -f`) e a reinstalação, a troca de
+> chave ou o reboot do host podiam perder o `/complete` de um backup terminando
+> (passada 34; o painel e a página de docs têm os mesmos comandos e mudam no repo `arkame`).
 >
 > Compatibilidade com systemd anterior ao 231 (CentOS/RHEL 7 tem
 > o 219, Ubuntu 16.04 o 229). A unit de sistema escreve também `ReadWriteDirectories=`

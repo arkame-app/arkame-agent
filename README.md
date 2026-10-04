@@ -45,8 +45,8 @@ each backup's file index — path and name, size, modification date, SHA-256 and
 bucket version; and, when the user browses folders while creating a plan in
 the panel, the names of the folders and files opened and the size of each file.
 Never file contents. The agent can be fully removed with
-`arkame-agent uninstall` (Docker: `docker rm -f arkame-agent` and delete
-`/etc/arkame`).
+`arkame-agent uninstall` (Docker: `docker stop -t 150 arkame-agent` then
+`docker rm arkame-agent`, and delete `/etc/arkame`).
 
 ## Arquitetura
 
@@ -132,13 +132,16 @@ bem o container antigo sai e o serviço sobe (`--restart always`), lendo o mesmo
 lugar. `label=disable`: com SELinux (RHEL, Rocky, Fedora) o container não
 gravava em `/etc/arkame` nem lia o host; sem SELinux, não faz nada. A raiz do
 servidor vai montada com leitura e escrita (`-v /:/host`, sem `:ro`): a
-restauração grava no servidor, inclusive no lugar original.
+restauração grava no servidor, inclusive no lugar original. O prazo de 150 s
+(`--stop-timeout`, `stop -t`, `restart -t`) é o tempo que o agente pode levar para
+fechar um backup em andamento e avisar o painel (`/complete`); os 10 s padrão do
+Docker, ou o `rm -f`, matam o processo antes e o ponto de restauração se perde.
 
 ```bash
 sudo docker run --rm -it --user 0 --security-opt label=disable --hostname "$(hostname)" -v /etc/arkame:/etc/arkame \
   ghcr.io/arkame-app/arkame-agent:latest install --token=atk_... --panel-url=https://save.arkame.app --install-service=false \
-&& { sudo docker rm -f arkame-agent >/dev/null 2>&1; \
-  sudo docker run -d --name arkame-agent --restart always --user 0 --security-opt label=disable --hostname "$(hostname)" \
+&& { sudo docker stop -t 150 arkame-agent >/dev/null 2>&1; sudo docker rm arkame-agent >/dev/null 2>&1; \
+  sudo docker run -d --name arkame-agent --restart always --stop-timeout 150 --user 0 --security-opt label=disable --hostname "$(hostname)" \
   -v /:/host -v /etc/arkame:/etc/arkame ghcr.io/arkame-app/arkame-agent:latest; }
 ```
 
@@ -147,8 +150,8 @@ não tem shell, e os programas estão no host): agende dumps de banco no própri
 host (cron), numa pasta incluída no plano.
 
 Servidor sem sinal: `sudo docker logs --tail 50 arkame-agent` e
-`sudo docker restart arkame-agent`. Trocar a chave do bucket:
-`sudo docker run --rm -it --user 0 --security-opt label=disable -v /etc/arkame:/etc/arkame ghcr.io/arkame-app/arkame-agent:latest set-storage-keys && sudo docker restart arkame-agent`
+`sudo docker restart -t 150 arkame-agent`. Trocar a chave do bucket:
+`sudo docker run --rm -it --user 0 --security-opt label=disable -v /etc/arkame:/etc/arkame ghcr.io/arkame-app/arkame-agent:latest set-storage-keys && sudo docker restart -t 150 arkame-agent`
 (o `label=disable` pelo mesmo motivo da instalação: com SELinux, sem ele o
 container não grava em `/etc/arkame`).
 
@@ -290,7 +293,7 @@ sudo /opt/arkame/bin/arkame-agent uninstall
 ~/.local/bin/arkame-agent uninstall --service-scope user
 
 # Docker (o programa está só na imagem; não há uninstall no host)
-sudo docker rm -f arkame-agent && sudo rm -rf /etc/arkame
+sudo docker stop -t 150 arkame-agent 2>/dev/null; sudo docker rm arkame-agent 2>/dev/null; sudo rm -rf /etc/arkame
 ```
 
 Tira o serviço, o arquivo de configuração com a chave, a identidade (token,
