@@ -55,3 +55,58 @@ func TestCriarPasta(t *testing.T) {
 		t.Fatal("pasta que já existia não deveria mudar")
 	}
 }
+
+// O temporário vai ao disco (fsync) inteiro antes do rename, e a pasta depois
+// dele: sem isso o rename podia chegar ao disco antes dos dados, e o token
+// renovado voltava vazio de um corte de energia.
+func TestGravarSincronizaAntesEDepoisDoRename(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "token.jwt")
+	if err := os.WriteFile(p, []byte("velho"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var ordem []string
+	arqAntes, pastaAntes := sincronizarArquivo, sincronizarPasta
+	t.Cleanup(func() { sincronizarArquivo, sincronizarPasta = arqAntes, pastaAntes })
+	sincronizarArquivo = func(f *os.File) error {
+		b, _ := os.ReadFile(f.Name())
+		atual, _ := os.ReadFile(p)
+		ordem = append(ordem, "arquivo:"+string(b)+"|destino:"+string(atual))
+		return f.Sync()
+	}
+	sincronizarPasta = func(dir string) error {
+		atual, _ := os.ReadFile(p)
+		ordem = append(ordem, "pasta:"+dir+"|destino:"+string(atual))
+		return nil
+	}
+	if err := Gravar(p, []byte("novo"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	quer := []string{
+		"arquivo:novo|destino:velho",
+		"pasta:" + filepath.Dir(p) + "|destino:novo",
+	}
+	if len(ordem) != len(quer) || ordem[0] != quer[0] || ordem[1] != quer[1] {
+		t.Fatalf("sincronizações %q, queria %q", ordem, quer)
+	}
+}
+
+// Se o fsync falha, o arquivo não é trocado: melhor o token antigo, inteiro,
+// que um novo que pode não estar no disco.
+func TestGravarFalhaNoFsyncNaoTroca(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "token.jwt")
+	if err := os.WriteFile(p, []byte("velho"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	antes := sincronizarArquivo
+	t.Cleanup(func() { sincronizarArquivo = antes })
+	sincronizarArquivo = func(*os.File) error { return os.ErrInvalid }
+	if err := Gravar(p, []byte("novo"), 0o600); err == nil {
+		t.Fatal("Gravar não devolveu o erro do fsync")
+	}
+	if b, _ := os.ReadFile(p); string(b) != "velho" {
+		t.Fatalf("destino %q, queria o antigo", b)
+	}
+	if _, err := os.Stat(p + ".novo"); !os.IsNotExist(err) {
+		t.Fatal("o temporário ficou para trás")
+	}
+}

@@ -286,6 +286,10 @@ func (p *pasta) renomear(de, para string) error {
 	return os.Rename(base+de, base+para)
 }
 
+// sincronizar não faz nada no Windows: o NTFS registra o rename no journal
+// dele, e uma pasta não se abre para FlushFileBuffers.
+func (p *pasta) sincronizar() error { return nil }
+
 func (p *pasta) aplicarData(nome string, acesso, modificacao time.Time) error {
 	h, err := p.abrirConferido(nome, windows.FILE_WRITE_ATTRIBUTES)
 	if err != nil {

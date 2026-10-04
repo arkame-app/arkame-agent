@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/arkame-app/agent/internal/aplicativos"
+	"github.com/arkame-app/agent/internal/segredo"
 	"github.com/arkame-app/agent/internal/service"
 	"github.com/arkame-app/agent/pkg/version"
 	"github.com/spf13/cobra"
@@ -222,6 +223,13 @@ func copiarPrograma(de, para string) error {
 		_ = os.Remove(tmp)
 		return err
 	}
+	// No disco antes do rename: um corte de energia logo depois deixaria o
+	// programa com 0 bytes, e o serviço não subiria mais.
+	if err := destino.Sync(); err != nil {
+		destino.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
 	if err := destino.Close(); err != nil {
 		_ = os.Remove(tmp)
 		return err
@@ -238,6 +246,7 @@ func copiarPrograma(de, para string) error {
 		_ = os.Remove(tmp)
 		return err
 	}
+	segredo.SincronizarPasta(filepath.Dir(para))
 	_ = os.Remove(antigo) // em uso, fica para a próxima
 	return nil
 }

@@ -26,7 +26,8 @@ func Gravar(caminho string, dados []byte, modo os.FileMode) error {
 		return err
 	}
 	tmp := caminho + ".novo"
-	if err := os.WriteFile(tmp, dados, 0o600); err != nil {
+	if err := escreverSincronizado(tmp, dados); err != nil {
+		_ = os.Remove(tmp)
 		return fmt.Errorf("gravando %s: %w", caminho, err)
 	}
 	if err := protegerComModo(tmp, modo); err != nil {
@@ -37,8 +38,43 @@ func Gravar(caminho string, dados []byte, modo os.FileMode) error {
 		_ = os.Remove(tmp)
 		return fmt.Errorf("gravando %s: %w", caminho, err)
 	}
+	SincronizarPasta(filepath.Dir(caminho))
 	return nil
 }
+
+// escreverSincronizado grava o temporário e o leva ao disco (fsync) antes de
+// fechar. Sem o fsync, o rename podia chegar ao disco antes dos dados (XFS, e
+// ext4/btrfs conforme a montagem): depois de um corte de energia, o token
+// renovado voltava com 0 bytes e o agente não se autenticava mais.
+func escreverSincronizado(tmp string, dados []byte) error {
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(dados); err != nil {
+		f.Close()
+		return err
+	}
+	if err := sincronizarArquivo(f); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
+}
+
+// sincronizarArquivo e sincronizarPasta são variáveis para o teste conferir a
+// ordem: o arquivo vai ao disco antes do rename, a pasta depois.
+var (
+	sincronizarArquivo = (*os.File).Sync
+	sincronizarPasta   = sincronizarPastaSO
+)
+
+// SincronizarPasta leva ao disco a entrada da pasta depois de um rename, para
+// a troca sobreviver a um corte de energia. Fora do Windows abre a pasta e
+// chama fsync; no Windows não faz nada. É o melhor possível: o rename já foi
+// feito e, se a pasta não sincronizar (há sistemas de arquivos que recusam
+// fsync em pasta), o pior caso é voltar o arquivo anterior, inteiro.
+func SincronizarPasta(dir string) { _ = sincronizarPasta(dir) }
 
 // Proteger deixa um arquivo que já existe legível só pelo administrador (0600;
 // no Windows, Administradores e SYSTEM).

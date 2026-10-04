@@ -295,6 +295,10 @@ func (p *pasta) renomear(de, para string) error {
 	return unix.Renameat(p.fd, de, p.fd, para)
 }
 
+// sincronizar leva ao disco a entrada da pasta (o rename do temporário),
+// pelo descritor já aberto.
+func (p *pasta) sincronizar() error { return unix.Fsync(p.fd) }
+
 func (p *pasta) aplicarData(nome string, acesso, modificacao time.Time) error {
 	return aplicarData(p.fd, nome, acesso, modificacao)
 }

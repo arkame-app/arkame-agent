@@ -172,6 +172,12 @@ func Run(ctx context.Context, opts Options, item api.RestoreItem) error {
 	if err := ajustarPermissoes(tmpFile, dir, baseName, finalName); err != nil {
 		return err
 	}
+	// Os dados vão ao disco antes do rename: sem o fsync, o rename podia chegar
+	// antes deles, e um corte de energia deixava o arquivo do cliente com 0
+	// bytes — o original já substituído e o painel com "concluído".
+	if err := sincronizarArquivo(tmpFile); err != nil {
+		return fmt.Errorf("gravando o temporário no disco: %w", err)
+	}
 	if err := tmpFile.Close(); err != nil {
 		return fmt.Errorf("fechando o temporário: %w", err)
 	}
@@ -190,8 +196,19 @@ func Run(ctx context.Context, opts Options, item api.RestoreItem) error {
 		return fmt.Errorf("rename tmp → final: %w", err)
 	}
 	cleanup = false
+	// E a pasta, para o rename também sobreviver ao corte. O melhor possível:
+	// o arquivo já está no lugar, e há sistemas de arquivos que recusam fsync
+	// em pasta; o pior caso é voltar o arquivo anterior, inteiro.
+	_ = sincronizarPasta(dir)
 	return nil
 }
+
+// sincronizarArquivo e sincronizarPasta são variáveis para o teste conferir a
+// ordem: o temporário vai ao disco antes do rename, a pasta depois.
+var (
+	sincronizarArquivo = (*os.File).Sync
+	sincronizarPasta   = (*pasta).sincronizar
+)
 
 // aposAbrirPasta e aposBaixar são os pontos do Run em que o teste troca uma
 // pasta do caminho por um link, como faria quem manda nela durante a
