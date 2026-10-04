@@ -64,7 +64,7 @@ arkame-agent/
 # Para a plataforma atual
 make build
 
-# Cross-compile para todas as plataformas suportadas
+# Cross-compile: linux, darwin e windows, amd64 e arm64
 make build-all
 
 # Docker

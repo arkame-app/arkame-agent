@@ -24,6 +24,7 @@ build-all: ## Cross-compile para todas as plataformas suportadas
 	GOOS=darwin  GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/$(BINARY)_darwin_amd64  ./cmd/arkame-agent
 	GOOS=darwin  GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/$(BINARY)_darwin_arm64  ./cmd/arkame-agent
 	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/$(BINARY)_windows_amd64.exe ./cmd/arkame-agent
+	GOOS=windows GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/$(BINARY)_windows_arm64.exe ./cmd/arkame-agent
 
 test: ## Roda testes
 	go test -race -coverprofile=coverage.out ./...
