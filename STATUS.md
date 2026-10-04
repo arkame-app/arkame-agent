@@ -71,6 +71,17 @@ Binário Linux rodando local contra o painel em produção (`save.arkame.app`) +
 > arquivo: token vazio (ou só espaços) conta como sem token, com erro no log pedindo
 > nova instalação, em vez de o agente subir calado sem conseguir se autenticar.
 >
+> Ainda sem versão: o `install.sh` também sincroniza o programa novo antes do `mv` e a
+> pasta depois (`sync <arquivo>`, com `sync` sem argumento como fallback no coreutils
+> anterior ao 8.24 e no macOS) — antes só o `setup` do Windows fazia isso. No Windows,
+> reiniciar um serviço na atualização espera até `service.EsperaParada` (150s, cobre
+> 3 × `finalizacaoGraca`) em vez de 60s; se mesmo assim não parar, o aviso diz que ele
+> pode ter ficado parado e manda iniciá-lo em services.msc, e não mais que "continua na
+> versão antiga" (ele para sozinho depois e ninguém o inicia). E o `install.ps1` sem
+> `-Token`, num servidor já instalado, termina com "Atualizacao concluida: este servidor
+> ja esta registrado no painel." em vez de mandar gerar um código novo, como o
+> `install.sh`.
+>
 > Compatibilidade com systemd anterior ao 231 (CentOS/RHEL 7 tem
 > o 219, Ubuntu 16.04 o 229). A unit de sistema escreve também `ReadWriteDirectories=`
 > ao lado de `ReadWritePaths=`: o systemd antigo ignorava `ReadWritePaths=` mas aplicava
