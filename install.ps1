@@ -295,6 +295,16 @@ try {
         # com o novo no lugar, para a atualização valer. Com -Token, mais
         # abaixo, depois do install.
         Restart-ServicosDoExe -Nomes $paraReiniciar
+        if (@($paraReiniciar).Count -gt 0) {
+            # Atualização de um servidor já instalado: não há o que
+            # registrar. Mandar gerar um código novo criava um segundo
+            # servidor no painel, como o install.sh já evita.
+            Write-Host ""
+            Write-Info "Atualizacao concluida: este servidor ja esta registrado no painel."
+            Write-Host ""
+            Wait-ToClose
+            exit 0
+        }
         Write-Host ""
         Write-Info "Proximo passo - registre este servidor no painel:"
         Write-Host ""
