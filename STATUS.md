@@ -161,8 +161,21 @@ Binário Linux rodando local contra o painel em produção (`save.arkame.app`) +
 > agente parou"; mesmo mecanismo do `post_hook_failed`, para o cliente conferir o dump
 > que pode ter ficado), e a parcial ou falha leva a nota "; comando de depois
 > interrompido: o serviço do agente parou" em vez de "; comando de depois falhou".
-> O painel ainda não tem `motivos.agent_stopped` nem guarda `post_hook_interrupted`
-> (falta em `AVISOS_DE_SESSAO_COMPLETA` e nas traduções).
+> O painel trata os dois códigos desde a v2.65 (commit `d7fbaa2` do arkame):
+> `post_hook_interrupted` está em `AVISOS_DE_SESSAO_COMPLETA` e `motivos.agent_stopped` /
+> `motivos.post_hook_interrupted` estão nas traduções dos 3 idiomas.
+>
+> Mudanças recentes (ver `git tag --contains <commit>`; passada 43): serviço parado com
+> o envio em curso (`sync.Run` volta com `context.Canceled` e o ctx do daemon está
+> cancelado) deixou de virar `sync_failed`/`sync_partial` com "context canceled", que
+> mandava conferir pastas, permissões e o bucket. Sem nada no version_map, a sessão fecha
+> pelo `marcarFalha` com `error_code: agent_stopped` e "interrompido: o serviço do agente
+> parou"; com parte guardada, o `/complete` (contexto de finalização) vai com
+> `status: partial`, `error_code: sync_interrupted` e "envio interrompido: o serviço do
+> agente parou; N arquivo(s) guardado(s) antes da parada" (o total da origem não se sabe:
+> a varredura parou no meio). A nota do comando de depois continua indo ao fim. Os demais
+> casos não mudaram. Pendente no painel: `motivos.sync_interrupted` nos 3 idiomas e tirar
+> `sync_interrupted` do aviso por e-mail de backup incompleto.
 >
 > Compatibilidade com systemd anterior ao 231 (CentOS/RHEL 7 tem
 > o 219, Ubuntu 16.04 o 229). A unit de sistema escreve também `ReadWriteDirectories=`
