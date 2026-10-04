@@ -317,6 +317,15 @@ func planoDeOutroArmazenamento(cfg *config.Config, plan api.Plan) bool {
 	return cfg.StorageID != "" && id != "" && id != cfg.StorageID
 }
 
+// restoreDeIrmaoComMesmoBucket: o item é de outro armazenamento (storage_id
+// diferente do STORAGE_ID), mas o bucket tem o mesmo nome do instalado.
+// Espelha planoDeIrmaoComMesmoBucket: item de outro bucket não entra aqui e
+// segue para o caminho SIBLING_BUCKETS / wrong_bucket.
+func restoreDeIrmaoComMesmoBucket(cfg *config.Config, item api.RestoreItem) bool {
+	return cfg.StorageID != "" && item.StorageID != "" && item.StorageID != cfg.StorageID &&
+		cfg.StorageBucket != "" && item.Bucket == cfg.StorageBucket
+}
+
 // erroVersionamento é a falha da checagem de versionamento antes do envio:
 // mensagem própria (nada foi enviado), e errors.Is casa com os erros do
 // engine para quem já trata ErrBucketSemVersionamento.
@@ -931,14 +940,18 @@ func processarFilaDeRestore(ctx context.Context, c *api.Client, s3c *s3.Client, 
 		if e, ok := aquecendo[item.ItemID]; ok && time.Now().Before(e.proxima) {
 			continue
 		}
-		// Item de outro armazenamento com bucket de mesmo nome: é de um
+		// Item de outro armazenamento com bucket de mesmo nome: pode ser de um
 		// processo irmão. Pulado sem tocar no item — executá-lo com a chave e
 		// o endpoint daqui falhava ou dava not_found, e o painel marcava a
-		// versão como indisponível. Item sem storage_id (painel antigo) ou
+		// versão como indisponível. Item de outro armazenamento com OUTRO
+		// bucket segue para o filtro por bucket (SIBLING_BUCKETS ou
+		// wrong_bucket visível), como em planoDeIrmaoComMesmoBucket. Item sem
+		// storage_id (painel antigo, ou servidor sem install_storage_id) ou
 		// processo sem STORAGE_ID: só o filtro por bucket, abaixo.
-		if cfg.StorageID != "" && item.StorageID != "" && item.StorageID != cfg.StorageID {
-			slog.Debug("restore item de outro armazenamento; pulado",
-				"item_id", item.ItemID, "storage_id", item.StorageID, "bucket", item.Bucket)
+		if restoreDeIrmaoComMesmoBucket(cfg, item) {
+			slog.Info("restore item de outro armazenamento com bucket de mesmo nome; pulado, fica para o processo irmão",
+				"item_id", item.ItemID, "storage_id", item.StorageID, "bucket", item.Bucket,
+				"storage_id_instalado", cfg.StorageID)
 			continue
 		}
 		// Este processo só tem credenciais para o bucket configurado. Item de

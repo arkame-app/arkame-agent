@@ -165,3 +165,50 @@ func TestRestoreDeIrmaoComMesmoBucket(t *testing.T) {
 		})
 	}
 }
+
+// Item de outro armazenamento E outro bucket não é de processo irmão (o pulo
+// silencioso vale só para bucket de mesmo nome): falha com wrong_bucket, em
+// vez de ficar queued para sempre. O de mesmo bucket continua pulado sem PATCH.
+func TestRestoreDeOutroArmazenamentoEOutroBucketFalhaWrongBucket(t *testing.T) {
+	dest := t.TempDir()
+	itens := []api.RestoreItem{
+		{ItemID: "outro-bucket", StorageID: "s-outro", Bucket: "outros", Status: "queued",
+			DestPath: dest, DestFilename: "a.txt", SourceKey: "k", SourceVersionID: "v"},
+		{ItemID: "mesmo-bucket", StorageID: "s-irmao", Bucket: "backups", Status: "queued",
+			DestPath: dest, DestFilename: "b.txt", SourceKey: "k", SourceVersionID: "v"},
+	}
+	var (
+		mu     gosync.Mutex
+		bodies = map[string][]api.RestoreItemUpdate{}
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/restore-items") {
+			_ = json.NewEncoder(w).Encode(api.ListRestoreItemsResponse{Items: itens})
+			return
+		}
+		if r.Method == http.MethodPatch {
+			var u api.RestoreItemUpdate
+			_ = json.NewDecoder(r.Body).Decode(&u)
+			id := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
+			mu.Lock()
+			bodies[id] = append(bodies[id], u)
+			mu.Unlock()
+		}
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(srv.Close)
+	c, _ := api.New(api.Options{BaseURL: srv.URL, Bearer: "t"})
+	cfg := &config.Config{AgentID: "a1", HostRoot: "/", StorageID: "s-meu", StorageBucket: "backups"}
+
+	processarFilaDeRestore(context.Background(), c, s3SemUso(t), cfg, map[string]*esperaDeAquecimento{})
+
+	mu.Lock()
+	defer mu.Unlock()
+	got := bodies["outro-bucket"]
+	if len(got) != 1 || got[0].Status != "failed" || got[0].ErrorCode != "wrong_bucket" {
+		t.Errorf("item de outro armazenamento e outro bucket: PATCH %+v, esperava um failed/wrong_bucket", got)
+	}
+	if n := len(bodies["mesmo-bucket"]); n != 0 {
+		t.Errorf("item de outro armazenamento com bucket de mesmo nome: %d PATCH, esperava pulado sem tocar", n)
+	}
+}

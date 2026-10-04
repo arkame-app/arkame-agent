@@ -127,6 +127,16 @@ Binário Linux rodando local contra o painel em produção (`save.arkame.app`) +
 > diferente é pulado sem executar; sem `storage_id` no item, vale só o bucket, como
 > antes. Sem `STORAGE_ID` (instalação antiga), nada muda.
 >
+> Mudanças recentes (ver `git tag --contains <commit>`; passada 38): o pulo do item de
+> restauração de outro armazenamento agora exige também bucket igual ao `STORAGE_BUCKET`
+> (`restoreDeIrmaoComMesmoBucket`, espelho de `planoDeIrmaoComMesmoBucket`), e o log
+> subiu de Debug para Info com o motivo. Antes, na 0.4.27, o item de outro armazenamento
+> **e** outro bucket também era pulado sem PATCH e ficava `queued` para sempre, sem erro
+> no painel; agora volta ao caminho anterior: `SIBLING_BUCKETS` (outro processo atende)
+> ou falha `wrong_bucket` visível. O painel passa a omitir `storage_id` dos itens para
+> servidor sem `install_storage_id`; sem `storage_id` no item, o agente filtra só pelo
+> bucket, como já fazia.
+>
 > Compatibilidade com systemd anterior ao 231 (CentOS/RHEL 7 tem
 > o 219, Ubuntu 16.04 o 229). A unit de sistema escreve também `ReadWriteDirectories=`
 > ao lado de `ReadWritePaths=`: o systemd antigo ignorava `ReadWritePaths=` mas aplicava
