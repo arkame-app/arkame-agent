@@ -136,9 +136,13 @@ restauração grava no servidor, inclusive no lugar original. O prazo de 150 s
 (`--stop-timeout`, `stop -t`, `restart -t`) é o tempo que o agente pode levar para
 fechar um backup em andamento e avisar o painel (`/complete`); os 10 s padrão do
 Docker, ou o `rm -f`, matam o processo antes e o ponto de restauração se perde.
+`--pull always` no primeiro `docker run`: o agente não se atualiza sozinho, e
+reinstalar com este comando é como ele se atualiza no Docker; sem a opção, o
+Docker reaproveita a `:latest` que já está no servidor e o agente continua na
+versão antiga.
 
 ```bash
-sudo docker run --rm -it --user 0 --security-opt label=disable --hostname "$(hostname)" -v /etc/arkame:/etc/arkame \
+sudo docker run --pull always --rm -it --user 0 --security-opt label=disable --hostname "$(hostname)" -v /etc/arkame:/etc/arkame \
   ghcr.io/arkame-app/arkame-agent:latest install --token=atk_... --panel-url=https://save.arkame.app --install-service=false \
 && { sudo docker stop -t 150 arkame-agent >/dev/null 2>&1; sudo docker rm arkame-agent >/dev/null 2>&1; \
   sudo docker run -d --name arkame-agent --restart always --stop-timeout 150 --user 0 --security-opt label=disable --hostname "$(hostname)" \
