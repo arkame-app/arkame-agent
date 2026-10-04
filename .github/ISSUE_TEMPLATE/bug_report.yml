@@ -58,5 +58,5 @@ body:
     attributes:
       label: Relevant log lines
       description: |
-        Docker - `sudo docker logs --tail 100 arkame-agent`. Linux - `journalctl -u arkame-agent -n 100`. Windows - `C:\etc\arkame\agent.log`.
+        Docker - `sudo docker logs --tail 100 arkame-agent`. Linux - `sudo journalctl -u arkame-agent -n 100` (installed without root: `journalctl --user -u arkame-agent -n 100`). Windows - `C:\etc\arkame\agent.log`.
       render: text
