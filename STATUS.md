@@ -137,6 +137,18 @@ Binário Linux rodando local contra o painel em produção (`save.arkame.app`) +
 > servidor sem `install_storage_id`; sem `storage_id` no item, o agente filtra só pelo
 > bucket, como já fazia.
 >
+> Mudanças recentes (ver `git tag --contains <commit>`; passada 41): o relato do expurgo
+> (`POST /purge-result`) sai com `contextoDeFinalizacao`, como o `/complete` e o `/fail`.
+> Antes usava o ctx do daemon: com SIGTERM no meio da limpeza (uninstall, servidor
+> arquivado, `docker stop`) o POST falhava na hora, e se o agente não voltasse o catálogo
+> seguia oferecendo versões que já tinham saído do bucket. E o `purge.Run`, com o ctx
+> cancelado, devolve o que já saiu e deixa o lote cortado no meio do `DeleteObjects`
+> (e a conferência de versão atual cortada) **fora** de `deleted` e de `failed`: não dá
+> para saber se o provedor apagou, a baixa no catálogo seria mentira e a falha seria só
+> a parada. Essas versões continuam no catálogo e a próxima rodada as recalcula (apagar
+> versão que já não existe responde como apagada). Parado antes de apagar qualquer
+> coisa, o agente não manda relato vazio: a rodada segue emitida e o painel a reentrega.
+>
 > Compatibilidade com systemd anterior ao 231 (CentOS/RHEL 7 tem
 > o 219, Ubuntu 16.04 o 229). A unit de sistema escreve também `ReadWriteDirectories=`
 > ao lado de `ReadWritePaths=`: o systemd antigo ignorava `ReadWritePaths=` mas aplicava
