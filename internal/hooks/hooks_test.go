@@ -123,3 +123,27 @@ func TestShellAusenteDizQueNaoIniciou(t *testing.T) {
 		t.Fatalf("não foi prazo: %+v", r)
 	}
 }
+
+// Serviço parando com o comando rodando: o erro diz que foi interrompido, e
+// não "código -1" — com ele, o painel culpava o comando do cliente.
+func TestCancelamentoDeQuemChamaDizQueFoiInterrompido(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("comando de shell específico do unix")
+	}
+	ctx, cancelar := context.WithCancel(context.Background())
+	time.AfterFunc(300*time.Millisecond, cancelar)
+	inicio := time.Now()
+	r, err := Run(ctx, "sleep 5", 15*time.Minute)
+	if !errors.Is(err, ErrInterrompido) {
+		t.Fatalf("esperava ErrInterrompido, veio %v", err)
+	}
+	if err.Error() != "interrompido: o serviço do agente parou" || strings.Contains(err.Error(), "código") {
+		t.Fatalf("mensagem = %q", err)
+	}
+	if r.TimedOut {
+		t.Fatal("cancelamento não é prazo estourado")
+	}
+	if time.Since(inicio) > 3*time.Second {
+		t.Fatal("não interrompeu o comando")
+	}
+}

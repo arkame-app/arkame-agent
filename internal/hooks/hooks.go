@@ -39,6 +39,12 @@ import (
 // perceber.
 const MaxOutputBytes = 8 * 1024
 
+// ErrInterrompido é o comando derrubado porque o contexto de quem chamou foi
+// cancelado — o serviço do agente parando (SIGTERM na atualização, reboot,
+// `systemctl restart`). Saía como "código -1", e o chamador punha a culpa no
+// comando do cliente: o painel mandava conferir um `pg_dump` que estava certo.
+var ErrInterrompido = errors.New("interrompido: o serviço do agente parou")
+
 // Result descreve o que aconteceu com um comando.
 type Result struct {
 	Ran      bool
@@ -109,6 +115,10 @@ func Run(ctx context.Context, comando string, prazo time.Duration) (Result, erro
 	}
 	if r.TimedOut {
 		return r, fmt.Errorf("comando excedeu o prazo de %s", prazo)
+	}
+	if errors.Is(ctx.Err(), context.Canceled) {
+		// Só o ctx de quem chamou cancela este: o nosso tem apenas prazo.
+		return r, ErrInterrompido
 	}
 	if !ok {
 		// Sem código de saída o comando nem chegou a rodar — no Docker

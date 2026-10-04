@@ -455,7 +455,19 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 	// adiante salvaria o dump da véspera achando que salvou o de hoje — pior
 	// que não salvar, porque ninguém procura o que parece estar lá.
 	prazo := time.Duration(plan.HookTimeoutSeconds) * time.Second
-	if r, err := hooks.Run(ctx, plan.PreHook, prazo); err != nil {
+	if r, err := hooks.Run(ctx, plan.PreHook, prazo); errors.Is(err, hooks.ErrInterrompido) {
+		// O serviço parou com o comando rodando: o comando do cliente não
+		// falhou, e pre_hook_failed mandaria conferir o comando no plano.
+		slog.Warn("comando de antes interrompido pela parada do serviço; backup abortado", "plan_id", plan.ID)
+		marcarFalha(ctx, c, cfg, startResp.SessionID, struct {
+			ErrorCode    string `json:"error_code"`
+			ErrorMessage string `json:"error_message"`
+		}{
+			ErrorCode:    codigoAgenteParou,
+			ErrorMessage: err.Error(),
+		})
+		return err
+	} else if err != nil {
 		slog.Error("comando de antes falhou; backup abortado",
 			"plan_id", plan.ID, "exit_code", r.ExitCode, "timed_out", r.TimedOut)
 		msg := fmt.Sprintf("comando de antes do backup falhou: %v", err)
@@ -496,10 +508,19 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 	// Falha aqui não invalida o backup: os arquivos já subiram. Mas vai ao
 	// painel (post_hook_failed), para quem for investigar o disco cheio
 	// depois — a saída era montada e jogada fora.
-	falhaDoDepois := ""
-	if err != nil {
+	//
+	// Derrubado pela parada do serviço (a graça da finalização acabou), não
+	// é falha do comando do cliente: sem post_hook_failed, e a nota de uma
+	// sessão parcial ou falha diz que ele foi interrompido.
+	falhaDoDepois, nota := "", ""
+	switch {
+	case errors.Is(err, hooks.ErrInterrompido):
+		slog.Warn("comando de depois interrompido pela parada do serviço", "plan_id", plan.ID)
+		nota = notaDoDepoisInterrompido
+	case err != nil:
 		slog.Warn("comando de depois falhou", "plan_id", plan.ID, "err", err)
 		falhaDoDepois = mensagemDoDepois(err, r.Output)
+		nota = notaDoDepois
 	}
 
 	if errors.Is(syncErr, syncengine.ErrBucketSemVersionamento) {
@@ -528,9 +549,7 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 		} else if syncErr != nil {
 			msg = syncErr.Error()
 		}
-		if falhaDoDepois != "" {
-			msg += notaDoDepois
-		}
+		msg += nota
 		failBody := struct {
 			ErrorCode    string `json:"error_code"`
 			ErrorMessage string `json:"error_message"`
@@ -597,9 +616,7 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 		// por arquivo.
 		completeBody.ErrorCode = "sync_partial"
 		completeBody.ErrorMessage = causaDoParcial(result, syncErr)
-		if falhaDoDepois != "" {
-			completeBody.ErrorMessage += notaDoDepois
-		}
+		completeBody.ErrorMessage += nota
 		slog.Warn("backup parcial", "plan_id", plan.ID, "session_id", startResp.SessionID,
 			"arquivos_com_falha", result.FilesFailed, "err", syncErr, "causa", completeBody.ErrorMessage)
 	}
@@ -791,6 +808,14 @@ func dicaDoAcessoTotal() string {
 // notaDoDepois vai ao fim da causa de uma sessão parcial ou falha quando o
 // comando de depois também falhou: a causa principal é a do backup.
 const notaDoDepois = "; comando de depois falhou"
+
+// notaDoDepoisInterrompido é a nota quando a parada do serviço derrubou o
+// comando de depois: ele não falhou.
+const notaDoDepoisInterrompido = "; comando de depois interrompido: o serviço do agente parou"
+
+// codigoAgenteParou fecha a sessão cujo comando de antes foi derrubado pela
+// parada do serviço (hooks.ErrInterrompido), no lugar de pre_hook_failed.
+const codigoAgenteParou = "agent_stopped"
 
 // mensagemDoDepois é o error_message de post_hook_failed: o erro do comando
 // (código de saída ou prazo) e a saída dele, até hooks.MaxOutputBytes, sem
