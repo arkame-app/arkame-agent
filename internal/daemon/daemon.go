@@ -510,13 +510,15 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 	// depois — a saída era montada e jogada fora.
 	//
 	// Derrubado pela parada do serviço (a graça da finalização acabou), não
-	// é falha do comando do cliente: sem post_hook_failed, e a nota de uma
-	// sessão parcial ou falha diz que ele foi interrompido.
-	falhaDoDepois, nota := "", ""
+	// é falha do comando do cliente: a sessão completa leva
+	// post_hook_interrupted (e não post_hook_failed), e a nota de uma sessão
+	// parcial ou falha diz que ele foi interrompido.
+	falhaDoDepois, nota, interrompidoDepois := "", "", false
 	switch {
 	case errors.Is(err, hooks.ErrInterrompido):
 		slog.Warn("comando de depois interrompido pela parada do serviço", "plan_id", plan.ID)
 		nota = notaDoDepoisInterrompido
+		interrompidoDepois = true
 	case err != nil:
 		slog.Warn("comando de depois falhou", "plan_id", plan.ID, "err", err)
 		falhaDoDepois = mensagemDoDepois(err, r.Output)
@@ -623,6 +625,10 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 	if completeStatus == "complete" && falhaDoDepois != "" {
 		completeBody.ErrorCode = "post_hook_failed"
 		completeBody.ErrorMessage = falhaDoDepois
+	}
+	if completeStatus == "complete" && interrompidoDepois {
+		completeBody.ErrorCode = "post_hook_interrupted"
+		completeBody.ErrorMessage = msgDoDepoisInterrompido
 	}
 	var completeResp struct {
 		// Ponteiro: ausente (resposta de "not_running", painel antigo) não é
@@ -811,7 +817,13 @@ const notaDoDepois = "; comando de depois falhou"
 
 // notaDoDepoisInterrompido é a nota quando a parada do serviço derrubou o
 // comando de depois: ele não falhou.
-const notaDoDepoisInterrompido = "; comando de depois interrompido: o serviço do agente parou"
+const notaDoDepoisInterrompido = "; " + msgDoDepoisInterrompido
+
+// msgDoDepoisInterrompido é o error_message de post_hook_interrupted, o aviso
+// da sessão completa cujo comando de depois a parada do serviço derrubou: o
+// backup vale, mas o que o comando fazia (apagar o dump, religar o banco)
+// pode não ter acontecido.
+const msgDoDepoisInterrompido = "comando de depois interrompido: o serviço do agente parou"
 
 // codigoAgenteParou fecha a sessão cujo comando de antes foi derrubado pela
 // parada do serviço (hooks.ErrInterrompido), no lugar de pre_hook_failed.

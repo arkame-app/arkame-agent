@@ -156,10 +156,13 @@ Binário Linux rodando local contra o painel em produção (`save.arkame.app`) +
 > O `hooks.Run` devolve `hooks.ErrInterrompido` ("interrompido: o serviço do agente
 > parou") quando o ctx de quem chama é cancelado, e o `executePlan` fecha a sessão pelo
 > `marcarFalha` (com a graça da finalização) com `error_code: agent_stopped` e essa
-> mensagem. No comando de depois, se a graça acaba com ele rodando, não há
-> `post_hook_failed` na sessão completa, e a parcial ou falha leva a nota "; comando de
-> depois interrompido: o serviço do agente parou" em vez de "; comando de depois falhou".
-> O painel ainda não tem `motivos.agent_stopped`: mostra só a mensagem.
+> mensagem. No comando de depois, se a graça acaba com ele rodando, a sessão completa
+> leva o aviso `post_hook_interrupted` ("comando de depois interrompido: o serviço do
+> agente parou"; mesmo mecanismo do `post_hook_failed`, para o cliente conferir o dump
+> que pode ter ficado), e a parcial ou falha leva a nota "; comando de depois
+> interrompido: o serviço do agente parou" em vez de "; comando de depois falhou".
+> O painel ainda não tem `motivos.agent_stopped` nem guarda `post_hook_interrupted`
+> (falta em `AVISOS_DE_SESSAO_COMPLETA` e nas traduções).
 >
 > Compatibilidade com systemd anterior ao 231 (CentOS/RHEL 7 tem
 > o 219, Ubuntu 16.04 o 229). A unit de sistema escreve também `ReadWriteDirectories=`

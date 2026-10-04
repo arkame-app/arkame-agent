@@ -118,3 +118,50 @@ func TestServicoParandoNoComandoDeDepoisNaoCulpaOComando(t *testing.T) {
 		t.Fatalf("error_message culpa o comando de depois: %q", f.ErrorMessage)
 	}
 }
+
+// Backup inteiro enviado e o serviço parando durante o comando de depois: a
+// sessão segue completa, com o aviso post_hook_interrupted — o backup vale,
+// mas o que o comando fazia (apagar o dump) pode não ter acontecido.
+func TestSessaoCompletaComComandoDeDepoisInterrompido(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("comando de shell do teste é POSIX")
+	}
+	antes := finalizacaoGraca
+	finalizacaoGraca = 300 * time.Millisecond
+	defer func() { finalizacaoGraca = antes }()
+
+	painel, c := novoPainel(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// O envio dá certo; o serviço "para" quando o comando de depois começa
+	// (ele cria a marca antes de dormir).
+	marca := filepath.Join(t.TempDir(), "comecou")
+	go func() {
+		for ctx.Err() == nil {
+			if _, err := os.Stat(marca); err == nil {
+				cancel()
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+	plan := planoComArquivo(t)
+	plan.PostHook = "touch " + marca + "; sleep 5"
+	cfg := &config.Config{AgentID: "a1", HostRoot: "/"}
+
+	inicio := time.Now()
+	if err := executePlan(ctx, c, bucketDeTeste(t, true), cfg, plan); err != nil {
+		t.Fatalf("backup enviado não pode voltar com erro: %v (chamadas: %v)", err, painel.chamadas)
+	}
+	if time.Since(inicio) > 4*time.Second {
+		t.Fatal("o comando de depois não foi derrubado no fim da graça")
+	}
+	if n := painel.recebeu("/sessions/s1/fail"); n != 0 {
+		t.Fatalf("/fail numa sessão completa; chamadas: %v", painel.chamadas)
+	}
+	got := lerComplete(t, painel)
+	if got.Status != "complete" || got.ErrorCode != "post_hook_interrupted" ||
+		got.ErrorMessage != "comando de depois interrompido: o serviço do agente parou" {
+		t.Fatalf("/complete = %+v; queria complete/post_hook_interrupted com a nota", got)
+	}
+}
