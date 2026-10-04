@@ -46,7 +46,8 @@ bucket version; and, when the user browses folders while creating a plan in
 the panel, the names of the folders and files opened and the size of each file.
 Never file contents. The agent can be fully removed with
 `arkame-agent uninstall` (Docker: `docker stop -t 150 arkame-agent` then
-`docker rm arkame-agent`, and delete `/etc/arkame`).
+`docker rm arkame-agent`, delete `/etc/arkame` and remove the image with
+`docker rmi ghcr.io/arkame-app/arkame-agent:latest`).
 
 ## Arquitetura
 
@@ -297,7 +298,7 @@ sudo /opt/arkame/bin/arkame-agent uninstall
 ~/.local/bin/arkame-agent uninstall --service-scope user
 
 # Docker (o programa está só na imagem; não há uninstall no host)
-sudo docker stop -t 150 arkame-agent 2>/dev/null; sudo docker rm arkame-agent 2>/dev/null; sudo rm -rf /etc/arkame
+sudo docker stop -t 150 arkame-agent 2>/dev/null; sudo docker rm arkame-agent 2>/dev/null; sudo rm -rf /etc/arkame; sudo docker rmi ghcr.io/arkame-app/arkame-agent:latest 2>/dev/null
 ```
 
 Tira o serviço, o arquivo de configuração com a chave, a identidade (token,
