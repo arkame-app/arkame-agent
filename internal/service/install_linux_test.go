@@ -81,6 +81,13 @@ func TestUnitProtegeOConfigComEspacoEPorcento(t *testing.T) {
 		if escopo == ScopeSystem && linhas["ReadWritePaths"] != `"/srv/arkame cfg"` {
 			t.Errorf("ReadWritePaths=%s", linhas["ReadWritePaths"])
 		}
+		// systemd < 231 (CentOS 7) só conhece ReadWriteDirectories=.
+		if escopo == ScopeSystem && linhas["ReadWriteDirectories"] != `"/srv/arkame cfg"` {
+			t.Errorf("ReadWriteDirectories=%s", linhas["ReadWriteDirectories"])
+		}
+		if escopo == ScopeUser && strings.Contains(unit, "ReadWrite") {
+			t.Errorf("unit de usuário com ReadWrite*:\n%s", unit)
+		}
 		// O uninstall e o reconhecimento dos outros agentes leem a unit de volta.
 		if c := configDaUnit(unit); c != cfg {
 			t.Errorf("%s: configDaUnit = %q, queria %q", escopo, c, cfg)

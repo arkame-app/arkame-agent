@@ -29,6 +29,13 @@ import (
 // painel (error_code read_only_destination, com a explicação; ver
 // restore.CodigoDestinoSomenteLeitura e o README), e não arquivo perdido;
 // quem precisar restaura em outra pasta, ou usa o agente em Docker.
+//
+// ReadWriteDirectories= repete o ReadWritePaths=: o systemd anterior ao 231
+// (CentOS/RHEL 7 tem o 219, Ubuntu 16.04 o 229) não conhece ReadWritePaths= e
+// ignora a linha, mas aplica o ProtectSystem=full — /etc/arkame ficava só
+// leitura e o token renovado não era gravado (EROFS), e o agente subia com o
+// token vencido depois do reboot. O systemd novo aceita os dois (o antigo
+// virou sinônimo) e soma as listas; repetir o mesmo caminho não muda nada.
 const systemUnitTmpl = `[Unit]
 Description=Arkame Backup Agent (%[1]s)
 Documentation=https://arkame.app/docs
@@ -48,6 +55,7 @@ Group=root
 NoNewPrivileges=true
 ProtectSystem=full
 ReadWritePaths=%[5]s
+ReadWriteDirectories=%[5]s
 
 [Install]
 WantedBy=multi-user.target
