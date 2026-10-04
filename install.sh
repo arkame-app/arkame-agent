@@ -248,14 +248,16 @@ alvo_launchd() {
   if [ "$1" = "system" ]; then printf 'system/%s' "$2"; else printf 'gui/%s/%s' "$(id -u)" "$2"; fi
 }
 
-# units_ativas [--user]: as units arkame-agent* ativas, com o .service.
+# units_ativas [--user]: todas as units de serviço ativas, com o .service. Sem
+# padrão de nome: até a v0.4.3 o install aceitava qualquer nome (backup-oci),
+# e quem decide se é agente é o programa do ExecStart.
 units_ativas() {
-  systemctl "$@" list-units --type=service --state=active --no-legend --plain 'arkame-agent*' 2>/dev/null \
+  systemctl "$@" list-units --type=service --state=active --no-legend --plain 2>/dev/null \
     | awk '{for (i = 1; i <= NF; i++) if ($i ~ /\.service$/) { print $i; break }}'
 }
 
-# agentes_do_programa <programa>: os agentes arkame-agent* rodando agora que
-# chamam <programa>, um por linha: "<escopo> <nome>" (o nome da unit sem
+# agentes_do_programa <programa>: os agentes rodando agora que chamam
+# <programa>, qualquer que seja o nome do serviço, um por linha: "<escopo> <nome>" (o nome da unit sem
 # .service no systemd; o label no launchd).
 agentes_do_programa() {
   _ap_alvo=$(caminho_real "$1")
@@ -276,7 +278,7 @@ agentes_do_programa() {
       have launchctl || return 0
       for _ap_escopo in system user; do
         if [ "$_ap_escopo" = "system" ]; then _ap_dir=$LAUNCHD_DIR_SISTEMA; else _ap_dir=$LAUNCHD_DIR_USUARIO; fi
-        for _ap_f in "$_ap_dir"/app.arkame.agent*.plist; do
+        for _ap_f in "$_ap_dir"/app.arkame.*.plist; do
           [ -f "$_ap_f" ] || continue
           _ap_label=$(basename "$_ap_f" .plist)
           _ap_p=$(programa_do_plist "$_ap_f")
