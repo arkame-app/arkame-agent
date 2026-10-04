@@ -1,395 +1,307 @@
 # Arkame Agent
 
-Agent Go do SaaS [Arkame](https://arkame.app) — roda no servidor do cliente, lê arquivos e envia para o bucket BYOS, reportando status ao painel.
+[![License: Apache-2.0](https://img.shields.io/github/license/arkame-app/arkame-agent)](LICENSE)
+[![Latest release](https://img.shields.io/github/v/release/arkame-app/arkame-agent?sort=semver)](https://github.com/arkame-app/arkame-agent/releases/latest)
+[![CI](https://github.com/arkame-app/arkame-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/arkame-app/arkame-agent/actions/workflows/ci.yml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/arkame-app/arkame-agent)](https://goreportcard.com/report/github.com/arkame-app/arkame-agent)
+[![Signed with cosign](https://img.shields.io/badge/releases-signed%20with%20cosign-2a6db2?logo=sigstore&logoColor=white)](#verify-releases-cosign)
 
-**Status:** funcional. Enrollment (Ed25519 + bearer JWT), daemon com 6 loops (heartbeat com renovação do token, probe, planos/backup, restauração, explorador de pastas, expurgo de retenção), sync engine (walker + hash + dedup HeadObject + multipart upload), restore com escrita atômica + verify, e warming de cold storage estão implementados. Build limpo (`go vet ./...`). Resta hardening (mTLS, self-update, snapshots, observabilidade) — ver "O que falta".
+The open source backup agent behind [Arkame](https://arkame.app/en?utm_source=github&utm_medium=readme&utm_campaign=agent-repo):
+it backs up a server's folders straight to **your own** S3-compatible bucket,
+with keys that never leave the server, and restores any version back.
 
-## About (English)
+It runs on Linux, macOS and Windows (amd64 and arm64). The Arkame panel
+schedules the backups and indexes them; the files themselves go from your server
+to your bucket and nowhere else.
 
-Arkame Agent is an open source (Apache 2.0) backup agent for Linux, macOS and
-Windows servers. It reads the folders the user selects, uploads them directly to
-the user's own S3-compatible bucket (AWS S3, Backblaze B2, Wasabi, Oracle Cloud
-and others) with the user's own credentials — which never leave the machine —
-and restores any version back to the server. Cloudflare R2 is not accepted for
-new storage in the panel: it offers neither versioning nor Object Lock. It reports only backup
-metadata to the [Arkame](https://arkame.app) management panel.
+> I'm the founder. This repository is the part of Arkame that runs on your
+> machine, published so you can read exactly what it does before you run it as
+> root. The agent is not a standalone tool: it needs an Arkame account to get
+> its plans (see [Limitations](#limitations)).
 
-## Download
+**Documentation:** [English](https://arkame.app/en/docs?utm_source=github&utm_medium=readme&utm_campaign=agent-repo)
+· [Português](https://arkame.app/docs?utm_source=github&utm_medium=readme&utm_campaign=agent-repo)
+· [Español](https://arkame.app/es/docs?utm_source=github&utm_medium=readme&utm_campaign=agent-repo)
 
-Every release is built and published by GitHub Actions from this repository:
-[github.com/arkame-app/arkame-agent/releases](https://github.com/arkame-app/arkame-agent/releases)
-(binaries for Linux, macOS and Windows, amd64 and arm64, with SHA-256 checksums
-signed by Sigstore/cosign, and a container image at `ghcr.io/arkame-app/arkame-agent`).
+## Quickstart (Docker)
 
-The panel shows a one-line install command for each system; see
-[Uso](#uso) below. Windows binaries are not code-signed yet: Windows 11 with
-Smart App Control turned on blocks the agent, while Windows 10 and Windows
-Server work normally. Integrity is covered by the SHA-256 checksums signed with
-Sigstore/cosign. On Linux, Docker is the default install method.
+1. In the [Arkame panel](https://save.arkame.app/?utm_source=github&utm_medium=readme&utm_campaign=agent-repo),
+   add your bucket and go to **Servers → New server**. It shows this command with
+   a one-time install code (`atk_…`, valid for 24 hours).
+2. Run it on the server:
+
+   ```bash
+   sudo docker run --pull always --rm -it --user 0 --security-opt label=disable --hostname "$(hostname)" -v /etc/arkame:/etc/arkame \
+     ghcr.io/arkame-app/arkame-agent:latest install --token=atk_... --panel-url=https://save.arkame.app --install-service=false \
+   && { sudo docker stop -t 150 arkame-agent >/dev/null 2>&1; sudo docker rm arkame-agent >/dev/null 2>&1; \
+     sudo docker run -d --name arkame-agent --restart always --stop-timeout 150 --user 0 --security-opt label=disable --hostname "$(hostname)" \
+     -v /:/host -v /etc/arkame:/etc/arkame ghcr.io/arkame-app/arkame-agent:latest; }
+   ```
+
+   The first container asks for your bucket's access key and secret, **tests
+   them against the bucket**, registers the server and waits for you to approve
+   it in the panel. Only if that succeeds is the old container (if any) replaced
+   and the service started.
+3. Approve the server in the panel and create a backup plan.
+
+Why the flags:
+
+- `--pull always`: the agent does not update itself. Re-running this command is
+  how you update it on Docker; without the flag Docker reuses the `:latest`
+  image already on the host.
+- `--stop-timeout 150` / `stop -t 150`: a stopping agent may need up to 150 s
+  to finish the upload in progress and send the backup's index to the panel.
+  Docker's default 10 s (or `docker rm -f`) kills it first and that restore
+  point is lost.
+- `-v /:/host` (read-write): the agent reads the folders you back up, and
+  restores write back to the server, including to the original location.
+- `--security-opt label=disable`: on SELinux hosts (RHEL, Rocky, Fedora) the
+  container otherwise cannot read the host or write `/etc/arkame`. Elsewhere it
+  does nothing.
+
+## How it works
+
+```mermaid
+flowchart LR
+  subgraph server["Your server"]
+    agent["arkame-agent<br/>(daemon)"]
+    keys[("/etc/arkame/agent.env<br/>bucket keys, 0600")]
+    keys --- agent
+  end
+  bucket[("Your S3-compatible bucket<br/>AWS S3, Backblaze B2, Wasabi,<br/>Oracle Cloud, MinIO…")]
+  panel["Arkame panel<br/>save.arkame.app"]
+
+  agent -- "file contents (HTTPS, your keys)" --> bucket
+  agent -- "heartbeat, file index, bucket checks (HTTPS)" --> panel
+  panel -- "plans, schedules, restore and retention requests" --> agent
+```
+
+```
+┌──────────── your server ────────────┐
+│  arkame-agent                        │  file contents   ┌───────────────────┐
+│   • walks the folders in the plan    │ ───────────────► │ your bucket        │
+│   • SHA-256 per file, skips unchanged│   your keys      │ (versioned)        │
+│   • uploads (multipart for big files)│                  └───────────────────┘
+│   • restores with atomic writes      │
+│                                      │  index + status  ┌───────────────────┐
+│   keys stay in /etc/arkame (0600)    │ ◄──────────────► │ Arkame panel       │
+└──────────────────────────────────────┘  plans, restores └───────────────────┘
+```
+
+- **Enrollment.** `install` generates an Ed25519 key pair on the server and
+  registers it with the one-time code. Nothing runs until you approve that
+  server in the panel; the agent then gets a bearer token (renewed by the panel
+  before it expires) for its calls.
+- **Backups.** The agent polls the panel for plans (every 60 s by default) and
+  runs them within the configured schedule, time windows and bandwidth limit.
+  It hashes each file with SHA-256, checks the bucket (`HeadObject`) to skip
+  unchanged content, uploads the rest straight to your bucket, and then sends
+  the session's file index to the panel.
+- **Versions live in your bucket.** Point-in-time restore relies on the bucket's
+  own object versioning; the agent periodically reports whether versioning,
+  Object Lock and lifecycle rules are set so the panel can warn you.
+- **Restores.** You pick files in the panel (search, folder browser or
+  timeline). The agent downloads that exact version from your bucket, writes it
+  atomically, and checks the SHA-256 before reporting success. Objects in cold
+  storage (Glacier, Deep Archive) are rehydrated first.
+- **Retention.** Old versions are deleted by the agent, with your keys, from a
+  list the panel authorizes. The agent refuses to delete the current version of
+  a file as part of version thinning.
+
+## What the panel can and cannot see
+
+The panel never receives your bucket keys and never receives file contents.
+This is what the agent does send to the panel (`internal/api/types.go` has the
+exact payloads):
+
+| Sent to the panel | When |
+|---|---|
+| Server name (hostname), OS and architecture, agent version, install method (Docker or binary), Ed25519 public key | Enrollment |
+| Agent version, OS, service name and scope, path of the agent program | Heartbeat (every 60 s) |
+| Your server's IP address | Implicitly, on every request |
+| Bucket check results: versioning, Object Lock and lifecycle settings, total bytes and object count in the bucket, access errors | Hourly, and when you click "Test connection" |
+| Per-backup file index: object key (the file's path), size, modification time, SHA-256 and the bucket's version ID; plus counters (files, bytes) | End of each backup |
+| Up to 8 KB of output from a plan's pre/post-backup command | When that command runs |
+| Error messages from failed backups, files and restores | When something fails |
+| Names of folders and files, and file sizes, in a folder you open | When you browse folders while creating a plan |
+| Restore progress, and the keys/version IDs deleted by retention | During restores and retention runs |
+
+Never sent: the bucket access key and secret, file contents, the agent's
+private key.
+
+The panel is the control plane, so be clear about what it can **ask** the agent
+to do:
+
+- back up any folder the agent can read, and list folders when you browse;
+- restore files from your bucket to any path the agent can write
+  (with "overwrite" as one of the conflict options);
+- delete non-current versions in your bucket for retention;
+- run the pre/post-backup shell commands you set on a plan (for example
+  `pg_dump`), as the user the agent runs as (root or SYSTEM for a system
+  service). These do not run in the Docker install.
+
+If you want a hard limit on what a compromised panel account could reach, run
+the agent with less privilege: the native installer without `sudo` installs a
+user service that reads only what that user can read, and bucket credentials
+limited to a single bucket keep it away from the rest of your account. Object
+Lock in compliance mode keeps versions from being deleted before their retention
+date by anyone, the agent included.
+
+The [privacy policy](https://arkame.app/en/privacidade?utm_source=github&utm_medium=readme&utm_campaign=agent-repo)
+(section 3) describes the same data from the legal side.
+
+## Verify releases (cosign)
+
+Every release is built by GitHub Actions from a tag in this repository, after
+the test suite passes. `checksums.txt` covers every archive and binary, and is
+signed keyless with [Sigstore cosign](https://docs.sigstore.dev/) through the
+workflow's GitHub OIDC identity, so there is no long-lived signing key.
+
+```bash
+VERSION=v0.4.31   # pick a release
+gh release download "$VERSION" -R arkame-app/arkame-agent \
+  -p 'checksums.txt*' -p 'arkame-agent_linux_amd64.tar.gz'
+
+cosign verify-blob checksums.txt \
+  --signature checksums.txt.sig \
+  --certificate checksums.txt.pem \
+  --certificate-identity-regexp '^https://github\.com/arkame-app/arkame-agent/\.github/workflows/release\.yml@refs/tags/v' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+sha256sum --ignore-missing -c checksums.txt
+```
+
+The installers (`install.sh`, `install.ps1` and the Windows `setup` command)
+check the downloaded package against `checksums.txt` and stop without
+installing anything on a mismatch, or if the checksum file cannot be fetched.
+They check the SHA-256 only; they do not run cosign.
+
+## Native install (Linux, macOS, Windows)
+
+Each command comes from the panel with your install code. As with Docker, it
+asks for the bucket key, tests it, registers the server, waits for approval and
+then installs the service (systemd, launchd or a Windows service).
+
+**Linux and macOS**
+
+```bash
+curl -fsSL https://get.arkame.app/install.sh | sudo sh -s -- --token=atk_...
+```
+
+Without `sudo`, the agent is installed for your user only (a user service)
+and reads only what you can read. Useful options: `--version=vX.Y.Z`,
+`--service-name` and `--config` (one agent per bucket credential),
+`--no-service`. For the full list:
+`curl -fsSL https://get.arkame.app/install.sh | sh -s -- --help`.
+
+**Windows** (Windows + R, paste, Enter)
+
+```text
+cmd /c "curl -fsSLo "%TEMP%\arkame-agent.exe" https://get.arkame.app/agente.exe && "%TEMP%\arkame-agent.exe" setup --token=atk_... || pause"
+```
+
+`setup` asks for administrator rights, checks its own SHA-256 against the
+release's `checksums.txt`, copies itself to `C:\Program Files\Arkame` and runs
+`install`. `curl.exe` ships with Windows 10 (1803+), 11 and Server 2019+; on
+Server 2016 use `install.ps1` from an elevated PowerShell.
+
+**Manual download.** Archives and plain binaries for every platform are on the
+[releases page](https://github.com/arkame-app/arkame-agent/releases); the
+container image is `ghcr.io/arkame-app/arkame-agent`.
+
+### Day-to-day commands
+
+```bash
+arkame-agent status                       # identity, key fingerprint, enrollment state
+sudo arkame-agent check-storage           # test the bucket key in the config file
+sudo arkame-agent set-storage-keys --restart   # replace the key: asks, tests, saves, restarts
+sudo arkame-agent uninstall               # removes service, config, identity and program
+```
+
+Docker: `sudo docker logs --tail 50 arkame-agent`, and always restart or stop
+with `-t 150`. Removing the agent leaves your backups in the bucket.
+
+### Configuration
+
+The agent reads `/etc/arkame/agent.env` (`C:\etc\arkame\agent.env` on Windows;
+`~/.config/arkame/agent.env` for a user install), readable by root/Administrators
+only. Process environment variables override the file.
+
+| Variable | Purpose |
+|---|---|
+| `STORAGE_ACCESS_KEY`, `STORAGE_SECRET_KEY` | Bucket credentials. Used only to talk to the bucket. |
+| `STORAGE_BUCKET`, `STORAGE_REGION`, `STORAGE_ENDPOINT` | Bucket name, region (default `us-east-1`), endpoint for non-AWS providers |
+| `STORAGE_ID` | Storage ID in the panel |
+| `PANEL_URL` | Default `https://save.arkame.app` |
+| `HOST_ROOT` | `/` natively, `/host` in Docker |
+| `POLL_INTERVAL_SEC`, `HEARTBEAT_INTERVAL_SEC` | Plan/restore polling and heartbeat intervals (default 60) |
+| `TOKEN_PATH`, `PRIVATE_KEY_PATH`, `AGENT_ID_PATH`, `AGENT_ID` | Agent identity files (written at enrollment) |
+| `SIBLING_BUCKETS` | Buckets served by other agent processes on the same host |
+| `HTTPS_PROXY`, `NO_PROXY` | Standard proxy variables, honored for panel calls |
+
+The complete reference (multiple agents per host, re-enrollment, macOS Full Disk
+Access, OneDrive, permission checks on the service binary) is in the
+[Portuguese usage guide](docs/USAGE.pt-BR.md) and on
+[arkame.app/en/docs](https://arkame.app/en/docs?utm_source=github&utm_medium=readme&utm_campaign=agent-repo).
+
+## Limitations
+
+Things you should know before relying on it:
+
+- **It needs the Arkame panel.** Plans, schedules, restores and retention are
+  driven by the panel; the agent alone does not back anything up. If the panel
+  is unreachable, scheduled backups do not start, but everything already
+  uploaded stays in your bucket, readable with any S3 tool. Arkame is a paid
+  service (14-day free trial, no card required).
+- **No client-side encryption.** Files are stored in your bucket as they are on
+  disk. Use your provider's server-side encryption and keep the bucket private.
+- **No self-update.** Re-run the install command to update (Docker:
+  `--pull always` takes care of fetching the new image).
+- **Windows binaries are not code-signed yet.** Windows 11 with Smart App
+  Control turned on blocks the agent; Windows 10 and Windows Server work.
+  Integrity is covered by the cosign-signed checksums.
+- **The container image is not signed** with cosign; only `checksums.txt` is.
+- **No filesystem snapshots** (LVM, VSS, btrfs). Files are read as they are;
+  for databases, dump to a folder first (a plan's pre-backup command natively,
+  or a host cron job with Docker, where pre/post commands do not run).
+- **Native Linux service restores** into `/etc`, `/usr` or `/boot` fail because
+  the systemd unit uses `ProtectSystem=full`; restore elsewhere and copy. The
+  Docker install can write there.
+- **Docker on host reboot:** the 150 s stop timeout applies to `docker stop` and
+  `docker restart`, but on a reboot `docker.service`'s own stop timeout wins
+  (often 90 s). Use the native agent, or raise `TimeoutStopSec` for
+  `docker.service`, if a backup must close cleanly on reboot.
+- **Bucket providers:** any S3-compatible service with versioning. Cloudflare R2
+  is not accepted for new storage in the panel, since it has neither versioning
+  nor Object Lock.
+- **Cloud-only OneDrive files are skipped** on Windows (reading them would
+  download the whole OneDrive). On macOS the service needs Full Disk Access to
+  read Desktop, Documents, Downloads and iCloud Drive.
+- **CLI messages and logs are in Brazilian Portuguese** for now.
+
+## Building from source
+
+```bash
+make build        # bin/arkame-agent for this platform
+make build-all    # cross-compile
+make test         # go test -race with coverage
+```
+
+Go 1.25+. Code layout, architecture notes and the development backlog are in
+[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) (Portuguese).
+
+## Contributing and security
+
+Issues and pull requests are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
+Please report vulnerabilities privately as described in
+[SECURITY.md](SECURITY.md), not in public issues. This project follows the
+[Contributor Covenant](CODE_OF_CONDUCT.md).
 
 | Role | Members |
 |---|---|
 | Committers and reviewers | [hugolf](https://github.com/hugolf) |
 | Approvers | [hugolf](https://github.com/hugolf) |
 
-**Privacy.** The agent sends files only to the bucket the user configures, with
-the user's own key, which is never sent anywhere else. To the Arkame panel it
-sends only what is needed to follow and restore the backups (section 3 of the
-[privacy policy](https://arkame.app/privacidade)): the server name, operating
-system, agent version and IP address; how it was installed (`install_method`:
-Docker or binary), the service it runs as (`service_name`,
-`service_scope`) and the path of the agent program (`program_path`); periodic
-heartbeats; bucket connection test results; when a
-plan's pre- or post-backup command fails, up to 8 KB of that command's output;
-each backup's file index — path and name, size, modification date, SHA-256 and
-bucket version; and, when the user browses folders while creating a plan in
-the panel, the names of the folders and files opened and the size of each file.
-Never file contents. The agent can be fully removed with
-`arkame-agent uninstall` (Docker: `docker stop -t 150 arkame-agent` then
-`docker rm arkame-agent`, delete `/etc/arkame` and remove the image with
-`docker rmi ghcr.io/arkame-app/arkame-agent:latest`).
+## License
 
-## Arquitetura
-
-```
-┌─────────────────────────────┐          ┌──────────────────────┐
-│  Máquina do cliente          │          │  Painel Arkame        │
-│  ┌────────────────────────┐  │   mTLS   │  save.arkame.app     │
-│  │ arkame-agent (daemon)  │◄─┼──────────┤  /api/agents/...     │
-│  │                        │  │          └──────────────────────┘
-│  │  • enrollment (Ed25519)│  │
-│  │  • scheduler (windows) │  │          ┌──────────────────────┐
-│  │  • walker + hasher     │  │          │  Bucket BYOS do      │
-│  │  • S3 uploader         │──┼──────────┤  cliente (S3/B2/...) │
-│  │  • probe periódico     │  │  direto  └──────────────────────┘
-│  └────────────────────────┘  │
-└─────────────────────────────┘
-```
-
-**Princípio:** dados NUNCA passam pelo painel Arkame. O agent fala direto com o bucket do cliente (credenciais via env-file local) e reporta apenas metadata (filenames, paths, sizes, hashes, version_ids) ao painel para indexação.
-
-> **Auth atual:** o agent autentica no painel via **bearer JWT** (obtido no enrollment Ed25519), não mTLS. O diagrama acima reflete o alvo de longo prazo — mTLS é hardening de fase 2 e não quebra o contrato atual.
-
-## Estrutura do código
-
-```
-arkame-agent/
-├── cmd/arkame-agent/main.go    # entry point (delega pro cobra root)
-├── internal/
-│   ├── cli/                    # comandos: install, setup, run, status, heartbeat, check-storage, set-storage-keys, service, uninstall, version
-│   ├── config/                 # env-file + flags + defaults
-│   ├── crypto/                 # Ed25519 keypair + fingerprint
-│   ├── enrollment/             # fluxo de registro (first-time + reinstall)
-│   ├── api/                    # HTTP client + types do painel
-│   ├── storage/                # S3 client + probe (GetBucketVersioning etc) + check
-│   ├── setup/                  # chave do bucket na instalação: painel, pergunta, teste, arquivo
-│   ├── segredo/                # gravação protegida de chave, token e identidade (0600; DACL no Windows)
-│   ├── terminal/               # perguntas no /dev/tty (CONIN$ no Windows), senha sem eco
-│   ├── caminho/                # caminhos entre painel, disco e bucket (unidade do Windows, HostRoot)
-│   ├── sync/                   # walker + hasher + engine de upload + throttle
-│   ├── hooks/                  # comandos de antes/depois do backup (ex.: pg_dump)
-│   ├── restore/                # executor de restauração (escrita atômica, sha256, cold storage)
-│   ├── purge/                  # expurgo de versões autorizado pelo painel (retenção)
-│   ├── fsbrowse/               # listagem de pastas para o explorador do painel
-│   ├── scheduler/              # janelas de tempo + decisão de "should run agora"
-│   ├── daemon/                 # loops do serviço (heartbeat, probe, planos, restauração, pastas, expurgo)
-│   ├── service/                # install como systemd/launchd/Windows Service
-│   ├── aplicativos/            # entrada em "Aplicativos instalados" do Windows e remoção do programa
-│   └── logarquivo/             # log em arquivo com rodízio (serviço do Windows)
-└── pkg/version/                # build info (injetada via -ldflags)
-```
-
-## Build
-
-```bash
-# Para a plataforma atual
-make build
-
-# Cross-compile para todas as plataformas suportadas
-make build-all
-
-# Docker
-make docker
-```
-
-Binários vão pra `bin/`. Makefile embute `version.Version` / `version.Commit` / `version.BuildDate` via `-ldflags`.
-
-## Uso
-
-### Primeira instalação — um comando
-
-O painel, em **Servidores → Novo servidor**, gera o comando com o código de
-instalação (`atk_…`, vale 24 horas e uma vez). Ele baixa o agente, confere o
-checksum, **pergunta a chave de acesso e a senha do bucket, testa no bucket** e
-só então registra o servidor e instala o serviço. Chave recusada: diz a causa e
-pergunta de novo. A chave fica no servidor; o painel só informa qual bucket
-(`POST /api/agents/install-config`).
-
-#### Docker (padrão em Linux)
-
-O registro roda num container com terminal (`-it`): pergunta e testa a chave,
-registra e espera a aprovação, gravando tudo em `/etc/arkame`. Só se ele terminar
-bem o container antigo sai e o serviço sobe (`--restart always`), lendo o mesmo
-lugar. `label=disable`: com SELinux (RHEL, Rocky, Fedora) o container não
-gravava em `/etc/arkame` nem lia o host; sem SELinux, não faz nada. A raiz do
-servidor vai montada com leitura e escrita (`-v /:/host`, sem `:ro`): a
-restauração grava no servidor, inclusive no lugar original. O prazo de 150 s
-(`--stop-timeout`, `stop -t`, `restart -t`) é o tempo que o agente pode levar para
-fechar um backup em andamento e avisar o painel (`/complete`); os 10 s padrão do
-Docker, ou o `rm -f`, matam o processo antes e o ponto de restauração se perde.
-`--pull always` no primeiro `docker run`: o agente não se atualiza sozinho, e
-reinstalar com este comando é como ele se atualiza no Docker; sem a opção, o
-Docker reaproveita a `:latest` que já está no servidor e o agente continua na
-versão antiga.
-
-```bash
-sudo docker run --pull always --rm -it --user 0 --security-opt label=disable --hostname "$(hostname)" -v /etc/arkame:/etc/arkame \
-  ghcr.io/arkame-app/arkame-agent:latest install --token=atk_... --panel-url=https://save.arkame.app --install-service=false \
-&& { sudo docker stop -t 150 arkame-agent >/dev/null 2>&1; sudo docker rm arkame-agent >/dev/null 2>&1; \
-  sudo docker run -d --name arkame-agent --restart always --stop-timeout 150 --user 0 --security-opt label=disable --hostname "$(hostname)" \
-  -v /:/host -v /etc/arkame:/etc/arkame ghcr.io/arkame-app/arkame-agent:latest; }
-```
-
-No Docker, os comandos antes/depois do backup de um plano não rodam (a imagem
-não tem shell, e os programas estão no host): agende dumps de banco no próprio
-host (cron), numa pasta incluída no plano.
-
-Servidor sem sinal: `sudo docker logs --tail 50 arkame-agent` e
-`sudo docker restart -t 150 arkame-agent`. Trocar a chave do bucket:
-`sudo docker run --rm -it --user 0 --security-opt label=disable -v /etc/arkame:/etc/arkame ghcr.io/arkame-app/arkame-agent:latest set-storage-keys && sudo docker restart -t 150 arkame-agent`
-(o `label=disable` pelo mesmo motivo da instalação: com SELinux, sem ele o
-container não grava em `/etc/arkame`).
-
-#### Nativo (Linux, macOS e Windows)
-
-```bash
-# Linux e macOS
-curl -fsSL https://get.arkame.app/install.sh | sudo sh -s -- --token=atk_...
-```
-
-```text
-# Windows: Windows + R, colar, Enter. O curl.exe do Windows baixa o agente
-# (get.arkame.app/agente.exe → release mais recente) e o `setup` dele pede
-# administrador (o "Sim" do Windows), confere o SHA-256 do próprio programa
-# com o checksums.txt do release da versão dele, se copia para Program Files,
-# entra no PATH e roda o `install`. Sem PowerShell: o Defender barrava o formato
-# `powershell -ExecutionPolicy Bypass … irm` como Trojan:Win32/Commando.A!ml.
-cmd /c "curl -fsSLo "%TEMP%\arkame-agent.exe" https://get.arkame.app/agente.exe && "%TEMP%\arkame-agent.exe" setup --token=atk_... || pause"
-```
-
-Checksum diferente aborta sem instalar nada. Se o `checksums.txt` não pode ser
-baixado (sem acesso a `github.com`, por exemplo), não tem a linha do pacote ou
-não há como calcular o SHA-256, os instaladores também param sem instalar nada.
-Para instalar assim mesmo, sem conferir, é preciso pedir: `--skip-checksum`
-depois do `setup` (Windows), `--skip-checksum` no `install.sh`
-(`… | sudo sh -s -- --token=atk_... --skip-checksum`) ou `-SkipChecksum` no
-`install.ps1`.
-
-O `curl.exe` vem no Windows 10 (1803+), 11 e Server 2019+. No Server 2016, use o
-`install.ps1` (PowerShell como administrador).
-
-> **Windows 11 com Controle Inteligente de Aplicativos (Smart App Control):** o
-> Windows bloqueia o agente, que ainda não tem assinatura de código. Windows 10 e
-> Windows Server funcionam normalmente.
-
-> **Restaurar no lugar original em `/etc`, `/usr` ou `/boot` (Linux nativo):** o
-> serviço do systemd roda com `ProtectSystem=full`, que deixa essas pastas só de
-> leitura para o agente. A restauração para lá falha sempre ("read-only file
-> system"), e o item aparece no painel com o código `read_only_destination` e a
-> explicação. Restaure em outra pasta (`/restore`, por exemplo) e copie de lá. No
-> Docker o mesmo pedido funciona: a raiz do servidor vai montada com escrita.
-
-O arquivo gravado (`/etc/arkame/agent.env`; no Windows `C:\etc\arkame\agent.env`)
-fica legível só pelo administrador (0600; no Windows, Administradores e SYSTEM).
-Na instalação sem root (`--service-scope user`, o padrão de quem roda sem
-sudo), sem `--config`, o arquivo é `$XDG_CONFIG_HOME/arkame/agent.env`
-(`~/.config/arkame/agent.env`), com o token, a chave e o agent.id ao lado.
-
-O serviço do sistema (instalação com sudo) roda como root, e o `install` recusa
-registrá-lo se o programa, ou alguma pasta acima dele, não for do root ou puder
-ser gravado por outro usuário (grupo ou outros; o grupo do root vale): quem
-trocasse o arquivo viraria root no próximo reinício do serviço. É o caso de
-`~/.local/bin`, onde o `install.sh` sem sudo põe o programa. Com o programa no
-home, instale sem sudo (`~/.local/bin/arkame-agent install --token=atk_...`,
-escopo user) ou rode o instalador com sudo, que o põe em `/usr/local/bin`. No
-macOS (LaunchDaemon) vale o mesmo. Quando o `/usr/local/bin` (ou uma pasta
-acima dele) não é só do root — o Homebrew, em Macs Intel, o deixa com o seu
-usuário —, o instalador com sudo põe o programa em `/opt/arkame/bin`, e o
-comando do painel funciona como está. Para outra pasta só do root:
-`curl -fsSL https://get.arkame.app/install.sh | sudo env ARKAME_BIN_DIR=/caminho sh -s -- --token=atk_...`.
-No Windows, o serviço roda como SYSTEM e o `install` confere a mesma coisa pela
-lista de permissões: o programa e as pastas acima dele só podem ser alteráveis
-pelos Administradores, pelo SYSTEM, pelo TrustedInstaller ou pelo administrador
-que roda a instalação (dono do que ele cria, quando a política de dono padrão é
-"Criador do objeto"). O `setup` (comando
-do painel) e o `install.ps1` põem o programa em `C:\Program Files\Arkame`, que
-passa; um `install` rodado de Downloads é recusado.
-
-No Windows, o serviço grava o log ao lado da configuração, em
-`C:\etc\arkame\agent.log` (rodízio aos 10 MB; o anterior fica em
-`agent.log.1`) — o Visualizador de Eventos não tem nada do agente:
-
-```text
-powershell -Command "Get-Content -Tail 50 -Wait 'C:\etc\arkame\agent.log'"
-```
-
-> **OneDrive (Windows):** arquivos que estão só na nuvem (os marcadores
-> "disponível online") ficam de fora do backup — lê-los faria o agente baixar o
-> OneDrive inteiro para o disco do servidor. Para entrar no backup, o arquivo
-> precisa estar disponível offline ("Sempre manter neste dispositivo"). A sessão
-> informa ao painel quantos ficaram de fora, e a falta deles não conta como
-> arquivo removido na origem.
-
-> **macOS — Acesso Total ao Disco:** como serviço (LaunchDaemon ou
-> LaunchAgent), o agente não lê Mesa, Documentos, Downloads nem o iCloud Drive
-> até receber o Acesso Total ao Disco: o macOS devolve "operation not
-> permitted" e o backup sai parcial. Depois do `install`:
->
-> 1. Ajustes do Sistema → Privacidade e Segurança → Acesso Total ao Disco → **+**.
-> 2. No seletor, Cmd+Shift+G e cole o caminho do programa:
->    `/usr/local/bin/arkame-agent` (instalação com sudo; `/opt/arkame/bin/arkame-agent`
->    com o `/usr/local/bin` do Homebrew) ou
->    `~/.local/bin/arkame-agent` (instalação sem root). Ative a chave dele.
-> 3. Reinicie o serviço com o comando que o `install` mostrou
->    (`sudo launchctl kickstart -k system/app.arkame.agent`, ou
->    `launchctl kickstart -k gui/$(id -u)/app.arkame.agent` sem root).
->
-> O `install` mostra esse passo no fim, e a sessão parcial causada por isso diz
-> o mesmo no painel. Trocar o programa (atualização) pode exigir conceder de
-> novo.
-
-Sem terminal (automação), grave o arquivo antes: o `install` testa a chave que
-estiver lá e para com a causa se o bucket recusar. `--check-storage=false` pula
-o teste.
-
-O `install` sempre espera a aprovação no painel (Ctrl-C cancela sem mexer no
-arquivo de configuração): a identidade nova, e também o armazenamento e a
-chave já testados, só são gravados com ela, e o serviço só é instalado
-depois, com o token no disco. Não há `--wait=false` — o enrollment deixado sem
-espera não teria quem o concluísse.
-
-### Trocar a chave do bucket
-
-```bash
-sudo /usr/local/bin/arkame-agent set-storage-keys --restart   # pergunta, testa, grava e reinicia
-sudo /usr/local/bin/arkame-agent check-storage                # só testa a chave do arquivo
-
-# Com root, quando o instalador avisou que /usr/local/bin não é só do root
-# (Homebrew em Mac Intel): o programa está em /opt/arkame/bin
-sudo /opt/arkame/bin/arkame-agent set-storage-keys --restart
-sudo /opt/arkame/bin/arkame-agent check-storage
-
-# Instalação sem root (Linux ou macOS)
-~/.local/bin/arkame-agent check-storage --service-scope user
-```
-
-No Windows, o painel mostra a linha para o Windows + R
-(`Start-Process -Verb RunAs … 'set-storage-keys --restart --pause'`).
-
-### Remover o agente de um servidor
-
-```bash
-sudo /usr/local/bin/arkame-agent uninstall   # pergunta "sim"; --yes para automação
-
-# Com root, quando o instalador avisou que /usr/local/bin não é só do root
-sudo /opt/arkame/bin/arkame-agent uninstall
-
-# Instalação sem root (Linux ou macOS)
-~/.local/bin/arkame-agent uninstall --service-scope user
-
-# Docker (o programa está só na imagem; não há uninstall no host)
-sudo docker stop -t 150 arkame-agent 2>/dev/null; sudo docker rm arkame-agent 2>/dev/null; sudo rm -rf /etc/arkame; sudo docker rmi ghcr.io/arkame-app/arkame-agent:latest 2>/dev/null
-```
-
-Tira o serviço, o arquivo de configuração com a chave, a identidade (token,
-chave privada, agent.id) e o programa; a pasta só sai se ficar vazia. Os backups
-continuam no bucket. No painel, arquive o servidor para ele deixar de ser cobrado.
-Antes de tocar em qualquer coisa, confere que achou a configuração e que pode
-apagá-la. Com mais de um agente na máquina (`--service-name`), use o mesmo
-`--service-name` e `--config` da instalação; o programa só sai com o último, e
-token, chave e agent.id que a configuração de outro agente ainda usa ficam (se
-a configuração de algum não puder ser lida, a identidade fica toda).
-
-Mais de um agente na máquina (um por credencial de bucket): instale cada um com
-o seu `--service-name` e `--config` (`install.sh --config=/etc/arkame/agent-oci.env
---service-name=arkame-agent-oci`; no `install.ps1`, `-Config` e `-ServiceName`).
-Com `--config` diferente do padrão, o `install` grava token, chave e agent.id
-ao lado do arquivo (`agent-oci.token.jwt`, `agent-oci.key.pem`,
-`agent-oci.agent.id`), a menos que `TOKEN_PATH`, `PRIVATE_KEY_PATH` ou
-`AGENT_ID_PATH` já estejam definidos.
-
-No Windows, o agente aparece em **Aplicativos instalados** ("Arkame — agente de
-backup"); o Desinstalar chama `uninstall --pause` e pede administrador sozinho.
-Pelo Executar: `powershell -Command "Start-Process -Verb RunAs 'C:\Program Files\Arkame\arkame-agent.exe' 'uninstall --pause'"`.
-
-### Re-enrollment (trocar servidor mantendo histórico)
-
-Mesmo comando na nova máquina, com um **código novo** gerado no painel em
-"Reinstalar" (`/agents/:id`). O painel identifica que o código está amarrado a um
-`agent_id` existente e preserva o histórico ao aprovar a nova fingerprint. O
-instalador pergunta a chave do bucket que o servidor já usava.
-Com a chave já no arquivo, o `install` confere no painel o armazenamento do
-código: se for outro (bucket, região ou endereço), testa a chave nele e grava o
-armazenamento novo inteiro; recusada, pergunta outra — sem terminal, para com a
-causa e não mexe no arquivo.
-
-### Rodar daemon
-
-```bash
-# Se instalou como serviço (padrão), já está rodando:
-systemctl status arkame-agent
-
-# Manualmente:
-arkame-agent run --config /etc/arkame/agent.env
-```
-
-## Variáveis de ambiente
-
-Lidas do env-file ou das env vars do processo (CLI tem precedência).
-
-| Variável | Uso |
-|---|---|
-| `STORAGE_ACCESS_KEY` | **Credencial S3 do cliente** (NUNCA sai desta máquina) |
-| `STORAGE_SECRET_KEY` | **Credencial S3 do cliente** |
-| `STORAGE_ENDPOINT` | Só para S3-compat não-AWS (MinIO, Wasabi, etc) |
-| `STORAGE_REGION` | `us-east-1` default |
-| `STORAGE_BUCKET` | Nome do bucket. Obrigatório para o teste do bucket, a limpeza da retenção e o `check-storage`; também separa os planos e restaurações deste processo dos de outro (os caminhos dentro do bucket vêm do painel) |
-| `STORAGE_ID` | UUID do storage no painel |
-| `PANEL_URL` | `https://save.arkame.app` |
-| `ENROLLMENT_TOKEN` | Temporário, só durante install; sai do arquivo com a aprovação |
-| `AGENT_ID` | Identidade do agente; sem ela, vale o conteúdo de `AGENT_ID_PATH` (gravado no enrollment) |
-| `AGENT_ID_PATH` | `/etc/arkame/agent.id` |
-| `TOKEN_PATH` | `/etc/arkame/token.jwt` — bearer do painel (0600; no Windows, Administradores e SYSTEM) |
-| `PRIVATE_KEY_PATH` | `/etc/arkame/key.pem` (idem) |
-| `HOST_ROOT` | `/` nativo, `/host` em Docker |
-| `SIBLING_BUCKETS` | Buckets atendidos por outros processos deste agente no host (CSV): planos e restaurações desses buckets ficam para o irmão |
-| `POLL_INTERVAL_SEC` | Intervalo de consulta de planos e restaurações (padrão 60) |
-| `HEARTBEAT_INTERVAL_SEC` | Intervalo do heartbeat (padrão 60) |
-
-## O que falta (TODOs)
-
-Núcleo funcional entregue. Itens concluídos e pendências de hardening:
-
-- [x] `enrollment.WaitForApproval` — long-poll real (bearer JWT via `wait-token`)
-- [x] `daemon.executePlan` — SessionStart → sync → SessionComplete (com `version_map`)
-- [x] `sync.engine` — dedup via HeadObject + multipart upload para arquivos grandes
-- [x] `daemon.probeLoop` — cabeado com `storage.Probe` (versioning/object-lock/lifecycle)
-- [x] `service.launchd` / `service.systemd` / `service.windows`
-- [x] Restore (Plan kind=restore — executor com escrita atômica + SHA-256 verify + warming)
-- [ ] Self-update (agente baixa nova versão quando painel sinaliza)
-- [ ] mTLS hardening (fase 2) — substituir bearer JWT mantendo o contrato atual
-- [ ] Snapshot orquestrado (LVM / VSS / btrfs) — fora do escopo atual (PLAN.md), pode voltar como plugin
-- [x] Testes de integração contra S3 de verdade: a CI e a release rodam `go test -race ./...` com um RustFS 1.0.0 local (o MinIO deixou de ser baixável em 24/09)
-- [ ] Observabilidade: métricas Prometheus + traces OTEL (endpoint opcional)
-
-## Contribuindo
-
-Antes de abrir PR:
-
-```bash
-make lint       # vet + gofmt
-make test       # race + coverage
-go mod tidy
-```
-
-O schema do que este agent reporta ao painel está no repositório do painel (`arkame`), nas migrações em `db/migrations/` e no acesso a dados em `packages/db/` — mudanças nos types `api/` precisam bater com as rotas do Next.js em `apps/save/src/app/api/`.
+[Apache License 2.0](LICENSE).
