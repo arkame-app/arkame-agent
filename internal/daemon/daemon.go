@@ -538,6 +538,25 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 		return syncErr
 	}
 
+	// Serviço parando com o envio em curso (install.sh, systemctl restart,
+	// reinício da máquina): sync.Run volta com context.Canceled. Não é falha
+	// de pasta, de bucket nem de leitura — sync_failed/sync_partial mandavam
+	// o cliente conferir permissões e o bucket, que estão certos. Sem nada no
+	// version_map, a sessão fecha como agent_stopped; com parte guardada,
+	// segue parcial (o que subiu é restaurável) com sync_interrupted.
+	envioInterrompido := errors.Is(syncErr, context.Canceled) && ctx.Err() != nil
+	if envioInterrompido && (result == nil || len(result.VersionMap) == 0) {
+		slog.Warn("envio interrompido pela parada do serviço; nada foi guardado", "plan_id", plan.ID)
+		marcarFalha(ctx, c, cfg, startResp.SessionID, struct {
+			ErrorCode    string `json:"error_code"`
+			ErrorMessage string `json:"error_message"`
+		}{
+			ErrorCode:    codigoAgenteParou,
+			ErrorMessage: hooks.ErrInterrompido.Error() + nota,
+		})
+		return syncErr
+	}
+
 	totalFailure, completeStatus := avaliarSessao(result, syncErr)
 	if totalFailure {
 		// A causa vai ao painel como no parcial: o primeiro arquivo que
@@ -618,6 +637,10 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 		// por arquivo.
 		completeBody.ErrorCode = "sync_partial"
 		completeBody.ErrorMessage = causaDoParcial(result, syncErr)
+		if envioInterrompido {
+			completeBody.ErrorCode = codigoEnvioInterrompido
+			completeBody.ErrorMessage = fmt.Sprintf(msgEnvioInterrompido, len(versionMap))
+		}
 		completeBody.ErrorMessage += nota
 		slog.Warn("backup parcial", "plan_id", plan.ID, "session_id", startResp.SessionID,
 			"arquivos_com_falha", result.FilesFailed, "err", syncErr, "causa", completeBody.ErrorMessage)
@@ -828,6 +851,16 @@ const msgDoDepoisInterrompido = "comando de depois interrompido: o serviço do a
 // codigoAgenteParou fecha a sessão cujo comando de antes foi derrubado pela
 // parada do serviço (hooks.ErrInterrompido), no lugar de pre_hook_failed.
 const codigoAgenteParou = "agent_stopped"
+
+// codigoEnvioInterrompido fecha como parcial a sessão cujo envio a parada do
+// serviço cortou depois de algo já guardado, no lugar de sync_partial (que
+// culpa pastas, permissões e o bucket).
+const codigoEnvioInterrompido = "sync_interrupted"
+
+// msgEnvioInterrompido é o error_message de sync_interrupted. O total da
+// origem não se sabe — a varredura parou no meio —, então só a parte guardada
+// (enviada agora ou já no bucket) é contada.
+const msgEnvioInterrompido = "envio interrompido: o serviço do agente parou; %d arquivo(s) guardado(s) antes da parada"
 
 // mensagemDoDepois é o error_message de post_hook_failed: o erro do comando
 // (código de saída ou prazo) e a saída dele, até hooks.MaxOutputBytes, sem

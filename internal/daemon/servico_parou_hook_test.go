@@ -68,9 +68,9 @@ func TestServicoParandoNoComandoDeAntesNaoCulpaOComando(t *testing.T) {
 	}
 }
 
-// Serviço parando com o envio em curso e a graça da finalização acabando
-// durante o comando de depois: a nota da sessão diz que ele foi interrompido,
-// não que falhou.
+// Serviço parando com o envio em curso (nada guardado) e a graça da
+// finalização acabando durante o comando de depois: a sessão fecha como
+// agent_stopped e a nota diz que o comando foi interrompido, não que falhou.
 func TestServicoParandoNoComandoDeDepoisNaoCulpaOComando(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("comando de shell do teste é POSIX")
@@ -110,8 +110,10 @@ func TestServicoParandoNoComandoDeDepoisNaoCulpaOComando(t *testing.T) {
 		t.Fatalf("/fail chamado %d vezes; chamadas: %v", n, painel.chamadas)
 	}
 	f := lerFail(t, painel)
-	if f.ErrorCode != "sync_failed" {
-		t.Fatalf("error_code = %q; queria sync_failed", f.ErrorCode)
+	// Nada guardado e o serviço parado no envio: agent_stopped (não
+	// sync_failed), com a nota do comando de depois.
+	if f.ErrorCode != "agent_stopped" {
+		t.Fatalf("error_code = %q; queria agent_stopped", f.ErrorCode)
 	}
 	if !strings.HasSuffix(f.ErrorMessage, "; comando de depois interrompido: o serviço do agente parou") ||
 		strings.Contains(f.ErrorMessage, "comando de depois falhou") {
