@@ -91,9 +91,28 @@ Binário Linux rodando local contra o painel em produção (`save.arkame.app`) +
 > No Docker, o mesmo prazo: os comandos do README passaram a subir o contêiner com
 > `--stop-timeout 150`, a trocar `docker rm -f` por `docker stop -t 150` + `docker rm`
 > (sem falhar se não existir) e a reiniciar com `docker restart -t 150`. Antes valiam os
-> 10 s padrão do Docker (ou SIGKILL na hora, no `rm -f`) e a reinstalação, a troca de
-> chave ou o reboot do host podiam perder o `/complete` de um backup terminando
+> 10 s padrão do Docker (ou SIGKILL na hora, no `rm -f`) e a reinstalação ou a troca de
+> chave podiam perder o `/complete` de um backup terminando
 > (passada 34; o painel e a página de docs têm os mesmos comandos e mudam no repo `arkame`).
+> O reboot do host **não** está coberto: o `--stop-timeout` só vale quando o dockerd faz a
+> parada (`docker stop`, `docker restart`). No desligamento, quem encerra o dockerd e os
+> contêineres é o systemd, com o `TimeoutStopSec` do `docker.service` — que o docker-ce
+> não define, então vale o padrão do host (45 s no Fedora, 90 s na maioria das outras).
+> Quem precisa da garantia no reboot usa um drop-in no `docker.service` com
+> `TimeoutStopSec=` acima de 150 s, ou o agente nativo (systemd).
+>
+> Ainda sem versão (passada 35): no Linux e no macOS, `service.Reiniciar` espera o
+> `systemctl restart` / `launchctl kickstart -k` por `EsperaParada` + 30 s (antes 2 min
+> fixos, abaixo dos 150 s: com um backup demorando a fechar, o comando era morto, o
+> restart seguia no gerenciador e o setup dizia "Continuam na versão antiga" sem ser
+> verdade). E o `install.sh` e o `install.ps1` sem token decidem "servidor já
+> registrado" pelos serviços **instalados** que chamam o programa, rodando ou não: os
+> que rodam reiniciam, os parados recebem "o serviço X está parado; inicie-o", e o
+> registro só é pedido sem nenhum serviço do programa. Antes, com o serviço parado
+> (manutenção), o script mandava registrar e o código novo criava um segundo servidor
+> no painel. No systemd a lista vem do `list-unit-files` mais as units ativas, com um só
+> `systemctl show -p Id -p ExecStart` (sem `--value`); no launchd, dos plists
+> `app.arkame.*`; no Windows, do `Win32_Service` por `PathName`, sem filtro de estado.
 >
 > Compatibilidade com systemd anterior ao 231 (CentOS/RHEL 7 tem
 > o 219, Ubuntu 16.04 o 229). A unit de sistema escreve também `ReadWriteDirectories=`
@@ -101,8 +120,8 @@ Binário Linux rodando local contra o painel em produção (`save.arkame.app`) +
 > o `ProtectSystem=full`, e `/etc/arkame` ficava só leitura — o token renovado não era
 > gravado e, num reboot depois do vencimento do antigo, o agente tomava 401 para sempre.
 > Vale para quem instalar ou reinstalar o serviço (a unit é reescrita no `install`). O
-> `install.sh` lê o `ExecStart` com `systemctl show -p ExecStart` e tira o prefixo com
-> `sed`, sem `--value` (só existe a partir do 230): nesses hosts a atualização não achava
+> `install.sh` lê o `ExecStart` com `systemctl show -p ExecStart` e tira o prefixo
+> sozinho, sem `--value` (só existe a partir do 230): nesses hosts a atualização não achava
 > nenhum agente, ninguém reiniciava e o script pedia registro a servidor já registrado.
 >
 > O `install.sh` reconhece os agentes pelo programa, não pelo nome
@@ -111,8 +130,8 @@ Binário Linux rodando local contra o painel em produção (`save.arkame.app`) +
 > (até a v0.4.3 o install aceitava qualquer nome, como `backup-oci`) ficava no binário
 > antigo sem aviso depois da troca e, se fosse o único agente da máquina, o script
 > mandava "registre este servidor" a um servidor já registrado. Agora lista todas as
-> units de serviço ativas (sem padrão de nome) e todos os `app.arkame.*.plist`, e filtra
-> pelo `ExecStart`/`ProgramArguments`.
+> units de serviço (sem padrão de nome; desde a passada 35, também as paradas) e todos
+> os `app.arkame.*.plist`, e filtra pelo `ExecStart`/`ProgramArguments`.
 >
 > Backup e limpeza de retenção não rodam
 > juntos no mesmo bucket (`internal/daemon/exclusao.go`). Antes, a limpeza podia apagar
