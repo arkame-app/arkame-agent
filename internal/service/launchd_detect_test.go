@@ -2,8 +2,10 @@ package service
 
 import (
 	"encoding/xml"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 // O agente com --service-name ou no escopo do usuário reportava sempre
@@ -49,5 +51,31 @@ func TestDetectLaunchd(t *testing.T) {
 		if got := detectLaunchd(c.getenv, c.existe); got != c.quer {
 			t.Errorf("%s: %+v, queria %+v", c.nome, got, c.quer)
 		}
+	}
+}
+
+// Sem ExitTimeOut o launchd mandava SIGKILL ~20s depois do SIGTERM, no meio
+// da finalização do daemon. O prazo é EsperaParada, e a leitura de volta do
+// plist continua achando o programa e o config.
+func TestPlistDaAoProcessoOPrazoDeParada(t *testing.T) {
+	if time.Duration(segundosDeParada())*time.Second != EsperaParada {
+		t.Fatalf("segundosDeParada() = %d não é EsperaParada (%s)", segundosDeParada(), EsperaParada)
+	}
+	p := montarPlist("app.arkame.agent", "/usr/local/bin/arkame-agent", "/etc/arkame/a.env", "/tmp/x.log", ScopeSystem)
+	if err := xml.Unmarshal([]byte(p), new(struct{})); err != nil {
+		t.Fatalf("plist não é XML válido: %v", err)
+	}
+	querido := fmt.Sprintf("<key>ExitTimeOut</key>\n\t<integer>%d</integer>", int(EsperaParada.Seconds()))
+	if strings.Count(p, "<key>ExitTimeOut</key>") != 1 || !strings.Contains(p, querido) {
+		t.Errorf("plist sem %q:\n%s", querido, p)
+	}
+	if strings.Contains(p, "%!") {
+		t.Errorf("verbo do Sprintf sobrando no plist:\n%s", p)
+	}
+	if c := configDoPlist(p); c != "/etc/arkame/a.env" {
+		t.Errorf("configDoPlist = %q", c)
+	}
+	if b := programaDoPlist(p); b != "/usr/local/bin/arkame-agent" {
+		t.Errorf("programaDoPlist = %q", b)
 	}
 }

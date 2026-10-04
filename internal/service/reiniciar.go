@@ -15,6 +15,15 @@ import (
 // daemon confere que continua cobrindo 3 × finalizacaoGraca.
 const EsperaParada = 150 * time.Second
 
+// segundosDeParada é EsperaParada em segundos inteiros, para o prazo de
+// parada que o gerenciador dá ao processo antes do SIGKILL: TimeoutStopSec=
+// na unit do systemd e ExitTimeOut no plist do launchd. Sem eles valiam os
+// padrões (90s no systemd, ~20s no launchd), e a finalização do daemon era
+// morta no meio — dump esquecido no disco, /complete que não chegava.
+func segundosDeParada() int {
+	return int(EsperaParada / time.Second)
+}
+
 // ErrNaoParou: o serviço recebeu o pedido de parada e não parou em
 // EsperaParada. Ele pode parar logo depois e ficar parado — o SCM só religa
 // serviço que caiu —, então quem avisa não pode dizer que ele segue rodando.

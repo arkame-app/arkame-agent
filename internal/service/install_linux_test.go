@@ -4,10 +4,12 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/arkame-app/agent/internal/config"
 )
@@ -153,5 +155,39 @@ func TestInstalarTrocaAUnitInteira(t *testing.T) {
 	}
 	if _, err := os.Stat(unit + ".novo"); !os.IsNotExist(err) {
 		t.Fatal("o temporário ficou para trás")
+	}
+}
+
+// Sem TimeoutStopSec= valia o padrão de 90s do systemd, e o SIGKILL chegava
+// no meio da finalização do daemon. O prazo é EsperaParada, nas duas units, e
+// a leitura de volta da unit continua achando o config e o programa.
+func TestUnitDaAoProcessoOPrazoDeParada(t *testing.T) {
+	if time.Duration(segundosDeParada())*time.Second != EsperaParada {
+		t.Fatalf("segundosDeParada() = %d não é EsperaParada (%s)", segundosDeParada(), EsperaParada)
+	}
+	querido := fmt.Sprintf("TimeoutStopSec=%d", int(EsperaParada.Seconds()))
+	for _, escopo := range []Scope{ScopeSystem, ScopeUser} {
+		unit := textoDaUnit(escopo, "arkame-agent", "/usr/local/bin/arkame-agent", "/etc/arkame/a.env", []string{"/etc/arkame"})
+		var achadas []string
+		for _, l := range strings.Split(unit, "\n") {
+			if strings.HasPrefix(l, "TimeoutStopSec=") {
+				achadas = append(achadas, l)
+			}
+		}
+		if len(achadas) != 1 || achadas[0] != querido {
+			t.Errorf("%s: TimeoutStopSec %q, queria só %q\n%s", escopo, achadas, querido, unit)
+		}
+		if _, depois, _ := strings.Cut(unit, "[Service]"); !strings.Contains(strings.SplitN(depois, "[Install]", 2)[0], querido) {
+			t.Errorf("%s: TimeoutStopSec fora da seção [Service]", escopo)
+		}
+		if strings.Contains(unit, "%!") {
+			t.Errorf("%s: verbo do Sprintf sobrando na unit:\n%s", escopo, unit)
+		}
+		if c := configDaUnit(unit); c != "/etc/arkame/a.env" {
+			t.Errorf("%s: configDaUnit = %q", escopo, c)
+		}
+		if p := programaDaUnit(unit); p != "/usr/local/bin/arkame-agent" {
+			t.Errorf("%s: programaDaUnit = %q", escopo, p)
+		}
 	}
 }

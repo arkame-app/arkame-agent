@@ -13,6 +13,10 @@ import (
 // --config, e o plist só precisa apontar para ele. As variáveis de ambiente
 // dizem ao processo sob qual label e escopo ele roda (ver detectLaunchd).
 //
+// ExitTimeOut é EsperaParada (segundosDeParada): é quanto o launchd espera
+// depois do SIGTERM antes do SIGKILL. O padrão, de ~20s, matava a finalização
+// do daemon (comando de depois, /fail ou /complete, PATCH da restauração).
+//
 // Fora de build tag para o teste rodar em qualquer plataforma.
 const plistTmpl = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -40,6 +44,8 @@ const plistTmpl = `<?xml version="1.0" encoding="UTF-8"?>
 	<true/>
 	<key>ThrottleInterval</key>
 	<integer>10</integer>
+	<key>ExitTimeOut</key>
+	<integer>%[6]d</integer>
 	<key>StandardOutPath</key>
 	<string>%[4]s</string>
 	<key>StandardErrorPath</key>
@@ -52,7 +58,8 @@ const plistTmpl = `<?xml version="1.0" encoding="UTF-8"?>
 // o escopo (system/user) da instalação.
 func montarPlist(label, binario, configPath, logPath string, escopo Scope) string {
 	return fmt.Sprintf(plistTmpl,
-		xmlEscape(label), xmlEscape(binario), xmlEscape(configPath), xmlEscape(logPath), xmlEscape(string(escopo)))
+		xmlEscape(label), xmlEscape(binario), xmlEscape(configPath), xmlEscape(logPath), xmlEscape(string(escopo)),
+		segundosDeParada())
 }
 
 func xmlEscape(s string) string {

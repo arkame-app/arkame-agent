@@ -37,6 +37,10 @@ import (
 // leitura e o token renovado não era gravado (EROFS), e o agente subia com o
 // token vencido depois do reboot. O systemd novo aceita os dois (o antigo
 // virou sinônimo) e soma as listas; repetir o mesmo caminho não muda nada.
+//
+// TimeoutStopSec= é EsperaParada (segundosDeParada): depois do SIGTERM o
+// daemon ainda fecha o que estava fazendo (até 3 × finalizacaoGraca), e o
+// padrão de 90s mandava SIGKILL no meio da última etapa.
 const systemUnitTmpl = `[Unit]
 Description=Arkame Backup Agent (%[1]s)
 Documentation=https://arkame.app/docs
@@ -49,6 +53,7 @@ ExecStart=%[2]s run --config %[3]s
 EnvironmentFile=%[4]s
 Restart=always
 RestartSec=10s
+TimeoutStopSec=%[6]d
 User=root
 Group=root
 
@@ -74,6 +79,7 @@ ExecStart=%[2]s run --config %[3]s
 EnvironmentFile=%[4]s
 Restart=always
 RestartSec=10s
+TimeoutStopSec=%[5]d
 
 [Install]
 WantedBy=default.target
@@ -87,10 +93,10 @@ WantedBy=default.target
 func textoDaUnit(escopo Scope, nome, programa, configPath string, writable []string) string {
 	if escopo == ScopeSystem {
 		return fmt.Sprintf(systemUnitTmpl, nome, argDaUnit(programa), argDaUnit(configPath),
-			escaparPorcento(configPath), strings.Join(writable, " "))
+			escaparPorcento(configPath), strings.Join(writable, " "), segundosDeParada())
 	}
 	return fmt.Sprintf(userUnitTmpl, nome, argDaUnit(programa), argDaUnit(configPath),
-		escaparPorcento(configPath))
+		escaparPorcento(configPath), segundosDeParada())
 }
 
 // argDaUnit é o quoteArg com o % escapado: na unit, %h, %u… são
