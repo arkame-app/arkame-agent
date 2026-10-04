@@ -149,6 +149,18 @@ Binário Linux rodando local contra o painel em produção (`save.arkame.app`) +
 > versão que já não existe responde como apagada). Parado antes de apagar qualquer
 > coisa, o agente não manda relato vazio: a rodada segue emitida e o painel a reentrega.
 >
+> Mudanças recentes (ver `git tag --contains <commit>`; passada 42): serviço parado com
+> o comando de antes rodando (SIGTERM do `install.sh`/`install.ps1` atualizando,
+> `systemctl restart`, reboot, `set-storage-keys --restart`) não vira mais
+> `pre_hook_failed` com "código -1", que mandava o cliente conferir um `pg_dump` certo.
+> O `hooks.Run` devolve `hooks.ErrInterrompido` ("interrompido: o serviço do agente
+> parou") quando o ctx de quem chama é cancelado, e o `executePlan` fecha a sessão pelo
+> `marcarFalha` (com a graça da finalização) com `error_code: agent_stopped` e essa
+> mensagem. No comando de depois, se a graça acaba com ele rodando, não há
+> `post_hook_failed` na sessão completa, e a parcial ou falha leva a nota "; comando de
+> depois interrompido: o serviço do agente parou" em vez de "; comando de depois falhou".
+> O painel ainda não tem `motivos.agent_stopped`: mostra só a mensagem.
+>
 > Compatibilidade com systemd anterior ao 231 (CentOS/RHEL 7 tem
 > o 219, Ubuntu 16.04 o 229). A unit de sistema escreve também `ReadWriteDirectories=`
 > ao lado de `ReadWritePaths=`: o systemd antigo ignorava `ReadWritePaths=` mas aplicava
