@@ -62,7 +62,16 @@ Binário Linux rodando local contra o painel em produção (`save.arkame.app`) +
 >   chave com `/opt/arkame/bin` quando for o caso; o README cita esse caminho em trocar a
 >   chave e remover.
 >
-> **Também recentes:** compatibilidade com systemd anterior ao 231 (CentOS/RHEL 7 tem
+> **Também recentes:** gravações com fsync. O token, a chave privada, o `agent.id`, o
+> arquivo de configuração (`segredo.Gravar`), o programa copiado pelo `setup` e o arquivo
+> restaurado vão ao disco (`Sync`) antes do rename, e a pasta é sincronizada depois dele
+> (fora do Windows; na restauração, pelo descritor da pasta já aberto). Sem isso, um
+> corte de energia logo depois da renovação do token ou de uma restauração com
+> `overwrite` podia deixar o arquivo com 0 bytes. E o `TokenExists` passou a ler o
+> arquivo: token vazio (ou só espaços) conta como sem token, com erro no log pedindo
+> nova instalação, em vez de o agente subir calado sem conseguir se autenticar.
+>
+> Compatibilidade com systemd anterior ao 231 (CentOS/RHEL 7 tem
 > o 219, Ubuntu 16.04 o 229). A unit de sistema escreve também `ReadWriteDirectories=`
 > ao lado de `ReadWritePaths=`: o systemd antigo ignorava `ReadWritePaths=` mas aplicava
 > o `ProtectSystem=full`, e `/etc/arkame` ficava só leitura — o token renovado não era
