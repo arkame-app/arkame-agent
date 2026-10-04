@@ -25,7 +25,7 @@ to your bucket and nowhere else.
 ## Quickstart (Docker)
 
 1. In the [Arkame panel](https://save.arkame.app/?utm_source=github&utm_medium=readme&utm_campaign=agent-repo),
-   add your bucket and go to **Servers → New server**. It shows this command with
+   add your bucket and go to **Agents → New agent**. It shows this command with
    a one-time install code (`atk_…`, valid for 24 hours).
 2. Run it on the server:
 
@@ -110,8 +110,8 @@ flowchart LR
 ## What the panel can and cannot see
 
 The panel never receives your bucket keys and never receives file contents.
-This is what the agent does send to the panel (`internal/api/types.go` has the
-exact payloads):
+This is what the agent does send to the panel (`internal/api/types.go` and
+`internal/daemon/daemon.go` have the exact payloads):
 
 | Sent to the panel | When |
 |---|---|
@@ -120,7 +120,7 @@ exact payloads):
 | Your server's IP address | Implicitly, on every request |
 | Bucket check results: versioning, Object Lock and lifecycle settings, total bytes and object count in the bucket, access errors | Hourly, and when you click "Test connection" |
 | Per-backup file index: object key (the file's path), size, modification time, SHA-256 and the bucket's version ID; plus counters (files, bytes) | End of each backup |
-| Up to 8 KB of output from a plan's pre/post-backup command | When that command runs |
+| Up to 8 KB of output from a plan's pre/post-backup command | When that command fails |
 | Error messages from failed backups, files and restores | When something fails |
 | Names of folders and files, and file sizes, in a folder you open | When you browse folders while creating a plan |
 | Restore progress, and the keys/version IDs deleted by retention | During restores and retention runs |
@@ -211,10 +211,23 @@ container image is `ghcr.io/arkame-app/arkame-agent`.
 ### Day-to-day commands
 
 ```bash
-arkame-agent status                       # identity, key fingerprint, enrollment state
-sudo arkame-agent check-storage           # test the bucket key in the config file
-sudo arkame-agent set-storage-keys --restart   # replace the key: asks, tests, saves, restarts
-sudo arkame-agent uninstall               # removes service, config, identity and program
+sudo /usr/local/bin/arkame-agent status                       # identity, key fingerprint, enrollment state
+sudo /usr/local/bin/arkame-agent check-storage                # test the bucket key in the config file
+sudo /usr/local/bin/arkame-agent set-storage-keys --restart   # replace the key: asks, tests, saves, restarts
+sudo /usr/local/bin/arkame-agent uninstall                    # removes service, config, identity and program
+
+# Installed as root where /usr/local/bin is not root-only (Homebrew on an
+# Intel Mac; the installer says so): the program is in /opt/arkame/bin
+sudo /opt/arkame/bin/arkame-agent status
+sudo /opt/arkame/bin/arkame-agent check-storage
+sudo /opt/arkame/bin/arkame-agent set-storage-keys --restart
+sudo /opt/arkame/bin/arkame-agent uninstall
+
+# Installed without root (Linux or macOS): no sudo
+~/.local/bin/arkame-agent status
+~/.local/bin/arkame-agent check-storage --service-scope user
+~/.local/bin/arkame-agent set-storage-keys --restart --service-scope user
+~/.local/bin/arkame-agent uninstall --service-scope user
 ```
 
 Docker: `sudo docker logs --tail 50 arkame-agent`, and always restart or stop
@@ -282,7 +295,7 @@ Things you should know before relying on it:
 
 ```bash
 make build        # bin/arkame-agent for this platform
-make build-all    # cross-compile
+make build-all    # cross-compile: linux, darwin, windows; amd64 and arm64
 make test         # go test -race with coverage
 ```
 
