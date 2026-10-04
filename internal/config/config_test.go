@@ -36,3 +36,33 @@ func TestAgentIDCaiNoArquivoDoEnrollment(t *testing.T) {
 		t.Fatalf("AgentID = %q, queria o do env-file", cfg.AgentID)
 	}
 }
+
+// Um token.jwt que voltou com 0 bytes de um corte de energia não é token: o
+// os.Stat dizia que sim, e o agente subia sem conseguir se autenticar.
+func TestTokenExistsArquivoVazioNaoConta(t *testing.T) {
+	dir := t.TempDir()
+	casos := []struct {
+		nome     string
+		conteudo *string
+		quer     bool
+	}{
+		{"inexistente", nil, false},
+		{"vazio", ptr(""), false},
+		{"só espaços", ptr(" \n"), false},
+		{"com token", ptr("eyJhbGciOi.x.y\n"), true},
+	}
+	for _, c := range casos {
+		p := filepath.Join(dir, c.nome+".jwt")
+		if c.conteudo != nil {
+			if err := os.WriteFile(p, []byte(*c.conteudo), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		cfg := &Config{TokenPath: p}
+		if got := cfg.TokenExists(); got != c.quer {
+			t.Errorf("%s: TokenExists=%v, queria %v", c.nome, got, c.quer)
+		}
+	}
+}
+
+func ptr(s string) *string { return &s }

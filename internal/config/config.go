@@ -14,6 +14,7 @@ package config
 import (
 	"bufio"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -178,12 +179,26 @@ func Load(envFile string, o Overrides) (*Config, error) {
 // TokenExists informa se o JWT bearer já foi persistido (enrollment aprovado).
 // Substitui o antigo "zerar TokenPath" — assim o caminho configurado (env-file)
 // é preservado para o PersistToken escrever no lugar certo em instalações rootless.
+//
+// Arquivo vazio (ou só com espaços) conta como sem token, com um erro no log:
+// era só um os.Stat, e um token.jwt que voltou com 0 bytes de um corte de
+// energia fazia o agente subir calado, sem conseguir se autenticar.
 func (c *Config) TokenExists() bool {
 	if c.TokenPath == "" {
 		return false
 	}
-	_, err := os.Stat(c.TokenPath)
-	return err == nil
+	b, err := os.ReadFile(c.TokenPath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			slog.Error("não consegui ler o arquivo do token", "path", c.TokenPath, "err", err)
+		}
+		return false
+	}
+	if strings.TrimSpace(string(b)) == "" {
+		slog.Error("o arquivo do token está vazio — a gravação pode ter sido interrompida (queda de energia); rode 'arkame-agent install' de novo", "path", c.TokenPath)
+		return false
+	}
+	return true
 }
 
 // LoadToken lê o JWT bearer do disco (TokenPath). Retorna "" se não existe ou vazio.
