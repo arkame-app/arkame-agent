@@ -71,7 +71,7 @@ Binário Linux rodando local contra o painel em produção (`save.arkame.app`) +
 > arquivo: token vazio (ou só espaços) conta como sem token, com erro no log pedindo
 > nova instalação, em vez de o agente subir calado sem conseguir se autenticar.
 >
-> Ainda sem versão: o `install.sh` também sincroniza o programa novo antes do `mv` e a
+> Mudanças recentes (ver `git tag --contains <commit>`): o `install.sh` também sincroniza o programa novo antes do `mv` e a
 > pasta depois (`sync <arquivo>`, com `sync` sem argumento como fallback no coreutils
 > anterior ao 8.24 e no macOS) — antes só o `setup` do Windows fazia isso. No Windows,
 > reiniciar um serviço na atualização espera até `service.EsperaParada` (150s, cobre
@@ -101,7 +101,7 @@ Binário Linux rodando local contra o painel em produção (`save.arkame.app`) +
 > Quem precisa da garantia no reboot usa um drop-in no `docker.service` com
 > `TimeoutStopSec=` acima de 150 s, ou o agente nativo (systemd).
 >
-> Ainda sem versão (passada 35): no Linux e no macOS, `service.Reiniciar` espera o
+> Mudanças recentes (ver `git tag --contains <commit>`; passada 35): no Linux e no macOS, `service.Reiniciar` espera o
 > `systemctl restart` / `launchctl kickstart -k` por `EsperaParada` + 30 s (antes 2 min
 > fixos, abaixo dos 150 s: com um backup demorando a fechar, o comando era morto, o
 > restart seguia no gerenciador e o setup dizia "Continuam na versão antiga" sem ser
@@ -113,6 +113,19 @@ Binário Linux rodando local contra o painel em produção (`save.arkame.app`) +
 > no painel. No systemd a lista vem do `list-unit-files` mais as units ativas, com um só
 > `systemctl show -p Id -p ExecStart` (sem `--value`); no launchd, dos plists
 > `app.arkame.*`; no Windows, do `Win32_Service` por `PathName`, sem filtro de estado.
+>
+> Mudanças recentes (ver `git tag --contains <commit>`; passada 36): processos irmãos
+> com bucket de mesmo nome. O painel aceita
+> dois armazenamentos com o mesmo bucket (AWS e OCI, ou o mesmo bucket com prefixos
+> diferentes); o filtro por `SIBLING_BUCKETS` não os separava, e o processo errado abria
+> a sessão do plano do irmão (o `/start` avança o `next_run_at`) e a falhava com
+> `wrong_storage` — o backup daquela execução não acontecia. Agora o plano com
+> `storage.id` diferente do `STORAGE_ID` e bucket igual ao `STORAGE_BUCKET` é pulado sem
+> abrir sessão, com aviso no log; outro armazenamento com outro bucket continua no
+> `wrong_storage`. Na restauração, o `GET /restore-items` manda `storage_id=<STORAGE_ID>`
+> na query (o painel filtra; painel antigo ignora) e o item que trouxer `storage_id`
+> diferente é pulado sem executar; sem `storage_id` no item, vale só o bucket, como
+> antes. Sem `STORAGE_ID` (instalação antiga), nada muda.
 >
 > Compatibilidade com systemd anterior ao 231 (CentOS/RHEL 7 tem
 > o 219, Ubuntu 16.04 o 229). A unit de sistema escreve também `ReadWriteDirectories=`
