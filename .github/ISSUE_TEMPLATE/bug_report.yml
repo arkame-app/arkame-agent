@@ -1,0 +1,62 @@
+name: Bug report
+description: Something in the agent or the installers does not work as expected.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Please **do not** report security vulnerabilities here; see [SECURITY.md](https://github.com/arkame-app/arkame-agent/blob/main/SECURITY.md).
+        Remove secrets before pasting logs or config: bucket keys, the install code (`atk_…`) and the contents of `token.jwt` / `key.pem`.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Install with ...
+        2. Create a plan with ...
+        3. ...
+  - type: input
+    id: version
+    attributes:
+      label: Agent version
+      description: Output of `arkame-agent version` (Docker - `docker exec arkame-agent arkame-agent version`).
+    validations:
+      required: true
+  - type: dropdown
+    id: install-method
+    attributes:
+      label: Install method
+      options:
+        - Docker
+        - Native (install.sh, system service)
+        - Native (install.sh, user service, no sudo)
+        - Windows (setup / install.ps1)
+        - Manual binary
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system and architecture
+      placeholder: Ubuntu 24.04 amd64, Windows Server 2022, macOS 15 arm64...
+    validations:
+      required: true
+  - type: input
+    id: provider
+    attributes:
+      label: Bucket provider
+      placeholder: AWS S3, Backblaze B2, Wasabi, Oracle Cloud, MinIO...
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log lines
+      description: |
+        Docker - `sudo docker logs --tail 100 arkame-agent`. Linux - `journalctl -u arkame-agent -n 100`. Windows - `C:\etc\arkame\agent.log`.
+      render: text

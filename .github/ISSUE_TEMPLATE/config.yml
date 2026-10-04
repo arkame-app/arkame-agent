@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and ideas
+    url: https://github.com/arkame-app/arkame-agent/discussions
+    about: Ask how something works, share setups and ideas in GitHub Discussions.
+  - name: Report a security vulnerability
+    url: https://github.com/arkame-app/arkame-agent/blob/main/SECURITY.md
+    about: Please report vulnerabilities privately by email, not in public issues.
+  - name: Help with your Arkame account or panel
+    url: https://arkame.app/en/suporte?utm_source=github&utm_medium=issue_template&utm_campaign=agent-repo
+    about: Billing, account and panel questions go to Arkame support.
