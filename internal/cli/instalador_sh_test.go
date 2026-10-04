@@ -301,6 +301,59 @@ func TestInstallShCopiaQueFalhaMantemOProgramaAntigo(t *testing.T) {
 	})
 }
 
+// O install.sh trocava o programa sem sync: em XFS o rename pode chegar ao
+// disco antes dos dados, e uma queda de energia deixava o programa com 0
+// bytes. Agora o novo é sincronizado antes do mv (ainda com o antigo no
+// lugar) e a pasta depois (já com o novo). Com um sync antigo, que recusa
+// argumento, vale o sync sem argumento.
+func TestInstallShSincronizaAntesEDepoisDoMv(t *testing.T) {
+	certo := func(pacote, sha string) string { return sha + "  " + pacote + "\n" }
+	for _, aceitaArgumento := range []bool{true, false} {
+		t.Run(fmt.Sprintf("aceita argumento=%v", aceitaArgumento), func(t *testing.T) {
+			binDir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(binDir, "arkame-agent"), []byte("#!/bin/sh\necho antigo\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			falso := t.TempDir()
+			log := filepath.Join(falso, "sync.log")
+			recusa := ""
+			if !aceitaArgumento {
+				recusa = `[ $# -gt 0 ] && { echo "args:$* recusado" >> "$log"; echo "sync: extra operand" >&2; exit 1; }` + "\n"
+			}
+			script := "#!/bin/sh\nlog=" + log + "\n" + recusa +
+				`estado=antigo; grep -q falso "` + filepath.Join(binDir, "arkame-agent") + `" 2>/dev/null && estado=novo` + "\n" +
+				`echo "args:$* $estado" >> "$log"` + "\n"
+			if err := os.WriteFile(filepath.Join(falso, "sync"), []byte(script), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			path := "PATH=" + falso + string(os.PathListSeparator) + os.Getenv("PATH")
+			out, terminou, instalou := rodarInstallShEm(t, binDir, []string{path}, certo)
+			if !terminou || !instalou {
+				t.Fatalf("terminou=%v binário=%v\n%s", terminou, instalou, out)
+			}
+			b, _ := os.ReadFile(log)
+			linhas := strings.Split(strings.TrimSpace(string(b)), "\n")
+			var quer []string
+			if aceitaArgumento {
+				quer = []string{"args:" + binDir + "/.arkame-agent.novo.* antigo", "args:" + binDir + " novo"}
+			} else {
+				quer = []string{
+					"args:" + binDir + "/.arkame-agent.novo.* recusado", "args: antigo",
+					"args:" + binDir + " recusado", "args: novo",
+				}
+			}
+			if len(linhas) != len(quer) {
+				t.Fatalf("chamadas do sync = %q, queria %q", linhas, quer)
+			}
+			for i := range quer {
+				if ok, _ := filepath.Match(quer[i], linhas[i]); !ok {
+					t.Fatalf("chamada %d do sync = %q, queria %q (todas: %q)", i, linhas[i], quer[i], linhas)
+				}
+			}
+		})
+	}
+}
+
 // systemctlFalso põe no PATH um systemctl que lista as units ativas dadas
 // (nome → programa do ExecStart; "u:" na frente é do --user), respeitando o
 // padrão de nome do list-units quando há um, responde ao

@@ -418,12 +418,19 @@ main() {
     die "$escrever"
   fi
   chmod 755 "$novo" 2>/dev/null || true
+  # O novo vai ao disco antes do mv, e a pasta depois: em XFS (e em ext4 ou
+  # btrfs, conforme a montagem) o rename pode chegar ao disco antes dos dados,
+  # e uma queda de energia logo depois deixava o programa com 0 bytes e o
+  # serviço sem subir. O sync com argumento é do coreutils 8.24+; nos
+  # sistemas mais antigos (e no macOS), o sync sem argumento faz o mesmo.
+  sync "$novo" 2>/dev/null || sync
   # Os agentes que rodam o programa agora: reiniciados depois da troca.
   ANTES=$(agentes_do_programa "$BIN_DIR/arkame-agent")
   if ! mv -f "$novo" "$BIN_DIR/arkame-agent"; then
     rm -f "$novo" 2>/dev/null || true
     die "$escrever"
   fi
+  sync "$BIN_DIR" 2>/dev/null || sync
   ok "Instalado: $("$BIN_DIR"/arkame-agent version 2>/dev/null || echo "$BIN_DIR/arkame-agent")"
 
   case ":$PATH:" in
