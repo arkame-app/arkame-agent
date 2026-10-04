@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/arkame-app/agent/internal/config"
+	"github.com/arkame-app/agent/internal/segredo"
 )
 
 // Unit de sistema: roda como root, sobe no boot antes de qualquer login.
@@ -160,7 +161,10 @@ func installSystemd(ctx context.Context, cfg *config.Config, opts Options) (*Ins
 		sysctl = []string{"systemctl", "--user"}
 	}
 
-	if err := os.WriteFile(unitPath, []byte(unit), 0o644); err != nil {
+	// Troca atômica com fsync (segredo.Gravar, 0644): o os.WriteFile truncava a
+	// unit no lugar, e um corte de energia no meio a deixava vazia ou pela
+	// metade — o serviço não subia no boot seguinte.
+	if err := segredo.Gravar(unitPath, []byte(unit), 0o644); err != nil {
 		return nil, fmt.Errorf("escrevendo %s: %w", unitPath, err)
 	}
 	slog.Info("unit systemd criada", "path", unitPath, "scope", string(opts.Scope))

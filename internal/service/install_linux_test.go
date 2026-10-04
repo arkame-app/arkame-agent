@@ -110,3 +110,48 @@ func TestUnitProtegeOConfigComEspacoEPorcento(t *testing.T) {
 		t.Errorf("unit:\n%s", unit)
 	}
 }
+
+// A unit é trocada inteira (temporário, fsync, rename), não truncada no lugar:
+// uma unit antiga com outro modo sai 0644 e o temporário não fica para trás.
+func TestInstalarTrocaAUnitInteira(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("o serviço do usuário não instala como root")
+	}
+	xdg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	antesExec, antesProc := executar, procurar
+	t.Cleanup(func() { executar, procurar = antesExec, antesProc })
+	procurar = func(nome string) (string, error) { return "/usr/bin/" + nome, nil }
+	executar = func(_ context.Context, nome string, _ ...string) ([]byte, error) {
+		if nome == "loginctl" {
+			return []byte("Linger=yes\n"), nil
+		}
+		return nil, nil
+	}
+	unit := filepath.Join(xdg, "systemd", "user", "arkame-agent.service")
+	if err := os.MkdirAll(filepath.Dir(unit), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(unit, []byte("velha"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{ConfigPath: filepath.Join(t.TempDir(), "agent.env")}
+	if _, err := Install(context.Background(), cfg, Options{
+		Name: "arkame-agent", Scope: ScopeUser, BinaryPath: "/usr/local/bin/arkame-agent",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := os.Stat(unit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Mode().Perm() != 0o644 {
+		t.Fatalf("unit com modo %v, queria 0644", st.Mode().Perm())
+	}
+	if b, _ := os.ReadFile(unit); !strings.Contains(string(b), "ExecStart=") {
+		t.Fatalf("unit sem ExecStart: %q", b)
+	}
+	if _, err := os.Stat(unit + ".novo"); !os.IsNotExist(err) {
+		t.Fatal("o temporário ficou para trás")
+	}
+}

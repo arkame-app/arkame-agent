@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/arkame-app/agent/internal/config"
+	"github.com/arkame-app/agent/internal/segredo"
 )
 
 func defaultScope() Scope {
@@ -54,7 +55,10 @@ func installPlatform(ctx context.Context, cfg *config.Config, opts Options) (*In
 
 	plist := montarPlist(lbl, opts.BinaryPath, cfg.ConfigPath, logPath, opts.Scope)
 
-	if err := os.WriteFile(plistPath, []byte(plist), 0o644); err != nil {
+	// Troca atômica com fsync (segredo.Gravar, 0644): o os.WriteFile truncava a
+	// plist no lugar, e um corte de energia no meio a deixava vazia ou pela
+	// metade — o serviço não subia no boot seguinte.
+	if err := segredo.Gravar(plistPath, []byte(plist), 0o644); err != nil {
 		return nil, fmt.Errorf("escrevendo %s: %w", plistPath, err)
 	}
 	slog.Info("plist do launchd criado", "path", plistPath, "label", lbl)
