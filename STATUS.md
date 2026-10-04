@@ -62,7 +62,16 @@ Binário Linux rodando local contra o painel em produção (`save.arkame.app`) +
 >   chave com `/opt/arkame/bin` quando for o caso; o README cita esse caminho em trocar a
 >   chave e remover.
 >
-> **Também recentes:** backup e limpeza de retenção não rodam
+> **Também recentes:** o `install.sh` reconhece os agentes pelo programa, não pelo nome
+> do serviço, como o lado Go (`registrados()` do systemd e do launchd). Ele só olhava
+> as units `arkame-agent*` e os plists `app.arkame.agent*`; um serviço de nome legado
+> (até a v0.4.3 o install aceitava qualquer nome, como `backup-oci`) ficava no binário
+> antigo sem aviso depois da troca e, se fosse o único agente da máquina, o script
+> mandava "registre este servidor" a um servidor já registrado. Agora lista todas as
+> units de serviço ativas (sem padrão de nome) e todos os `app.arkame.*.plist`, e filtra
+> pelo `ExecStart`/`ProgramArguments`.
+>
+> Backup e limpeza de retenção não rodam
 > juntos no mesmo bucket (`internal/daemon/exclusao.go`). Antes, a limpeza podia apagar
 > no meio de um backup a versão que ele reaproveitava por dedup, e a sessão gravava no
 > catálogo uma versão que já não existia. O backup espera a limpeza em curso; a limpeza
@@ -129,10 +138,10 @@ Binário Linux rodando local contra o painel em produção (`save.arkame.app`) +
 > No Linux e no macOS, trocar o programa agora reinicia os outros agentes que o rodam,
 > como no Windows. O `mv -f` troca o inode e cada processo seguia com o binário antigo
 > até alguém reiniciá-lo ou o host reiniciar; com `--token`, só o `--service-name`
-> reiniciava, e sem `--token`, nenhum. Antes do `mv`, o `install.sh` anota as units
-> `arkame-agent*` ativas (systemd do sistema e `--user`) cujo `ExecStart` aponta para o
-> programa instalado (`systemctl show -p ExecStart`), ou os jobs `app.arkame.agent*`
-> rodando (`launchctl print` → `state = running`) cujo `ProgramArguments` aponta para
+> reiniciava, e sem `--token`, nenhum. Antes do `mv`, o `install.sh` anota as units de
+> serviço ativas, de qualquer nome (systemd do sistema e `--user`), cujo `ExecStart`
+> aponta para o programa instalado (`systemctl show -p ExecStart`), ou os jobs
+> `app.arkame.*` rodando (`launchctl print` → `state = running`) cujo `ProgramArguments` aponta para
 > ele. Depois da troca reinicia todos: com `--token`, menos o `--service-name`, que o
 > `install` reinicia (salvo com `--no-service`, e salvo se o `install` sair com erro:
 > aí o script o reinicia); sem `--token`, todos, inclusive o principal, e não mostra
