@@ -223,8 +223,10 @@ caminho_real() {
   printf '%s/%s' "${_cr_d%/}" "$(basename "$1")"
 }
 
-# programa_do_execstart: o path= da saída de `systemctl show -p ExecStart
-# --value` ({ path=/usr/local/bin/arkame-agent ; argv[]=… }), lida da entrada.
+# programa_do_execstart: o path= da saída de `systemctl show -p ExecStart`
+# já sem o prefixo ExecStart= ({ path=/usr/local/bin/arkame-agent ; argv[]=… }),
+# lida da entrada. Sem --value: ele só existe a partir do systemd 230, e no
+# CentOS 7 (219) o show com --value falhava calado e nenhum agente era achado.
 programa_do_execstart() {
   sed -n 's/^[[:space:]]*{[[:space:]]*path=\([^;]*[^;[:space:]]\)[[:space:]]*;.*/\1/p' | head -n 1
 }
@@ -268,7 +270,7 @@ agentes_do_programa() {
         _ap_flag=""
         [ "$_ap_escopo" = "user" ] && _ap_flag="--user"
         for _ap_u in $(units_ativas $_ap_flag); do
-          _ap_p=$(systemctl $_ap_flag show -p ExecStart --value "$_ap_u" 2>/dev/null | programa_do_execstart)
+          _ap_p=$(systemctl $_ap_flag show -p ExecStart "$_ap_u" 2>/dev/null | sed 's/^ExecStart=//' | programa_do_execstart)
           [ -n "$_ap_p" ] || continue
           [ "$(caminho_real "$_ap_p")" = "$_ap_alvo" ] || continue
           printf '%s %s\n' "$_ap_escopo" "${_ap_u%.service}"

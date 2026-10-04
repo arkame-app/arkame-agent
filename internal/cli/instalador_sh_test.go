@@ -304,7 +304,7 @@ func TestInstallShCopiaQueFalhaMantemOProgramaAntigo(t *testing.T) {
 // systemctlFalso põe no PATH um systemctl que lista as units ativas dadas
 // (nome → programa do ExecStart; "u:" na frente é do --user), respeitando o
 // padrão de nome do list-units quando há um, responde ao
-// show -p ExecStart e anota cada restart em restarts.log — com "novo" quando
+// show -p ExecStart como o systemd 219 (ExecStart=… e sem --value) e anota cada restart em restarts.log — com "novo" quando
 // o programa já é o novo no momento do restart. As units com "falha" no nome
 // não reiniciam.
 func systemctlFalso(t *testing.T, binDir string, units map[string]string) (path string, restarts func() []string) {
@@ -340,7 +340,14 @@ case "$1" in
     while read -r u resto; do
       case "$u" in $padrao) printf '%s %s\n' "$u" "$resto" ;; esac
     done < "$d/$escopo-units" 2>/dev/null ;;
-  show) for a in "$@"; do u=$a; done; cat "$d/$escopo-exec-$u" 2>/dev/null ;;
+  show)
+    # Como o systemd 219 (CentOS 7): sem --value (só existe a partir do 230),
+    # e a saída vem com o prefixo da propriedade.
+    for a in "$@"; do
+      case "$a" in --value) echo "systemctl: unrecognized option '--value'" >&2; exit 1 ;; esac
+      u=$a
+    done
+    [ -f "$d/$escopo-exec-$u" ] && printf 'ExecStart=' && cat "$d/$escopo-exec-$u" ;;
   restart)
     estado=antigo; grep -q falso "` + filepath.Join(binDir, "arkame-agent") + `" 2>/dev/null && estado=novo
     echo "$prefixo$2 $estado" >> "$d/restarts.log"
