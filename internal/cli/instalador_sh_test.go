@@ -354,26 +354,42 @@ func TestInstallShSincronizaAntesEDepoisDoMv(t *testing.T) {
 	}
 }
 
-// systemctlFalso põe no PATH um systemctl que lista as units ativas dadas
-// (nome → programa do ExecStart; "u:" na frente é do --user), respeitando o
-// padrão de nome do list-units quando há um, responde ao
-// show -p ExecStart como o systemd 219 (ExecStart=… e sem --value) e anota cada restart em restarts.log — com "novo" quando
-// o programa já é o novo no momento do restart. As units com "falha" no nome
-// não reiniciam.
+// systemctlFalso põe no PATH um systemctl com as units dadas (nome → programa
+// do ExecStart; "u:" na frente é do --user, e "p:" depois dele é a unit
+// instalada e parada). O list-unit-files lista todas (e um modelo
+// arkame-agent@.service, que o show recusa); o list-units, só as ativas,
+// respeitando o padrão de nome quando há um. O show responde como o systemd
+// 219 (sem --value, com o prefixo da propriedade), um bloco por unit pedida,
+// e falha inteiro com um modelo na lista. Cada restart vai para restarts.log
+// — com "novo" quando o programa já é o novo no momento do restart. As units
+// com "falha" no nome não reiniciam.
 func systemctlFalso(t *testing.T, binDir string, units map[string]string) (path string, restarts func() []string) {
 	t.Helper()
 	dir := t.TempDir()
-	for nome, programa := range units {
-		escopo, unit := "system", nome
-		if u, ok := strings.CutPrefix(nome, "u:"); ok {
-			escopo, unit = "user", u
-		}
-		f, err := os.OpenFile(filepath.Join(dir, escopo+"-units"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	anotar := func(arquivo, linha string) {
+		t.Helper()
+		f, err := os.OpenFile(filepath.Join(dir, arquivo), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 		if err != nil {
 			t.Fatal(err)
 		}
-		fmt.Fprintf(f, "%s.service loaded active running Arkame Backup Agent (%s)\n", unit, unit)
-		f.Close()
+		defer f.Close()
+		fmt.Fprintln(f, linha)
+	}
+	for _, escopo := range []string{"system", "user"} {
+		anotar(escopo+"-files", "arkame-agent@.service                 static          -")
+	}
+	for nome, programa := range units {
+		escopo, unit := "system", nome
+		if u, ok := strings.CutPrefix(unit, "u:"); ok {
+			escopo, unit = "user", u
+		}
+		unit, parada := strings.CutPrefix(unit, "p:")
+		if parada {
+			anotar(escopo+"-files", unit+".service disabled enabled")
+		} else {
+			anotar(escopo+"-files", unit+".service enabled enabled")
+			anotar(escopo+"-units", fmt.Sprintf("%s.service loaded active running Arkame Backup Agent (%s)", unit, unit))
+		}
 		exec := fmt.Sprintf("{ path=%s ; argv[]=%s run --config /etc/arkame/%s.env ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }\n", programa, programa, unit)
 		if err := os.WriteFile(filepath.Join(dir, escopo+"-exec-"+unit+".service"), []byte(exec), 0o644); err != nil {
 			t.Fatal(err)
@@ -385,6 +401,8 @@ d=` + dir + `
 escopo=system; prefixo=""
 if [ "$1" = "--user" ]; then escopo=user; prefixo="--user "; shift; fi
 case "$1" in
+  list-unit-files)
+    cat "$d/$escopo-files" 2>/dev/null ;;
   list-units)
     # Com padrão de nome (o argumento sem "-"), só as units que casam, como o
     # systemctl de verdade.
@@ -395,12 +413,26 @@ case "$1" in
     done < "$d/$escopo-units" 2>/dev/null ;;
   show)
     # Como o systemd 219 (CentOS 7): sem --value (só existe a partir do 230),
-    # e a saída vem com o prefixo da propriedade.
-    for a in "$@"; do
-      case "$a" in --value) echo "systemctl: unrecognized option '--value'" >&2; exit 1 ;; esac
-      u=$a
+    # e a saída vem com o prefixo da propriedade, um bloco por unit.
+    shift
+    us=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --value) echo "systemctl: unrecognized option '--value'" >&2; exit 1 ;;
+        -p) shift ;;
+        -*) ;;
+        *@.service) echo "Failed to get properties: Unit name $1 is not valid." >&2; exit 1 ;;
+        *) us="$us $1" ;;
+      esac
+      shift
     done
-    [ -f "$d/$escopo-exec-$u" ] && printf 'ExecStart=' && cat "$d/$escopo-exec-$u" ;;
+    primeiro=1
+    for u in $us; do
+      [ -n "$primeiro" ] || echo
+      primeiro=""
+      echo "Id=$u"
+      [ -f "$d/$escopo-exec-$u" ] && printf 'ExecStart=' && cat "$d/$escopo-exec-$u"
+    done ;;
   restart)
     estado=antigo; grep -q falso "` + filepath.Join(binDir, "arkame-agent") + `" 2>/dev/null && estado=novo
     echo "$prefixo$2 $estado" >> "$d/restarts.log"
@@ -498,6 +530,66 @@ func TestInstallShReiniciaOsAgentesDoPrograma(t *testing.T) {
 		}
 	})
 
+	// Com o serviço instalado e parado (manutenção), a lista só dos que
+	// rodavam vinha vazia e o script mandava registrar: o código novo criava
+	// um segundo servidor no painel. Agora é atualização: os que rodam
+	// reiniciam, o parado recebe aviso e não reinicia.
+	t.Run("sem token, um parado e um rodando: reinicia só o que roda e avisa do parado", func(t *testing.T) {
+		binDir, path, restarts := prepararCom(t, func(bin string) map[string]string {
+			return map[string]string{"arkame-agent": bin, "p:arkame-agent-oci": bin, "nginx": "/usr/sbin/nginx"}
+		})
+		out, terminou, _ := rodarInstallShEm(t, binDir, []string{path}, certo)
+		if !terminou {
+			t.Fatalf("não terminou:\n%s", out)
+		}
+		if got := fmt.Sprint(restarts()); got != "[arkame-agent novo]" {
+			t.Fatalf("restarts = %v, queria [arkame-agent novo] (o parado fica parado)\n%s", got, out)
+		}
+		if !strings.Contains(out, "O serviço arkame-agent-oci está parado; inicie-o") || !strings.Contains(out, "systemctl start") {
+			t.Fatalf("sem o aviso do serviço parado:\n%s", out)
+		}
+		if strings.Contains(out, "registre este servidor") || !strings.Contains(out, "Atualização concluída") {
+			t.Fatalf("servidor já registrado tratado como novo:\n%s", out)
+		}
+	})
+
+	t.Run("sem token, só parados: não pede registro", func(t *testing.T) {
+		binDir, path, restarts := prepararCom(t, func(bin string) map[string]string {
+			return map[string]string{"p:arkame-agent": bin, "u:p:arkame-agent-usr": bin, "nginx": "/usr/sbin/nginx"}
+		})
+		out, terminou, _ := rodarInstallShEm(t, binDir, []string{path}, certo)
+		if !terminou {
+			t.Fatalf("não terminou:\n%s", out)
+		}
+		if got := restarts(); len(got) != 0 {
+			t.Fatalf("reiniciou serviço parado: %v\n%s", got, out)
+		}
+		for _, quer := range []string{"O serviço arkame-agent está parado", "O serviço arkame-agent-usr está parado", "Atualização concluída"} {
+			if !strings.Contains(out, quer) {
+				t.Fatalf("sem %q:\n%s", quer, out)
+			}
+		}
+		if strings.Contains(out, "registre este servidor") {
+			t.Fatalf("serviço parado tratado como servidor novo:\n%s", out)
+		}
+	})
+
+	t.Run("sem token e sem serviço do programa: pede registro", func(t *testing.T) {
+		binDir, path, restarts := prepararCom(t, func(string) map[string]string {
+			return map[string]string{"arkame-agent-outro": "/opt/outro/arkame-agent", "p:nginx": "/usr/sbin/nginx"}
+		})
+		out, terminou, _ := rodarInstallShEm(t, binDir, []string{path}, certo)
+		if !terminou {
+			t.Fatalf("não terminou:\n%s", out)
+		}
+		if got := restarts(); len(got) != 0 {
+			t.Fatalf("reiniciou serviço de outro programa: %v\n%s", got, out)
+		}
+		if !strings.Contains(out, "registre este servidor") || strings.Contains(out, "está parado") {
+			t.Fatalf("sem serviço do programa, tinha de pedir registro:\n%s", out)
+		}
+	})
+
 	t.Run("com token: todos menos o --service-name", func(t *testing.T) {
 		binDir, path, restarts := preparar(t)
 		out, terminou, _ := rodarInstallShEm(t, binDir, []string{path}, certo,
@@ -588,7 +680,9 @@ lista=$(agentes_do_programa "$bin")
 printf '%s
 ' "$lista"
 echo ---
-reiniciar_agentes "$lista" system "$(label_launchd arkame-agent-oci)"`, "sh", script, sistema, usuario, bin)
+reiniciar_agentes "$lista" system "$(label_launchd arkame-agent-oci)"
+echo ---
+so_parados "$(agentes_instalados "$bin")"`, "sh", script, sistema, usuario, bin)
 	cmd.Env = append(os.Environ(), "ARKAME_INSTALL_SEM_MAIN=1", "NO_COLOR=1",
 		"PATH="+falso+string(os.PathListSeparator)+os.Getenv("PATH"))
 	out, err := cmd.CombinedOutput()
@@ -600,6 +694,10 @@ reiniciar_agentes "$lista" system "$(label_launchd arkame-agent-oci)"`, "sh", sc
 	slices.Sort(linhas)
 	if got := strings.Join(linhas, ","); got != "system app.arkame.agent,system app.arkame.agent-oci,system app.arkame.backup-oci,user app.arkame.agent-usr" {
 		t.Fatalf("agentes do programa = %v\n%s", got, out)
+	}
+	// O parado é instalado (o servidor está registrado), mas não reinicia.
+	if _, parados, _ := strings.Cut(strings.SplitN(string(out), "---", 2)[1], "---"); strings.TrimSpace(parados) != "system app.arkame.agent-parado" {
+		t.Fatalf("parados = %q, queria só system app.arkame.agent-parado\n%s", parados, out)
 	}
 	kick, _ := os.ReadFile(filepath.Join(dir, "kick.log"))
 	uid := fmt.Sprint(os.Getuid())

@@ -236,20 +236,31 @@ try {
     # sem -Token (o jeito de atualizar) ou quando a cópia falhava — backups
     # parados sem aviso até o próximo boot.
     #
-    # Os serviços rodando este exe (o $ServiceName e um segundo agente, como
-    # arkame-agent-oci) são anotados antes da troca: sem -Token, todos são
-    # reiniciados no fim para a versão nova valer. Reiniciar só o
-    # $ServiceName deixava o outro no .old, sem aviso, até o próximo boot.
+    # Os serviços instalados que chamam este exe (o $ServiceName e um segundo
+    # agente, como arkame-agent-oci), rodando ou não, são anotados antes da
+    # troca. Os que rodam reiniciam no fim (sem -Token) para a versão nova
+    # valer: reiniciar só o $ServiceName deixava o outro no .old, sem aviso,
+    # até o próximo boot. Os parados dizem que o servidor já está registrado:
+    # contar só os que rodavam fazia um servidor com o serviço parado
+    # (manutenção) receber "registre este servidor", e o código novo criava
+    # um segundo servidor no painel.
+    $doExe = @()
     $paraReiniciar = @()
+    $parados = @()
     try {
-        $paraReiniciar = @(Get-CimInstance -ClassName Win32_Service -ErrorAction Stop |
-            Where-Object { $_.State -eq 'Running' -and ((Get-ProgramaDaLinha $_.PathName) -ieq $exePath) } |
-            ForEach-Object { $_.Name })
+        $doExe = @(Get-CimInstance -ClassName Win32_Service -ErrorAction Stop |
+            Where-Object { (Get-ProgramaDaLinha $_.PathName) -ieq $exePath })
+        $paraReiniciar = @($doExe | Where-Object { $_.State -eq 'Running' } | ForEach-Object { $_.Name })
+        $parados = @($doExe | Where-Object { $_.State -eq 'Stopped' } | ForEach-Object { $_.Name })
     } catch {
-        # Sem a lista: ao menos o $ServiceName, se estava rodando.
+        # Sem a lista: ao menos o $ServiceName, se está instalado.
         Write-Warn "Nao consegui listar os servicos que rodam $exePath ($($_.Exception.Message)); so $ServiceName sera reiniciado."
         $existing = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
-        if ($existing -and $existing.Status -eq 'Running') { $paraReiniciar = @($ServiceName) }
+        if ($existing) {
+            $doExe = @($existing)
+            if ($existing.Status -eq 'Running') { $paraReiniciar = @($ServiceName) }
+            elseif ($existing.Status -eq 'Stopped') { $parados = @($ServiceName) }
+        }
     }
 
     # Outro serviço (um segundo agente, -ServiceName arkame-agent-oci) pode
@@ -295,10 +306,14 @@ try {
         # com o novo no lugar, para a atualização valer. Com -Token, mais
         # abaixo, depois do install.
         Restart-ServicosDoExe -Nomes $paraReiniciar
-        if (@($paraReiniciar).Count -gt 0) {
-            # Atualização de um servidor já instalado: não há o que
-            # registrar. Mandar gerar um código novo criava um segundo
-            # servidor no painel, como o install.sh já evita.
+        if (@($doExe).Count -gt 0) {
+            # Atualização de um servidor já instalado (algum serviço deste
+            # exe, rodando ou parado): não há o que registrar. Mandar gerar
+            # um código novo criava um segundo servidor no painel, como o
+            # install.sh já evita. Os parados só recebem aviso.
+            foreach ($nome in $parados) {
+                Write-Warn "O servico $nome esta parado; inicie-o para o agente voltar a fazer backup (ja com a versao nova): Start-Service $nome"
+            }
             Write-Host ""
             Write-Info "Atualizacao concluida: este servidor ja esta registrado no painel."
             Write-Host ""

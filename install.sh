@@ -223,14 +223,6 @@ caminho_real() {
   printf '%s/%s' "${_cr_d%/}" "$(basename "$1")"
 }
 
-# programa_do_execstart: o path= da saída de `systemctl show -p ExecStart`
-# já sem o prefixo ExecStart= ({ path=/usr/local/bin/arkame-agent ; argv[]=… }),
-# lida da entrada. Sem --value: ele só existe a partir do systemd 230, e no
-# CentOS 7 (219) o show com --value falhava calado e nenhum agente era achado.
-programa_do_execstart() {
-  sed -n 's/^[[:space:]]*{[[:space:]]*path=\([^;]*[^;[:space:]]\)[[:space:]]*;.*/\1/p' | head -n 1
-}
-
 # programa_do_plist <arquivo>: o primeiro item do ProgramArguments.
 programa_do_plist() {
   sed -n '/<key>ProgramArguments<\/key>/,/<\/array>/s/.*<string>\(.*\)<\/string>.*/\1/p' "$1" 2>/dev/null \
@@ -258,39 +250,114 @@ units_ativas() {
     | awk '{for (i = 1; i <= NF; i++) if ($i ~ /\.service$/) { print $i; break }}'
 }
 
-# agentes_do_programa <programa>: os agentes rodando agora que chamam
-# <programa>, qualquer que seja o nome do serviço, um por linha: "<escopo> <nome>" (o nome da unit sem
-# .service no systemd; o label no launchd).
-agentes_do_programa() {
-  _ap_alvo=$(caminho_real "$1")
+# units_instaladas [--user]: as units de serviço instaladas, ativas ou não
+# (list-unit-files, que existe no systemd 219), mais as ativas (as geradas e
+# as transitórias). Sem os modelos (nome@.service): o show recusa o nome.
+units_instaladas() {
+  {
+    systemctl "$@" list-unit-files --type=service --no-legend 2>/dev/null \
+      | awk '$1 ~ /\.service$/ { print $1 }'
+    units_ativas "$@"
+  } | grep -v '@\.service$' | sort -u
+}
+
+# programas_das_units [--user] <unit>...: "<unit> <programa>" de cada unit,
+# num só `systemctl show` (um por unit levava segundos com as centenas do
+# list-unit-files). O show de várias units devolve um bloco por unit,
+# separados por linha vazia, com Id= e ExecStart={ path=… ; argv[]=… }; vale o
+# primeiro ExecStart. Sem --value: ele só existe a partir do systemd 230, e no
+# CentOS 7 (219) o show com --value falhava calado e nenhum agente era achado.
+programas_das_units() {
+  _pu_flag=""
+  if [ "${1:-}" = "--user" ]; then _pu_flag="--user"; shift; fi
+  [ $# -gt 0 ] || return 0
+  # Classes [[:space:]] ficam de fora: o mawk antigo do Debian não as conhece.
+  systemctl $_pu_flag show -p Id -p ExecStart "$@" 2>/dev/null | awk '
+    function fim() { if (id != "" && prog != "") print id, prog; id = ""; prog = "" }
+    /^[ \t]*$/ { fim(); next }
+    /^Id=/ { id = substr($0, 4); next }
+    /^ExecStart=/ {
+      if (prog == "" && match($0, /path=[^;]*/)) {
+        prog = substr($0, RSTART + 5, RLENGTH - 5)
+        sub(/[ \t]+$/, "", prog)
+      }
+    }
+    END { fim() }'
+}
+
+# agentes_instalados <programa>: os agentes instalados que chamam <programa>,
+# rodando ou não, qualquer que seja o nome do serviço, um por linha:
+# "<escopo> <nome> <rodando|parado>" (o nome da unit sem .service no systemd;
+# o label no launchd). É o que diz se o servidor já está registrado: com o
+# serviço parado (manutenção), a lista só dos que rodavam vinha vazia, o
+# script mandava registrar, e o código novo criava um segundo servidor.
+agentes_instalados() {
+  _ai_alvo=$(caminho_real "$1")
   case "$OS" in
     linux)
       have systemctl || return 0
-      for _ap_escopo in system user; do
-        _ap_flag=""
-        [ "$_ap_escopo" = "user" ] && _ap_flag="--user"
-        for _ap_u in $(units_ativas $_ap_flag); do
-          _ap_p=$(systemctl $_ap_flag show -p ExecStart "$_ap_u" 2>/dev/null | sed 's/^ExecStart=//' | programa_do_execstart)
-          [ -n "$_ap_p" ] || continue
-          [ "$(caminho_real "$_ap_p")" = "$_ap_alvo" ] || continue
-          printf '%s %s\n' "$_ap_escopo" "${_ap_u%.service}"
+      for _ai_escopo in system user; do
+        _ai_flag=""
+        [ "$_ai_escopo" = "user" ] && _ai_flag="--user"
+        _ai_ativas=$(units_ativas $_ai_flag)
+        # shellcheck disable=SC2046  # os nomes de unit não têm espaço
+        programas_das_units $_ai_flag $(units_instaladas $_ai_flag) | while read -r _ai_u _ai_p; do
+          [ -n "$_ai_p" ] || continue
+          [ "$(caminho_real "$_ai_p")" = "$_ai_alvo" ] || continue
+          if printf '%s\n' "$_ai_ativas" | grep -qxF "$_ai_u"; then _ai_e=rodando; else _ai_e=parado; fi
+          printf '%s %s %s\n' "$_ai_escopo" "${_ai_u%.service}" "$_ai_e"
         done
       done ;;
     darwin)
       have launchctl || return 0
-      for _ap_escopo in system user; do
-        if [ "$_ap_escopo" = "system" ]; then _ap_dir=$LAUNCHD_DIR_SISTEMA; else _ap_dir=$LAUNCHD_DIR_USUARIO; fi
-        for _ap_f in "$_ap_dir"/app.arkame.*.plist; do
-          [ -f "$_ap_f" ] || continue
-          _ap_label=$(basename "$_ap_f" .plist)
-          _ap_p=$(programa_do_plist "$_ap_f")
-          [ -n "$_ap_p" ] || continue
-          [ "$(caminho_real "$_ap_p")" = "$_ap_alvo" ] || continue
-          launchctl print "$(alvo_launchd "$_ap_escopo" "$_ap_label")" 2>/dev/null | grep -q 'state = running' || continue
-          printf '%s %s\n' "$_ap_escopo" "$_ap_label"
+      for _ai_escopo in system user; do
+        if [ "$_ai_escopo" = "system" ]; then _ai_dir=$LAUNCHD_DIR_SISTEMA; else _ai_dir=$LAUNCHD_DIR_USUARIO; fi
+        for _ai_f in "$_ai_dir"/app.arkame.*.plist; do
+          [ -f "$_ai_f" ] || continue
+          _ai_label=$(basename "$_ai_f" .plist)
+          _ai_p=$(programa_do_plist "$_ai_f")
+          [ -n "$_ai_p" ] || continue
+          [ "$(caminho_real "$_ai_p")" = "$_ai_alvo" ] || continue
+          if launchctl print "$(alvo_launchd "$_ai_escopo" "$_ai_label")" 2>/dev/null | grep -q 'state = running'; then
+            _ai_e=rodando
+          else
+            _ai_e=parado
+          fi
+          printf '%s %s %s\n' "$_ai_escopo" "$_ai_label" "$_ai_e"
         done
       done ;;
   esac
+  return 0
+}
+
+# so_rodando / so_parados: da lista de agentes_instalados, "<escopo> <nome>"
+# dos que estão rodando (os que reiniciam) ou parados (os que só recebem aviso).
+so_rodando() { printf '%s\n' "$1" | awk '$3 == "rodando" { print $1, $2 }'; }
+so_parados() { printf '%s\n' "$1" | awk '$3 == "parado" { print $1, $2 }'; }
+
+# agentes_do_programa <programa>: os agentes rodando agora que chamam
+# <programa>, um por linha: "<escopo> <nome>".
+agentes_do_programa() {
+  so_rodando "$(agentes_instalados "$1")"
+}
+
+# avisar_parados <lista>: cada "<escopo> <nome>" parado recebe o aviso de que
+# está parado e de como iniciá-lo; o programa novo vale quando ele subir.
+avisar_parados() {
+  _ap_algum=""
+  while read -r _ap_escopo _ap_nome; do
+    [ -n "$_ap_nome" ] || continue
+    _ap_algum=1
+    warn "O serviço $_ap_nome está parado; inicie-o para o agente voltar a fazer backup (já com a versão nova)."
+  done <<LISTA
+$1
+LISTA
+  [ -n "$_ap_algum" ] || return 0
+  if [ "$OS" = "darwin" ]; then
+    warn "  sudo launchctl kickstart system/<label> (ou launchctl kickstart gui/$(id -u)/<label>, no do usuário)"
+  else
+    warn "  sudo systemctl start <serviço> (ou systemctl --user start <serviço>, no do usuário)"
+  fi
   return 0
 }
 
@@ -424,8 +491,11 @@ main() {
   # serviço sem subir. O sync com argumento é do coreutils 8.24+; nos
   # sistemas mais antigos (e no macOS), o sync sem argumento faz o mesmo.
   sync "$novo" 2>/dev/null || sync
-  # Os agentes que rodam o programa agora: reiniciados depois da troca.
-  ANTES=$(agentes_do_programa "$BIN_DIR/arkame-agent")
+  # Os agentes instalados com este programa, anotados antes da troca: os que
+  # rodam reiniciam depois dela; os parados só recebem aviso.
+  INSTALADOS=$(agentes_instalados "$BIN_DIR/arkame-agent")
+  ANTES=$(so_rodando "$INSTALADOS")
+  PARADOS=$(so_parados "$INSTALADOS")
   if ! mv -f "$novo" "$BIN_DIR/arkame-agent"; then
     rm -f "$novo" 2>/dev/null || true
     die "$escrever"
@@ -439,12 +509,13 @@ main() {
   esac
 
   if [ -z "$TOKEN" ]; then
-    # Atualização de um servidor já instalado: todos os agentes do programa,
-    # inclusive o principal, reiniciam com a versão nova, e não há o que
-    # registrar.
-    if [ -n "$ANTES" ]; then
+    # Atualização de um servidor já instalado (algum serviço do programa,
+    # rodando ou parado): os que rodam, inclusive o principal, reiniciam com a
+    # versão nova; os parados recebem aviso; e não há o que registrar.
+    if [ -n "$INSTALADOS" ]; then
       printf '\n'
-      reiniciar_agentes "$ANTES"
+      [ -n "$ANTES" ] && reiniciar_agentes "$ANTES"
+      [ -n "$PARADOS" ] && avisar_parados "$PARADOS"
       printf '\n'
       info "Atualização concluída: este servidor já está registrado no painel."
       printf '\n'
