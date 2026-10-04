@@ -168,10 +168,12 @@ func configDoServico(nome string, _ Scope) (string, bool) {
 // pararEEsperar para o serviço e espera ele parar de fato: o processo pode
 // estar no meio de um backup, e enquanto ele vive o programa fica travado no
 // disco. Já parado, o SCM devolve erro no Control, que aqui não é problema.
+// Espera até EsperaParada, que cobre a finalização do daemon.
 func pararEEsperar(s *mgr.Service) {
 	_, _ = s.Control(svc.Stop)
-	for i := 0; i < 60; i++ {
-		if st, err := s.Query(); err != nil || st.State == svc.Stopped {
+	prazo := time.Now().Add(EsperaParada)
+	for {
+		if st, err := s.Query(); err != nil || st.State == svc.Stopped || time.Now().After(prazo) {
 			return
 		}
 		time.Sleep(time.Second)

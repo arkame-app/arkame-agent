@@ -3,10 +3,14 @@ package cli
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/arkame-app/agent/internal/service"
 )
 
 // A troca do programa: o novo entra, o antigo sai, e nada pela metade fica.
@@ -182,5 +186,44 @@ func TestInstallQueFalhaReiniciaOServicoDoPrograma(t *testing.T) {
 	reiniciarSeOInstallFalhou(&out, errors.New("x"), "", reiniciar)
 	if reiniciados != nil || out.Len() != 0 {
 		t.Fatalf("install concluído ou sem serviço a reiniciar: reiniciou %v, saída %q", reiniciados, out.String())
+	}
+}
+
+// O serviço que não parou a tempo no Windows já recebeu o Stop e para sozinho
+// depois, sem ninguém o iniciar: o aviso diz que pode ter ficado parado e
+// onde iniciá-lo, nunca que continua na versão antiga.
+func TestReiniciarQueNaoParouAvisaParado(t *testing.T) {
+	reiniciar := func(n string) error {
+		switch n {
+		case "arkame-agent-oci":
+			return fmt.Errorf("%w (esperei 2m30s)", service.ErrNaoParou)
+		case "arkame-agent-falha":
+			return errors.New("acesso negado")
+		}
+		return nil
+	}
+	var out bytes.Buffer
+	falharam := reiniciarOutrosDoPrograma(&out, []string{"arkame-agent-oci", "arkame-agent-falha", "backup"}, "", reiniciar)
+	if strings.Join(falharam, ",") != "arkame-agent-oci,arkame-agent-falha" {
+		t.Fatalf("falharam = %v", falharam)
+	}
+	s := out.String()
+	if !strings.Contains(s, "Podem ter ficado parados (sem backup até iniciar): arkame-agent-oci\n") {
+		t.Fatalf("sem o aviso de parado para o que não parou a tempo:\n%s", s)
+	}
+	if !strings.Contains(s, "Continuam na versão antiga: arkame-agent-falha\n") {
+		t.Fatalf("o que falhou por outro motivo segue no aviso de versão antiga:\n%s", s)
+	}
+	if !strings.Contains(s, "inicie-os ("+comoIniciar(runtime.GOOS)+")") {
+		t.Fatalf("sem dizer onde iniciar:\n%s", s)
+	}
+
+	out.Reset()
+	reiniciarOutrosDoPrograma(&out, []string{"arkame-agent-oci"}, "", reiniciar)
+	if strings.Contains(out.String(), "versão antiga") {
+		t.Fatalf("só o que não parou: não pode dizer versão antiga:\n%s", out.String())
+	}
+	if comoIniciar("windows") != "services.msc" {
+		t.Fatalf("no Windows, inicia em services.msc: %q", comoIniciar("windows"))
 	}
 }

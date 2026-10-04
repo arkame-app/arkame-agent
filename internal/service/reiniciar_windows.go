@@ -69,7 +69,7 @@ func Reiniciar(nome string) error {
 	if st, err := s.Query(); err != nil {
 		return err
 	} else if st.State != svc.Stopped {
-		return fmt.Errorf("o serviço não parou em 60s")
+		return fmt.Errorf("%w (esperei %s)", ErrNaoParou, EsperaParada)
 	}
 	return s.Start()
 }

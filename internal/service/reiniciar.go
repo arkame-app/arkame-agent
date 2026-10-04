@@ -1,6 +1,24 @@
 package service
 
-import "strings"
+import (
+	"errors"
+	"strings"
+	"time"
+)
+
+// EsperaParada é quanto Reiniciar e Parar esperam o serviço parar depois de
+// pedir a parada. Cobre a finalização do daemon, que depois do Stop ainda
+// roda até três etapas em sequência com até finalizacaoGraca (30s) cada —
+// comando de depois, /fail ou /complete, PATCH final da restauração —, mais
+// folga para o processo sair. Com 60s, um backup no fim estourava a espera e
+// o serviço parava sozinho depois, sem ninguém o iniciar de novo. O teste do
+// daemon confere que continua cobrindo 3 × finalizacaoGraca.
+const EsperaParada = 150 * time.Second
+
+// ErrNaoParou: o serviço recebeu o pedido de parada e não parou em
+// EsperaParada. Ele pode parar logo depois e ficar parado — o SCM só religa
+// serviço que caiu —, então quem avisa não pode dizer que ele segue rodando.
+var ErrNaoParou = errors.New("o serviço não parou a tempo e pode ficar parado")
 
 // servicoRegistrado é um serviço do agente como o registro do SO o descreve
 // (unit do systemd, plist do launchd): o nome, o escopo e o programa que ele

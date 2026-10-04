@@ -145,7 +145,7 @@ func newSetupCmd() *cobra.Command {
 // até o próximo boot — no Linux e no macOS também: o processo segue com o
 // arquivo antigo depois da troca. Devolve os que não reiniciaram, que saem num aviso.
 func reiniciarOutrosDoPrograma(w io.Writer, rodando []string, proprio string, reiniciar func(string) error) []string {
-	var falharam []string
+	var falharam, antigos, parados []string
 	for _, nome := range rodando {
 		if strings.EqualFold(nome, proprio) {
 			continue
@@ -153,13 +153,25 @@ func reiniciarOutrosDoPrograma(w io.Writer, rodando []string, proprio string, re
 		if err := reiniciar(nome); err != nil {
 			fmt.Fprintf(w, "  ! não consegui reiniciar o serviço %s: %v\n", nome, err)
 			falharam = append(falharam, nome)
+			// Não parou a tempo: o pedido de parada já foi entregue, e ele
+			// para sozinho depois, sem ninguém o iniciar. Dizer que segue na
+			// versão antiga seria falso.
+			if errors.Is(err, service.ErrNaoParou) {
+				parados = append(parados, nome)
+			} else {
+				antigos = append(antigos, nome)
+			}
 			continue
 		}
 		fmt.Fprintln(w, "  ✓ Serviço", nome, "reiniciado com a versão nova")
 	}
-	if len(falharam) > 0 {
-		fmt.Fprintln(w, "  ! Continuam na versão antiga:", strings.Join(falharam, ", "))
+	if len(antigos) > 0 {
+		fmt.Fprintln(w, "  ! Continuam na versão antiga:", strings.Join(antigos, ", "))
 		fmt.Fprintln(w, "    Reinicie-os ("+comoReiniciar(runtime.GOOS)+") para a versão nova valer.")
+	}
+	if len(parados) > 0 {
+		fmt.Fprintln(w, "  ! Podem ter ficado parados (sem backup até iniciar):", strings.Join(parados, ", "))
+		fmt.Fprintln(w, "    Confira e inicie-os ("+comoIniciar(runtime.GOOS)+").")
 	}
 	return falharam
 }
@@ -173,6 +185,17 @@ func comoReiniciar(goos string) string {
 		return "sudo launchctl kickstart -k system/<label>, ou launchctl kickstart -k gui/$(id -u)/<label>"
 	}
 	return "sudo systemctl restart <serviço>, ou systemctl --user restart <serviço>"
+}
+
+// comoIniciar é onde o operador inicia à mão um serviço que ficou parado.
+func comoIniciar(goos string) string {
+	switch goos {
+	case "windows":
+		return "services.msc"
+	case "darwin":
+		return "sudo launchctl kickstart system/<label>, ou launchctl kickstart gui/$(id -u)/<label>"
+	}
+	return "sudo systemctl start <serviço>, ou systemctl --user start <serviço>"
 }
 
 // reiniciarSeOInstallFalhou: o install não terminou (chave errada ou
