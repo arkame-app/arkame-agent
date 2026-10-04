@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // No Linux, RodandoOPrograma devolvia nil e Reiniciar só falhava: depois de
@@ -82,5 +83,45 @@ func TestRodandoOProgramaEReiniciarNoSystemd(t *testing.T) {
 	}
 	if !slices.Contains(chamadas, "systemctl restart arkame-agent-s") {
 		t.Fatalf("não reiniciou no escopo do sistema: %v", chamadas)
+	}
+}
+
+// Reiniciar cortava a espera em 2 min fixos, abaixo de EsperaParada (150s):
+// o systemctl restart morria enquanto o daemon ainda fechava um backup, e o
+// setup dizia que o serviço continuava na versão antiga. O prazo agora vem de
+// EsperaParada, com folga para o serviço subir de novo.
+func TestReiniciarEsperaMaisQueEsperaParada(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	antesDir := dirUnitsDoSistema
+	t.Cleanup(func() { dirUnitsDoSistema = antesDir })
+	dirUnitsDoSistema = t.TempDir()
+
+	if prazoDoReinicio() != EsperaParada+folgaDoReinicio {
+		t.Fatalf("prazoDoReinicio() = %s, querido EsperaParada (%s) + folga (%s)", prazoDoReinicio(), EsperaParada, folgaDoReinicio)
+	}
+	if folgaDoReinicio <= 0 {
+		t.Fatalf("folgaDoReinicio = %s, precisa ser positiva", folgaDoReinicio)
+	}
+
+	var prazo time.Duration
+	antes := executar
+	t.Cleanup(func() { executar = antes })
+	executar = func(ctx context.Context, _ string, args ...string) ([]byte, error) {
+		if slices.Contains(args, "restart") {
+			d, ok := ctx.Deadline()
+			if !ok {
+				t.Fatal("restart sem prazo")
+			}
+			prazo = time.Until(d)
+		}
+		return nil, nil
+	}
+	inicio := time.Now()
+	if err := Reiniciar("arkame-agent-x"); err != nil {
+		t.Fatal(err)
+	}
+	gasto := time.Since(inicio)
+	if prazo <= EsperaParada || prazo > prazoDoReinicio() || prazo < prazoDoReinicio()-gasto-time.Second {
+		t.Fatalf("prazo do restart = %s, querido ~%s (EsperaParada %s + folga)", prazo, prazoDoReinicio(), EsperaParada)
 	}
 }
