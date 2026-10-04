@@ -6,8 +6,12 @@ so a little context up front saves both of us time.
 ## Before you start
 
 - **Bugs:** open an issue with the bug template. The agent version
-  (`arkame-agent version`), the OS, the install method (Docker or native) and
-  the relevant log lines make most reports actionable on the first read.
+  (`/usr/local/bin/arkame-agent version`, or `/opt/arkame/bin/...` /
+  `~/.local/bin/...` depending on the install; on Windows
+  `& "C:\Program Files\Arkame\arkame-agent.exe" version`; in Docker
+  `sudo docker exec arkame-agent arkame-agent version`), the OS, the install
+  method (Docker or native) and the relevant log lines make most reports
+  actionable on the first read.
 - **Features and larger changes:** open an issue (or a Discussion) first and
   describe the problem you want to solve. The agent is driven by the Arkame
   panel, and many changes need a matching change on the panel side, which is not

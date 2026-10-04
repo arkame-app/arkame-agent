@@ -11,7 +11,10 @@ Please **do not open a public issue**. Email **contato@arkame.app** with
 
 - what you found and where (file, function, or command);
 - steps to reproduce, or a proof of concept;
-- the agent version (`arkame-agent version`) and OS;
+- the agent version (`/usr/local/bin/arkame-agent version`, or
+  `/opt/arkame/bin/...` / `~/.local/bin/...` depending on the install; on
+  Windows `& "C:\Program Files\Arkame\arkame-agent.exe" version`; in Docker
+  `sudo docker exec arkame-agent arkame-agent version`) and OS;
 - what an attacker could do with it, as you see it.
 
 Write in English, Portuguese or Spanish.

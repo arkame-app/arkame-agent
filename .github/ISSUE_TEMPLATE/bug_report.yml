@@ -26,7 +26,7 @@ body:
     id: version
     attributes:
       label: Agent version
-      description: Output of `arkame-agent version` (Docker - `docker exec arkame-agent arkame-agent version`).
+      description: Output of `arkame-agent version` with the full path. Linux/macOS - `/usr/local/bin/arkame-agent version` (or `/opt/arkame/bin/arkame-agent version`, or `~/.local/bin/arkame-agent version` if installed without root). Windows (PowerShell) - `& "C:\Program Files\Arkame\arkame-agent.exe" version`. Docker - `sudo docker exec arkame-agent arkame-agent version`.
     validations:
       required: true
   - type: dropdown
