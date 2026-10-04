@@ -233,31 +233,7 @@ func planLoop(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config.Co
 	ticker := time.NewTicker(time.Duration(cfg.PollIntervalSec) * time.Second)
 	defer ticker.Stop()
 
-	run := func() {
-		var plans []api.Plan
-		if err := c.GET(ctx, "/api/agents/"+cfg.AgentID+"/plans", &plans); err != nil {
-			slog.Warn("poll plans falhou", "err", err)
-			return
-		}
-		now := time.Now().UTC()
-		for _, plan := range plans {
-			if plan.Kind != "backup" {
-				continue
-			}
-			if planoDeOutroProcesso(cfg, plan) {
-				slog.Debug("plano de bucket atendido por outro processo deste agente",
-					"plan_id", plan.ID, "bucket", plan.StorageRef.Bucket)
-				continue
-			}
-			if !scheduler.ShouldRun(plan, now) {
-				continue
-			}
-			slog.Info("executando plan", "plan_id", plan.ID, "paths", plan.SourcePaths)
-			if err := executarPlanoExclusivo(ctx, c, s3c, cfg, plan, trava); err != nil {
-				slog.Error("plan falhou", "plan_id", plan.ID, "err", err)
-			}
-		}
-	}
+	run := func() { rodadaDePlanos(ctx, c, s3c, cfg, trava) }
 
 	run()
 	for {
@@ -268,6 +244,53 @@ func planLoop(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config.Co
 			run()
 		}
 	}
+}
+
+// rodadaDePlanos busca os planos do agente e executa os que devem rodar agora.
+func rodadaDePlanos(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config.Config, trava *exclusaoDoBucket) {
+	var plans []api.Plan
+	if err := c.GET(ctx, "/api/agents/"+cfg.AgentID+"/plans", &plans); err != nil {
+		slog.Warn("poll plans falhou", "err", err)
+		return
+	}
+	now := time.Now().UTC()
+	for _, plan := range plans {
+		if plan.Kind != "backup" {
+			continue
+		}
+		if planoDeOutroProcesso(cfg, plan) {
+			slog.Debug("plano de bucket atendido por outro processo deste agente",
+				"plan_id", plan.ID, "bucket", plan.StorageRef.Bucket)
+			continue
+		}
+		if !scheduler.ShouldRun(plan, now) {
+			continue
+		}
+		if planoDeIrmaoComMesmoBucket(cfg, plan) {
+			slog.Warn("plano de outro armazenamento com bucket de mesmo nome; pulado sem abrir sessão (pode ser de outro processo deste agente)",
+				"plan_id", plan.ID, "storage_id", plan.StorageRef.ID, "bucket", plan.StorageRef.Bucket,
+				"storage_id_instalado", cfg.StorageID)
+			continue
+		}
+		slog.Info("executando plan", "plan_id", plan.ID, "paths", plan.SourcePaths)
+		if err := executarPlanoExclusivo(ctx, c, s3c, cfg, plan, trava); err != nil {
+			slog.Error("plan falhou", "plan_id", plan.ID, "err", err)
+		}
+	}
+}
+
+// planoDeIrmaoComMesmoBucket: o plano é de outro armazenamento (storage.id
+// diferente do STORAGE_ID), mas o bucket tem o mesmo nome do instalado — o
+// painel aceita dois armazenamentos com o mesmo bucket (AWS e OCI, ou o mesmo
+// bucket com prefixos diferentes). O filtro por bucket (planoDeOutroProcesso)
+// não separa esse caso, e abrir a sessão aqui avançava o next_run_at e a
+// falhava com wrong_storage, roubando a execução do processo irmão que tem a
+// credencial certa. Então o plano é pulado sem sessão. Plano de outro
+// armazenamento com outro bucket segue para o wrong_storage visível. Sem
+// STORAGE_ID (instalação antiga) ou sem id no plano, nada muda.
+func planoDeIrmaoComMesmoBucket(cfg *config.Config, plan api.Plan) bool {
+	return planoDeOutroArmazenamento(cfg, plan) &&
+		cfg.StorageBucket != "" && plan.StorageRef.Bucket == cfg.StorageBucket
 }
 
 // planoDeOutroProcesso: o plano é de um bucket que outro processo deste
@@ -882,7 +905,15 @@ const limiteDeRestoreItems = 500
 // do lote.
 func processarFilaDeRestore(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config.Config, aquecendo map[string]*esperaDeAquecimento) {
 	var resp api.ListRestoreItemsResponse
-	if err := c.GET(ctx, "/api/agents/"+cfg.AgentID+"/restore-items?limit="+strconv.Itoa(limiteDeRestoreItems), &resp); err != nil {
+	// storage_id: o painel devolve só os itens deste armazenamento (dois
+	// armazenamentos do agente podem ter bucket de mesmo nome). Painel antigo
+	// ignora o parâmetro; o filtro por item, abaixo, cobre esse caso.
+	q := url.Values{}
+	q.Set("limit", strconv.Itoa(limiteDeRestoreItems))
+	if cfg.StorageID != "" {
+		q.Set("storage_id", cfg.StorageID)
+	}
+	if err := c.GET(ctx, "/api/agents/"+cfg.AgentID+"/restore-items?"+q.Encode(), &resp); err != nil {
 		slog.Warn("poll restore-items falhou", "err", err)
 		return
 	}
@@ -898,6 +929,16 @@ func processarFilaDeRestore(ctx context.Context, c *api.Client, s3c *s3.Client, 
 		}
 		// Ainda no recuo: nem chega a falar com a S3 nem com o painel.
 		if e, ok := aquecendo[item.ItemID]; ok && time.Now().Before(e.proxima) {
+			continue
+		}
+		// Item de outro armazenamento com bucket de mesmo nome: é de um
+		// processo irmão. Pulado sem tocar no item — executá-lo com a chave e
+		// o endpoint daqui falhava ou dava not_found, e o painel marcava a
+		// versão como indisponível. Item sem storage_id (painel antigo) ou
+		// processo sem STORAGE_ID: só o filtro por bucket, abaixo.
+		if cfg.StorageID != "" && item.StorageID != "" && item.StorageID != cfg.StorageID {
+			slog.Debug("restore item de outro armazenamento; pulado",
+				"item_id", item.ItemID, "storage_id", item.StorageID, "bucket", item.Bucket)
 			continue
 		}
 		// Este processo só tem credenciais para o bucket configurado. Item de

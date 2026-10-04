@@ -223,9 +223,12 @@ type Lifecycle struct {
 // O agent puxa items via GET /api/agents/<id>/restore-items, baixa cada um do
 // bucket via GetObject(VersionId) e reporta status via PATCH.
 type RestoreItem struct {
-	ItemID           string `json:"item_id"`
-	JobID            string `json:"job_id"`
-	Bucket           string `json:"bucket"`
+	ItemID string `json:"item_id"`
+	JobID  string `json:"job_id"`
+	Bucket string `json:"bucket"`
+	// StorageID é o armazenamento do item. Opcional: painel antigo não manda,
+	// e aí só o bucket separa os processos irmãos.
+	StorageID        string `json:"storage_id,omitempty"`
 	DestPath         string `json:"dest_path"`         // diretório destino absoluto
 	ConflictStrategy string `json:"conflict_strategy"` // suffix-version | overwrite | skip
 	SourceKey        string `json:"source_key"`        // S3 key dentro do bucket
