@@ -3,7 +3,6 @@
 [![License: Apache-2.0](https://img.shields.io/github/license/arkame-app/arkame-agent)](LICENSE)
 [![Latest release](https://img.shields.io/github/v/release/arkame-app/arkame-agent?sort=semver)](https://github.com/arkame-app/arkame-agent/releases/latest)
 [![CI](https://github.com/arkame-app/arkame-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/arkame-app/arkame-agent/actions/workflows/ci.yml)
-[![Go Report Card](https://goreportcard.com/badge/github.com/arkame-app/arkame-agent)](https://goreportcard.com/report/github.com/arkame-app/arkame-agent)
 [![Signed with cosign](https://img.shields.io/badge/releases-signed%20with%20cosign-2a6db2?logo=sigstore&logoColor=white)](#verify-releases-cosign)
 
 The open source backup agent behind [Arkame](https://arkame.app/en?utm_source=github&utm_medium=readme&utm_campaign=agent-repo):
