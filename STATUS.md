@@ -81,6 +81,13 @@ Binário Linux rodando local contra o painel em produção (`save.arkame.app`) +
 > `-Token`, num servidor já instalado, termina com "Atualizacao concluida: este servidor
 > ja esta registrado no painel." em vez de mandar gerar um código novo, como o
 > `install.sh`.
+> No Linux e no macOS o gerenciador dá ao agente o mesmo prazo para parar:
+> a unit do systemd (sistema e usuário) ganhou `TimeoutStopSec=` e o plist do launchd
+> `ExitTimeOut`, ambos com `service.EsperaParada` (150s). Antes valiam os padrões (90s
+> no systemd, ~20s no launchd) e o SIGKILL chegava no meio da finalização — o comando
+> de depois não apagava o dump e o `/complete` ou `/fail` não chegava ao painel. Só
+> vale depois de reinstalar o serviço (o `install` reescreve a unit/plist); instalações
+> existentes seguem com o prazo antigo até lá.
 >
 > Compatibilidade com systemd anterior ao 231 (CentOS/RHEL 7 tem
 > o 219, Ubuntu 16.04 o 229). A unit de sistema escreve também `ReadWriteDirectories=`
