@@ -62,7 +62,17 @@ Binário Linux rodando local contra o painel em produção (`save.arkame.app`) +
 >   chave com `/opt/arkame/bin` quando for o caso; o README cita esse caminho em trocar a
 >   chave e remover.
 >
-> **Também recentes:** o `install.sh` reconhece os agentes pelo programa, não pelo nome
+> **Também recentes:** compatibilidade com systemd anterior ao 231 (CentOS/RHEL 7 tem
+> o 219, Ubuntu 16.04 o 229). A unit de sistema escreve também `ReadWriteDirectories=`
+> ao lado de `ReadWritePaths=`: o systemd antigo ignorava `ReadWritePaths=` mas aplicava
+> o `ProtectSystem=full`, e `/etc/arkame` ficava só leitura — o token renovado não era
+> gravado e, num reboot depois do vencimento do antigo, o agente tomava 401 para sempre.
+> Vale para quem instalar ou reinstalar o serviço (a unit é reescrita no `install`). O
+> `install.sh` lê o `ExecStart` com `systemctl show -p ExecStart` e tira o prefixo com
+> `sed`, sem `--value` (só existe a partir do 230): nesses hosts a atualização não achava
+> nenhum agente, ninguém reiniciava e o script pedia registro a servidor já registrado.
+>
+> O `install.sh` reconhece os agentes pelo programa, não pelo nome
 > do serviço, como o lado Go (`registrados()` do systemd e do launchd). Ele só olhava
 > as units `arkame-agent*` e os plists `app.arkame.agent*`; um serviço de nome legado
 > (até a v0.4.3 o install aceitava qualquer nome, como `backup-oci`) ficava no binário
