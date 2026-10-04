@@ -174,8 +174,8 @@ Binário Linux rodando local contra o painel em produção (`save.arkame.app`) +
 > `status: partial`, `error_code: sync_interrupted` e "envio interrompido: o serviço do
 > agente parou; N arquivo(s) guardado(s) antes da parada" (o total da origem não se sabe:
 > a varredura parou no meio). A nota do comando de depois continua indo ao fim. Os demais
-> casos não mudaram. Pendente no painel: `motivos.sync_interrupted` nos 3 idiomas e tirar
-> `sync_interrupted` do aviso por e-mail de backup incompleto.
+> casos não mudaram. O painel traduz `motivos.sync_interrupted` nos 3 idiomas e não manda
+> e-mail de falha para `sync_interrupted` nem `agent_stopped` (commit `587d44c` do arkame).
 >
 > Compatibilidade com systemd anterior ao 231 (CentOS/RHEL 7 tem
 > o 219, Ubuntu 16.04 o 229). A unit de sistema escreve também `ReadWriteDirectories=`
