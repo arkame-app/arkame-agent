@@ -249,7 +249,22 @@ only. Process environment variables override the file.
 | `POLL_INTERVAL_SEC`, `HEARTBEAT_INTERVAL_SEC` | Plan/restore polling and heartbeat intervals (default 60) |
 | `TOKEN_PATH`, `PRIVATE_KEY_PATH`, `AGENT_ID_PATH`, `AGENT_ID` | Agent identity files (written at enrollment) |
 | `SIBLING_BUCKETS` | Buckets served by other agent processes on the same host |
-| `HTTPS_PROXY`, `NO_PROXY` | Standard proxy variables, honored for panel calls |
+| `HTTPS_PROXY`, `NO_PROXY` | Standard proxy variables, honored for panel calls. Read from the process environment only; see below |
+
+`HTTPS_PROXY` and `NO_PROXY` are not settings the agent reads from the file:
+they only count when they are in the environment of the agent process.
+
+- **systemd (Linux service):** put them in `agent.env`. The unit loads the file
+  as its `EnvironmentFile`, so they reach the process; restart the service
+  afterwards.
+- **Docker:** pass `-e HTTPS_PROXY=... -e NO_PROXY=...` on both `docker run`
+  commands (the `setup` one and the daemon one). The file alone has no effect.
+- **macOS (launchd) and the Windows service:** there is no file-based support
+  today. The agent reads `agent.env` itself for its own settings and does not
+  export it, and the service definition written by `install` carries no proxy
+  variables.
+- **Commands you run by hand** (`install`, `check-storage`, `run`): the
+  variables must be set in that shell, and kept through `sudo`.
 
 The complete reference (multiple agents per host, re-enrollment, macOS Full Disk
 Access, OneDrive, permission checks on the service binary) is in the
