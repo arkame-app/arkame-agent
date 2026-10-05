@@ -85,7 +85,7 @@ Núcleo funcional entregue. Itens concluídos e pendências de hardening:
 - [x] Restore (Plan kind=restore — executor com escrita atômica + SHA-256 verify + warming)
 - [ ] Self-update (agente baixa nova versão quando painel sinaliza)
 - [ ] mTLS hardening (fase 2) — substituir bearer JWT mantendo o contrato atual
-- [ ] Snapshot orquestrado (LVM / VSS / btrfs) — fora do escopo atual (PLAN.md), pode voltar como plugin
+- [ ] Snapshot orquestrado (LVM / VSS / btrfs) — no roadmap, ainda não implementado
 - [x] Testes de integração contra S3 de verdade: a CI e a release rodam `go test -race ./...` com um RustFS 1.0.0 local (o MinIO deixou de ser baixável em 24/09)
 - [ ] Observabilidade: métricas Prometheus + traces OTEL (endpoint opcional)
 
