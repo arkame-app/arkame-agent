@@ -230,9 +230,27 @@ causa e não mexe no arquivo.
 # Se instalou como serviço (padrão), já está rodando:
 systemctl status arkame-agent
 
-# Manualmente:
-arkame-agent run --config /etc/arkame/agent.env
+# Manualmente, em primeiro plano. Pare o serviço antes, para não ficarem dois
+# agentes com a mesma identidade rodando ao mesmo tempo:
+sudo systemctl stop arkame-agent
+sudo /usr/local/bin/arkame-agent run --config /etc/arkame/agent.env
+
+# Com root, quando o instalador avisou que /usr/local/bin não é só do root
+# (Homebrew em Mac Intel): o programa está em /opt/arkame/bin
+sudo /opt/arkame/bin/arkame-agent run --config /etc/arkame/agent.env
+
+# Instalação sem root (Linux ou macOS)
+systemctl --user stop arkame-agent
+~/.local/bin/arkame-agent run --config ~/.config/arkame/agent.env
 ```
+
+No macOS o serviço é do launchd, não do systemd: pare-o com
+`sudo launchctl bootout system/app.arkame.agent` (sem root,
+`launchctl bootout gui/$(id -u)/app.arkame.agent`). Para o serviço voltar:
+`sudo systemctl start arkame-agent` (sem root, `systemctl --user start arkame-agent`)
+no Linux; no macOS,
+`sudo launchctl bootstrap system /Library/LaunchDaemons/app.arkame.agent.plist`
+(sem root, `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/app.arkame.agent.plist`).
 
 ## Variáveis de ambiente
 
