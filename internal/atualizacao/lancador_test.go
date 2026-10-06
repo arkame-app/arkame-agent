@@ -98,7 +98,8 @@ func TestLancadorIgnoraProgramaComRegistroForjado(t *testing.T) {
 	e = b.estado()
 	e.Sha256 = resumoDe(intruso)
 	_ = b.lugar.gravarEstado(e)
-	_ = os.WriteFile(b.lugar.Checksums, []byte(resumoDe(intruso)+"  "+NomeNoRelease()+"\n"), 0o644)
+	arqChecksums, _ := b.lugar.arquivosDaVersao(b.versaoV)
+	_ = os.WriteFile(arqChecksums, []byte(resumoDe(intruso)+"  "+NomeNoRelease()+"\n"), 0o644)
 	if escolhido, _ := b.escolher("0.4.31"); escolhido != "" {
 		t.Fatal("o lançador escolheu um programa com checksums.txt reescrito")
 	}
@@ -222,5 +223,51 @@ func TestAmbienteDoLancador(t *testing.T) {
 	}
 	if p := ProgramaDoVolume("/etc/arkame/agent.env"); p != "/etc/arkame/bin/arkame-agent" {
 		t.Fatalf("programa do volume = %q", p)
+	}
+}
+
+// A troca seguinte que falha no meio (aqui, no auto-teste) não estraga o
+// programa bom do volume: o checksums.txt de cada versão tem o seu arquivo, e
+// o lançador segue conferindo e executando a versão que ficou.
+func TestTrocaSeguinteQueFalhaNaoEstragaOProgramaDoVolume(t *testing.T) {
+	b := noVolume(t)
+	AbrirProva(b.lugar.Atual, "0.5.0").Confirmar()
+
+	// Sai a 0.6.0, com um programa que reprova no auto-teste.
+	v6, _ := LerVersao("0.6.0")
+	ruim := programaFalso("0.6.0", 1)
+	b.rel.mu.Lock()
+	b.rel.versao = "0.6.0"
+	b.rel.programa = ruim
+	b.rel.checksums = []byte(resumoDe(ruim) + "  " + NomeNoRelease() + "\n")
+	b.rel.assinatura = Assinar(b.priv, v6, b.rel.checksums)
+	b.rel.mu.Unlock()
+	b.pedido = Pedido{Versao: "0.6.0", Sha256: resumoDe(ruim), BaseURL: b.srv.URL}
+	b.opcoes.VersaoAtual = "0.5.0"
+	if _, err := b.aplicar(); CodigoDaFalha(err) != FalhaAutoTeste {
+		t.Fatalf("queria a falha do auto-teste, veio %v", err)
+	}
+	if escolhido, porque := b.escolher("0.4.31"); escolhido == "" {
+		t.Fatalf("depois da troca que falhou, o lançador largou o programa bom: %s", porque)
+	}
+
+	// E a troca que dá certo deixa só o checksums.txt da versão que ficou.
+	bom := programaFalso("0.6.0", 0)
+	b.rel.mu.Lock()
+	b.rel.programa = bom
+	b.rel.checksums = []byte(resumoDe(bom) + "  " + NomeNoRelease() + "\n")
+	b.rel.assinatura = Assinar(b.priv, v6, b.rel.checksums)
+	b.rel.mu.Unlock()
+	b.pedido.Sha256 = resumoDe(bom)
+	if _, err := b.aplicar(); err != nil {
+		t.Fatal(err)
+	}
+	if escolhido, porque := b.escolher("0.4.31"); escolhido == "" {
+		t.Fatalf("a 0.6.0 não foi lançada: %s", porque)
+	}
+	AbrirProva(b.lugar.Atual, "0.6.0").Confirmar()
+	guardados, _ := filepath.Glob(filepath.Join(filepath.Dir(b.lugar.Atual), "*.checksums-*"))
+	if len(guardados) != 2 || !strings.Contains(guardados[0], "0.6.0") {
+		t.Fatalf("checksums.txt guardados depois de confirmar a 0.6.0: %v", guardados)
 	}
 }

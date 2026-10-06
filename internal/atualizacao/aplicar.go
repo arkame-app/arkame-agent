@@ -281,10 +281,11 @@ func Aplicar(ctx context.Context, p Pedido, op Opcoes) (*Resultado, error) {
 	}
 	if op.PeloLancador {
 		// O lançador confere o programa do volume a cada partida, sem rede.
-		if err := gravarArquivo(l.Checksums, checksums); err != nil {
+		arqChecksums, arqAssinatura := l.arquivosDaVersao(alvo)
+		if err := gravarArquivo(arqChecksums, checksums); err != nil {
 			return nil, falha(FalhaTroca, "guardando o checksums.txt: %v", err)
 		}
-		if err := gravarArquivo(l.Assinatura, assinatura); err != nil {
+		if err := gravarArquivo(arqAssinatura, assinatura); err != nil {
 			return nil, falha(FalhaTroca, "guardando a assinatura: %v", err)
 		}
 	}

@@ -24,11 +24,33 @@ type Lugar struct {
 	// Trava impede duas trocas ao mesmo tempo: dois agentes na mesma máquina
 	// (um por credencial de bucket) dividem o programa.
 	Trava string
-	// Checksums e Assinatura são o checksums.txt do release e a assinatura
-	// dele, guardados para o lançador do Docker conferir o programa do volume
-	// de novo a cada partida, sem rede.
-	Checksums  string
-	Assinatura string
+	// base é o prefixo dos arquivos por versão (arquivosDaVersao).
+	base string
+}
+
+// arquivosDaVersao são o checksums.txt do release de uma versão e a
+// assinatura dele, guardados para o lançador do Docker conferir o programa do
+// volume de novo a cada partida, sem rede.
+//
+// O nome leva a versão: com um nome só, a troca seguinte gravaria o
+// checksums.txt da versão nova por cima antes de trocar o programa — e uma
+// troca que falhasse ali deixaria o programa bom sem o checksums.txt dele, e o
+// lançador o abandonaria.
+func (l Lugar) arquivosDaVersao(v Versao) (checksums, assinatura string) {
+	checksums = l.base + ".checksums-" + v.String() + ".txt"
+	return checksums, checksums + ".ed25519"
+}
+
+// limparOutrasVersoes apaga os checksums.txt guardados de versões que não são
+// a que ficou no lugar.
+func (l Lugar) limparOutrasVersoes(fica Versao) {
+	guardados, _ := filepath.Glob(l.base + ".checksums-*.txt*")
+	c, a := l.arquivosDaVersao(fica)
+	for _, g := range guardados {
+		if g != c && g != a {
+			_ = os.Remove(g)
+		}
+	}
 }
 
 // LugarDe monta os caminhos ao lado do programa. No Windows a extensão fica
@@ -42,13 +64,12 @@ func LugarDe(programa string) Lugar {
 	}
 	em := func(sufixo string) string { return filepath.Join(dir, base+sufixo) }
 	return Lugar{
-		Atual:      programa,
-		Novo:       em(".novo" + ext),
-		Anterior:   em(".anterior" + ext),
-		Estado:     em(".atualizacao.json"),
-		Trava:      em(".atualizando"),
-		Checksums:  em(".checksums.txt"),
-		Assinatura: em(".checksums.txt.ed25519"),
+		Atual:    programa,
+		Novo:     em(".novo" + ext),
+		Anterior: em(".anterior" + ext),
+		Estado:   em(".atualizacao.json"),
+		Trava:    em(".atualizando"),
+		base:     em(""),
 	}
 }
 

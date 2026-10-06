@@ -129,6 +129,9 @@ func (p *Prova) Confirmar() {
 		slog.Warn("atualização confirmada, mas não consegui registrar", "path", p.l.Estado, "err", err)
 		return
 	}
+	if v, err := LerVersao(e.Versao); err == nil && e.PeloLancador {
+		p.l.limparOutrasVersoes(v)
+	}
 	slog.Info("atualização confirmada: o painel aceitou o heartbeat da versão nova", "versao", e.Versao)
 }
 

@@ -108,11 +108,12 @@ func EscolherDoVolume(programa, versaoDaImagem string, chaves []ed25519.PublicKe
 
 // conferirDoVolume refaz as conferências da troca com o que está no disco.
 func conferirDoVolume(l Lugar, e Estado, versao Versao, chaves []ed25519.PublicKey, nome string) error {
-	checksums, err := os.ReadFile(l.Checksums)
+	arqChecksums, arqAssinatura := l.arquivosDaVersao(versao)
+	checksums, err := os.ReadFile(arqChecksums)
 	if err != nil {
 		return err
 	}
-	assinatura, err := os.ReadFile(l.Assinatura)
+	assinatura, err := os.ReadFile(arqAssinatura)
 	if err != nil {
 		return err
 	}
