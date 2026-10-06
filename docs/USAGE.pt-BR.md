@@ -28,10 +28,12 @@ restauração grava no servidor, inclusive no lugar original. O prazo de 150 s
 (`--stop-timeout`, `stop -t`, `restart -t`) é o tempo que o agente pode levar para
 fechar um backup em andamento e avisar o painel (`/complete`); os 10 s padrão do
 Docker, ou o `rm -f`, matam o processo antes e o ponto de restauração se perde.
-`--pull always` no primeiro `docker run`: o agente não se atualiza sozinho, e
-reinstalar com este comando é como ele se atualiza no Docker; sem a opção, o
-Docker reaproveita a `:latest` que já está no servidor e o agente continua na
-versão antiga.
+`--pull always` no primeiro `docker run`: reinstalar com este comando é como a
+**imagem** se atualiza; sem a opção, o Docker reaproveita a `:latest` que já
+está no servidor. Entre uma troca de imagem e outra, o programa do agente se
+atualiza sozinho: o novo vai para `/etc/arkame/bin/` (o volume da
+configuração) e o programa da imagem o executa ao subir, se ele conferir. Ver
+"Atualização do agente", abaixo.
 
 ```bash
 sudo docker run --pull always --rm -it --user 0 --security-opt label=disable --hostname "$(hostname)" -v /etc/arkame:/etc/arkame \
@@ -158,6 +160,43 @@ arquivo de configuração): a identidade nova, e também o armazenamento e a
 chave já testados, só são gravados com ela, e o serviço só é instalado
 depois, com o token no disco. Não há `--wait=false` — o enrollment deixado sem
 espera não teria quem o concluísse.
+
+### Atualização do agente
+
+O agente se atualiza sozinho quando o painel manda: dentro da janela da
+organização (padrão 02:00–05:00, no fuso dela), nunca durante backup, expurgo
+ou restauração. Ele baixa a versão, confere a assinatura Ed25519 do
+`checksums.txt` com as chaves embutidas no programa em uso, confere o SHA-256
+com o do `checksums.txt` assinado **e** com o que o painel mandou, roda o
+`self-test` do programa novo, troca e sai para o serviço religar. O programa
+novo tem 5 minutos para um heartbeat aceito pelo painel; sem isso (ou na
+terceira partida seguida sem sucesso), o anterior volta ao lugar.
+
+```bash
+# Atualizar agora, à mão, com as mesmas conferências (ignora a janela)
+sudo /usr/local/bin/arkame-agent update
+# Sem acesso ao painel: a versão e o SHA-256 que o painel mostra em Servidores
+sudo /usr/local/bin/arkame-agent update --version 0.5.0 --sha256 <hex>
+# Conferir que o programa funciona com a configuração deste agente
+sudo /usr/local/bin/arkame-agent self-test
+```
+
+- **Desligar**: `ARKAME_AUTO_UPDATE=off` no `agent.env` (ou no ambiente do
+  container). No painel, a organização pode escolher a política manual, e cada
+  servidor pode ser segurado na versão em que está.
+- **Quem instalou antes da atualização automática** atualiza à mão uma última
+  vez, rodando o instalador de novo (sem `--token`, ele só atualiza):
+  `curl -fsSL https://get.arkame.app/install.sh | sudo sh`. No Linux isso
+  também regrava a unit do systemd (`arkame-agent service refresh`): a unit de
+  sistema antiga não deixava o serviço gravar na pasta do programa.
+- **Arquivos ao lado do programa**: `arkame-agent.anterior` (o programa de
+  antes da última troca) e `arkame-agent.atualizacao.json` (o registro dela).
+- **Windows 11 com Smart App Control**: o `.exe` ainda não tem assinatura de
+  código; o programa novo é barrado no `self-test`, a troca não acontece e o
+  programa atual segue. O painel mostra a falha.
+
+O desenho, a chave de release e os limites estão em
+[RELEASE-ASSINATURA.md](RELEASE-ASSINATURA.md).
 
 ### Trocar a chave do bucket
 

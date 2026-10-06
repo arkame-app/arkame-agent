@@ -44,6 +44,9 @@ VOLUME ["/host"]
 VOLUME ["/etc/arkame"]
 
 # O painel mostra os comandos de Docker para este servidor (e não os do Linux).
+# Também liga o lançador: ao subir, este programa executa o que a atualização
+# automática tiver baixado para /etc/arkame/bin (o volume), se ele conferir e
+# for mais novo que a imagem. ARKAME_AUTO_UPDATE=off desliga.
 ENV ARKAME_INSTALL_METHOD=docker
 
 USER nonroot:nonroot

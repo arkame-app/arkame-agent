@@ -6,7 +6,7 @@
 
 ## Status
 
-**Status:** funcional. Enrollment (Ed25519 + bearer JWT), daemon com 6 loops (heartbeat com renovação do token, probe, planos/backup, restauração, explorador de pastas, expurgo de retenção), sync engine (walker + hash + dedup HeadObject + multipart upload), restore com escrita atômica + verify, e warming de cold storage estão implementados. Build limpo (`go vet ./...`). Resta hardening (mTLS, self-update, snapshots, observabilidade) — ver "O que falta".
+**Status:** funcional. Enrollment (Ed25519 + bearer JWT), daemon com 7 loops (heartbeat com renovação do token, atualização do próprio programa, probe, planos/backup, restauração, explorador de pastas, expurgo de retenção), sync engine (walker + hash + dedup HeadObject + multipart upload), restore com escrita atômica + verify, e warming de cold storage estão implementados. Build limpo (`go vet ./...`). Resta hardening (mTLS, snapshots, observabilidade) — ver "O que falta".
 
 ## Arquitetura
 
@@ -83,7 +83,7 @@ Núcleo funcional entregue. Itens concluídos e pendências de hardening:
 - [x] `daemon.probeLoop` — cabeado com `storage.Probe` (versioning/object-lock/lifecycle)
 - [x] `service.launchd` / `service.systemd` / `service.windows`
 - [x] Restore (Plan kind=restore — executor com escrita atômica + SHA-256 verify + warming)
-- [ ] Self-update (agente baixa nova versão quando painel sinaliza)
+- [x] Atualização automática (`internal/atualizacao`): o painel sinaliza no heartbeat; o agente confere assinatura Ed25519 + SHA-256 em dois canais, roda o `self-test` do programa novo, troca e prova em 5 min, com volta ao anterior. Ver [RELEASE-ASSINATURA.md](RELEASE-ASSINATURA.md)
 - [ ] mTLS hardening (fase 2) — substituir bearer JWT mantendo o contrato atual
 - [ ] Snapshot orquestrado (LVM / VSS / btrfs) — no roadmap, ainda não implementado
 - [x] Testes de integração contra S3 de verdade: a CI e a release rodam `go test -race ./...` com um RustFS 1.0.0 local (o MinIO deixou de ser baixável em 24/09)

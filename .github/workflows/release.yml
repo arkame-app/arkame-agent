@@ -66,6 +66,12 @@ jobs:
           ARKAME_TEST_S3_ENDPOINT: http://127.0.0.1:9000
         run: go test -race ./...
 
+      # A chave pública de release embutida no agente: preenchida e válida.
+      # Com a constante vazia isto nem compila — e a release para aqui, antes
+      # de empacotar (docs/RELEASE-ASSINATURA.md).
+      - name: Chave de release embutida
+        run: go test -tags release ./internal/atualizacao/
+
       # O agent roda em três sistemas e o código de serviço é específico de
       # cada um — publicar sem compilar os seis alvos é publicar no escuro.
       - name: Cross-compile
@@ -84,6 +90,11 @@ jobs:
   goreleaser:
     needs: testes
     runs-on: ubuntu-latest
+    # A chave Ed25519 que assina o checksums.txt para a atualização automática
+    # mora neste environment, com aprovação obrigatória: quem empurra uma tag
+    # não publica (nem assina) sem um segundo "sim". O environment e o segredo
+    # são criados à mão no GitHub — docs/RELEASE-ASSINATURA.md.
+    environment: release
     steps:
       - uses: actions/checkout@v4
         with:
@@ -112,3 +123,13 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ARKAME_RELEASE_ED25519_KEY: ${{ secrets.ARKAME_RELEASE_ED25519_KEY }}
+
+      # O que foi publicado confere com a chave que os agentes têm embutida:
+      # a assinatura existe e é da versão desta tag. Sem este passo, um release
+      # assinado com a chave errada só apareceria quando nenhum agente o
+      # aceitasse.
+      - name: Confere a assinatura Ed25519 do checksums.txt
+        run: |
+          go run -tags release ./cmd/assinar-release verificar "${GITHUB_REF_NAME}" \
+            build/release/checksums.txt build/release/checksums.txt.ed25519

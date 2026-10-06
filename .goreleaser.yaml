@@ -13,6 +13,11 @@ dist: build/release
 before:
   hooks:
     - go mod tidy
+    # A chave pública de release tem de estar embutida (internal/atualizacao/
+    # chaves.go): sem ela o agente publicado não confia em atualização nenhuma.
+    # O build com -tags release nem compila com ela vazia; aqui a falha vem
+    # antes, com o que fazer.
+    - sh -c 'go build -tags release ./internal/atualizacao/ || { echo "RELEASE PARADO - a chave publica de release (chavePublicaAtual, em internal/atualizacao/chaves.go) esta vazia ou invalida. Ver docs/RELEASE-ASSINATURA.md"; exit 1; }'
     # Nome do produto e versão dentro do .exe (VERSIONINFO): a assinatura de
     # código vai exigir, e o Windows os mostra em Propriedades → Detalhes. O
     # go-winres roda só aqui, fora do go.mod; gera os .syso que o `go build`
@@ -27,6 +32,10 @@ builds:
       - CGO_ENABLED=0
     flags:
       - -trimpath
+      # release: só as chaves de produção valem na assinatura da atualização
+      # automática (sem a chave de teste), e o build falha se a de produção
+      # estiver vazia (internal/atualizacao/chave_release.go).
+      - -tags=release
     ldflags:
       - -s -w
       - -X github.com/arkame-app/agent/pkg/version.Version={{ .Version }}
@@ -66,7 +75,8 @@ checksum:
 # Assinatura keyless via OIDC do GitHub Actions: sem chave privada para guardar
 # ou vazar. Assinamos o checksums.txt, que por sua vez cobre todos os archives.
 signs:
-  - cmd: cosign
+  - id: cosign
+    cmd: cosign
     certificate: "${artifact}.pem"
     args:
       - sign-blob
@@ -74,6 +84,27 @@ signs:
       - "--output-signature=${signature}"
       - "${artifact}"
       - "--yes"
+    artifacts: checksum
+    output: true
+
+  # A assinatura que o AGENTE confere antes de trocar o próprio programa:
+  # Ed25519, com a chave de release (segredo ARKAME_RELEASE_ED25519_KEY do
+  # environment `release`), sobre a versão e o conteúdo do checksums.txt. O
+  # cosign acima fica para a auditoria humana — conferi-lo dentro do agente
+  # exigiria rede (TUF/Rekor) e uma biblioteca pesada. A ferramenta é deste
+  # repositório, só biblioteca padrão; sem a chave no ambiente ela falha e o
+  # release não sai. Ver docs/RELEASE-ASSINATURA.md.
+  - id: ed25519
+    cmd: go
+    signature: "${artifact}.ed25519"
+    args:
+      - run
+      - -tags=release
+      - ./cmd/assinar-release
+      - assinar
+      - "{{ .Version }}"
+      - "${artifact}"
+      - "${signature}"
     artifacts: checksum
     output: true
 
@@ -141,6 +172,8 @@ release:
 
     Ou baixe o binário abaixo. Confira a integridade com `checksums.txt` — a
     assinatura keyless está em `checksums.txt.sig` e `checksums.txt.pem`.
+    O `checksums.txt.ed25519` é a assinatura que o próprio agente confere
+    antes de se atualizar sozinho.
   footer: |
     **Verificando a assinatura:**
 

@@ -45,9 +45,10 @@ to your bucket and nowhere else.
 
 Why the flags:
 
-- `--pull always`: the agent does not update itself. Re-running this command is
-  how you update it on Docker; without the flag Docker reuses the `:latest`
-  image already on the host.
+- `--pull always`: re-running this command is how you update the **image**;
+  without the flag Docker reuses the `:latest` image already on the host. (The
+  agent program also updates itself between image pulls — see "Automatic
+  updates" below.)
 - `--stop-timeout 150` / `stop -t 150`: a stopping agent may need up to 150 s
   to finish the upload in progress and send the backup's index to the panel.
   Docker's default 10 s (or `docker rm -f`) kills it first and that restore
@@ -282,11 +283,26 @@ Things you should know before relying on it:
   service (14-day free trial, no card required).
 - **No client-side encryption.** Files are stored in your bucket as they are on
   disk. Use your provider's server-side encryption and keep the bucket private.
-- **No self-update.** Re-run the install command to update (Docker:
-  `--pull always` takes care of fetching the new image).
+- **Automatic updates.** When the panel tells it to (inside your
+  organization's update window, 02:00–05:00 by default, and never during a
+  backup, a retention purge or a restore), the agent downloads the new
+  release, verifies the Ed25519 signature of `checksums.txt` against the keys
+  built into the running program, checks the SHA-256 against both the signed
+  checksums and the value sent by the panel, runs the new program's
+  `self-test`, swaps the file and lets the service manager restart it. The new
+  program has 5 minutes to get a heartbeat accepted; otherwise the previous
+  one is put back. On Docker the new program is stored in the config volume
+  (`/etc/arkame/bin/`) and the image's program launches it. Turn it off with
+  `ARKAME_AUTO_UPDATE=off` (environment or `agent.env`), switch your
+  organization to manual updates in the panel, or hold a single server on its
+  version. `arkame-agent update` runs the same verified update on demand.
+  Agents installed before this feature need one last manual update: re-run
+  the install command (on Linux it also rewrites the systemd unit so the
+  service may replace its own program).
 - **Windows binaries are not code-signed yet.** Windows 11 with Smart App
-  Control turned on blocks the agent; Windows 10 and Windows Server work.
-  Integrity is covered by the cosign-signed checksums.
+  Control turned on blocks the agent — and blocks the automatic update, which
+  then fails safely and keeps the current program; Windows 10 and Windows
+  Server work. Integrity is covered by the signed checksums.
 - **The container image is not signed** with cosign; only `checksums.txt` is.
 - **No filesystem snapshots** (LVM, VSS, btrfs). Files are read as they are;
   for databases, dump to a folder first (a plan's pre-backup command natively,
