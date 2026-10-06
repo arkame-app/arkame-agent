@@ -64,6 +64,13 @@ func installPlatform(_ context.Context, cfg *config.Config, opts Options) (*Inst
 	}, 86400); err != nil {
 		slog.Warn("não consegui configurar reinício automático do serviço", "err", err)
 	}
+	// As ações acima só valiam para o processo que morre sem avisar o SCM. A
+	// atualização automática sai de propósito, com código de erro, para o SCM
+	// subir o programa novo: com esta opção ele religa também quem para com
+	// erro.
+	if err := s.SetRecoveryActionsOnNonCrashFailures(true); err != nil {
+		slog.Warn("não consegui ligar o reinício do serviço que para com erro", "err", err)
+	}
 
 	if opts.Start {
 		if err := s.Start(); err != nil {
@@ -165,6 +172,38 @@ func configDoServico(nome string, _ Scope) (string, bool) {
 	return cfg, cfg != ""
 }
 
+// GarantirReligamento confere, antes de o serviço sair para se atualizar, que
+// o SCM vai religá-lo: liga o reinício de quem para com erro e, se o serviço
+// não tem ações de recuperação (registrado à mão, ou por um instalador
+// antigo), põe as do install. O serviço roda como SYSTEM e pode mexer no
+// próprio registro. Sem isso, o serviço instalado antes da atualização
+// automática sairia e ficaria parado.
+func GarantirReligamento(nome string) error {
+	if nome == "" {
+		return fmt.Errorf("sem o nome do serviço")
+	}
+	m, err := mgr.Connect()
+	if err != nil {
+		return err
+	}
+	defer m.Disconnect()
+	s, err := m.OpenService(nome)
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+	if acoes, err := s.RecoveryActions(); err != nil || len(acoes) == 0 {
+		if err := s.SetRecoveryActions([]mgr.RecoveryAction{
+			{Type: mgr.ServiceRestart, Delay: 10 * time.Second},
+			{Type: mgr.ServiceRestart, Delay: 10 * time.Second},
+			{Type: mgr.ServiceRestart, Delay: 60 * time.Second},
+		}, 86400); err != nil {
+			return err
+		}
+	}
+	return s.SetRecoveryActionsOnNonCrashFailures(true)
+}
+
 // pararEEsperar para o serviço e espera ele parar de fato: o processo pode
 // estar no meio de um backup, e enquanto ele vive o programa fica travado no
 // disco. Já parado, o SCM devolve erro no Control, que aqui não é problema.
@@ -218,4 +257,11 @@ func uninstallPlatform(_ context.Context, opts Options) error {
 	}
 	slog.Info("serviço removido", "name", opts.Name)
 	return nil
+}
+
+// regravarPlatform: só a unit do systemd precisa mudar para a atualização
+// automática (a pasta do programa liberada para escrita). Aqui o registro do
+// serviço fica como está.
+func regravarPlatform(context.Context, *config.Config, Options) (string, error) {
+	return "", nil
 }

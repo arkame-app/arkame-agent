@@ -361,6 +361,30 @@ LISTA
   return 0
 }
 
+# regravar_units <lista>: no Linux, regrava a unit de cada agente instalado
+# ("<escopo> <nome> <rodando|parado>", a lista de agentes_instalados) com o
+# modelo do programa novo, sem reiniciar nem habilitar nada.
+#
+# É a razão de a última atualização manual passar por aqui: a unit de sistema
+# instalada antes da atualização automática não deixa o serviço gravar na
+# pasta do programa (ProtectSystem=full), e o agente novo não conseguiria se
+# atualizar sozinho. Trocar só o programa não basta; a unit tem de ser regravada.
+regravar_units() {
+  [ "$OS" = "linux" ] || return 0
+  while read -r _ru_escopo _ru_nome _ru_estado; do
+    [ -n "$_ru_nome" ] || continue
+    if "$BIN_DIR/arkame-agent" service refresh --name="$_ru_nome" --scope="$_ru_escopo" </dev/null >/dev/null 2>&1; then
+      ok "Serviço $_ru_nome pronto para se atualizar sozinho daqui em diante"
+    else
+      warn "não consegui regravar a unit do serviço $_ru_nome: ele segue sem se atualizar sozinho."
+      warn "  Para tentar de novo: $BIN_DIR/arkame-agent service refresh --name=$_ru_nome --scope=$_ru_escopo (com sudo, no escopo system)"
+    fi
+  done <<LISTA
+$1
+LISTA
+  return 0
+}
+
 # reiniciar_agente <escopo> <nome>
 reiniciar_agente() {
   case "$OS" in
@@ -514,6 +538,8 @@ main() {
     # versão nova; os parados recebem aviso; e não há o que registrar.
     if [ -n "$INSTALADOS" ]; then
       printf '\n'
+      # Antes de reiniciar: a unit nova já vale na partida do programa novo.
+      regravar_units "$INSTALADOS"
       [ -n "$ANTES" ] && reiniciar_agentes "$ANTES"
       [ -n "$PARADOS" ] && avisar_parados "$PARADOS"
       printf '\n'
@@ -559,8 +585,13 @@ main() {
     proprio_nome=$SERVICE_NAME
     if [ "$OS" = "darwin" ]; then proprio_nome=$(label_launchd "$SERVICE_NAME"); fi
   fi
-  if [ -n "$ANTES" ]; then
+  if [ -n "$INSTALADOS" ]; then
     printf '\n'
+    # As units dos agentes que já estavam aqui (a do --service-name o install
+    # regrava de novo ao instalar o serviço).
+    regravar_units "$INSTALADOS"
+  fi
+  if [ -n "$ANTES" ]; then
     reiniciar_agentes "$ANTES" "$proprio_escopo" "$proprio_nome"
   fi
 

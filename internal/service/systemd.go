@@ -31,6 +31,10 @@ import (
 // restore.CodigoDestinoSomenteLeitura e o README), e não arquivo perdido;
 // quem precisar restaura em outra pasta, ou usa o agente em Docker.
 //
+// ReadWritePaths= leva também a pasta do programa (pastasGravaveis): a
+// atualização automática troca o programa ali, e /usr/local/bin está sob o
+// ProtectSystem=full.
+//
 // ReadWriteDirectories= repete o ReadWritePaths=: o systemd anterior ao 231
 // (CentOS/RHEL 7 tem o 219, Ubuntu 16.04 o 229) não conhece ReadWritePaths= e
 // ignora a linha, mas aplica o ProtectSystem=full — /etc/arkame ficava só
@@ -124,15 +128,24 @@ func installPlatform(ctx context.Context, cfg *config.Config, opts Options) (*In
 // executar, em reiniciar_unix.go).
 var procurar = exec.LookPath
 
+// unitDoServico é o texto da unit que o install e o `service refresh` gravam.
+// Na de sistema, as pastas liberadas para escrita são as do token, da chave e
+// do id, e a do próprio programa (a atualização automática troca o programa
+// ali; ver pastasGravaveis).
+func unitDoServico(cfg *config.Config, opts Options) string {
+	var gravaveis []string
+	if opts.Scope == ScopeSystem {
+		gravaveis = pastasGravaveis(cfg, opts.BinaryPath)
+	}
+	return textoDaUnit(opts.Scope, opts.Name, opts.BinaryPath, cfg.ConfigPath, gravaveis)
+}
+
 func installSystemd(ctx context.Context, cfg *config.Config, opts Options) (*Installed, error) {
 	if _, err := procurar("systemctl"); err != nil {
 		return nil, fmt.Errorf(
 			"systemctl não encontrado: esta máquina não usa systemd. Rode o agent com um supervisor próprio (ex.: `%s run --config %s`) ou use a imagem Docker",
 			opts.BinaryPath, cfg.ConfigPath)
 	}
-
-	// Diretórios que o agent precisa escrever: onde ficam token, chave e id.
-	writable := writablePaths(cfg)
 
 	var (
 		unitPath string
@@ -147,7 +160,7 @@ func installSystemd(ctx context.Context, cfg *config.Config, opts Options) (*Ins
 				"instalar serviço de sistema exige root: repita com sudo, ou use --service-scope=user para instalar só para o seu usuário (sem sudo)")
 		}
 		unitPath = filepath.Join("/etc/systemd/system", opts.Name+".service")
-		unit = textoDaUnit(ScopeSystem, opts.Name, opts.BinaryPath, cfg.ConfigPath, writable)
+		unit = unitDoServico(cfg, opts)
 		sysctl = []string{"systemctl"}
 
 	case ScopeUser:
@@ -163,7 +176,7 @@ func installSystemd(ctx context.Context, cfg *config.Config, opts Options) (*Ins
 			return nil, fmt.Errorf("criando %s: %w", dir, err)
 		}
 		unitPath = filepath.Join(dir, opts.Name+".service")
-		unit = textoDaUnit(ScopeUser, opts.Name, opts.BinaryPath, cfg.ConfigPath, nil)
+		unit = unitDoServico(cfg, opts)
 		sysctl = []string{"systemctl", "--user"}
 	}
 
@@ -227,6 +240,57 @@ func installSystemd(ctx context.Context, cfg *config.Config, opts Options) (*Ins
 	}
 
 	return inst, nil
+}
+
+// regravarPlatform reescreve a unit de um serviço já instalado com o modelo
+// desta versão e recarrega o systemd — sem habilitar nem reiniciar: o serviço
+// parado de propósito continua parado, e quem reinicia é quem chamou.
+//
+// Existe para a última atualização manual de quem instalou antes da
+// atualização automática: a unit de sistema antiga não libera a pasta do
+// programa (ver pastasGravaveis), e trocar só o programa deixaria o agente sem
+// conseguir se atualizar sozinho. O install.sh a chama (`service refresh`)
+// depois de trocar o programa.
+func regravarPlatform(ctx context.Context, cfg *config.Config, opts Options) (string, error) {
+	var (
+		unitPath string
+		args     []string
+	)
+	switch opts.Scope {
+	case ScopeSystem:
+		if os.Geteuid() != 0 {
+			return "", fmt.Errorf("regravar a unit de um serviço do sistema exige root: repita com sudo")
+		}
+		unitPath = filepath.Join(dirUnitsDoSistema, opts.Name+".service")
+	case ScopeUser:
+		dir, err := userUnitDir()
+		if err != nil {
+			return "", err
+		}
+		unitPath = filepath.Join(dir, opts.Name+".service")
+		args = []string{"--user"}
+	}
+	atual, err := os.ReadFile(unitPath)
+	if err != nil {
+		return "", fmt.Errorf("o serviço %s não está instalado (%s): %w", opts.Name, unitPath, err)
+	}
+	// O programa e a configuração da unit continuam os que ela já tinha: aqui
+	// só muda o modelo.
+	if p := programaDaUnit(string(atual)); p != "" && p != opts.BinaryPath {
+		if err := ConferirPrograma(opts.Scope, p); err != nil {
+			return "", err
+		}
+		opts.BinaryPath = p
+	}
+	unit := unitDoServico(cfg, opts)
+	if err := segredo.Gravar(unitPath, []byte(unit), 0o644); err != nil {
+		return "", fmt.Errorf("escrevendo %s: %w", unitPath, err)
+	}
+	args = append(args, "daemon-reload")
+	if out, err := executar(ctx, "systemctl", args...); err != nil {
+		return "", fmt.Errorf("systemctl %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
+	return unitPath, nil
 }
 
 // servicosDoAgente: as units do sistema e do usuário que são do agente — as
@@ -392,6 +456,44 @@ func writablePaths(cfg *config.Config) []string {
 	}
 	if len(out) == 0 {
 		out = append(out, "/etc/arkame")
+	}
+	return out
+}
+
+// pastasGravaveis são as do writablePaths mais a pasta do programa.
+//
+// A atualização automática baixa o programa novo para a pasta do atual e o põe
+// no lugar por rename — e o ProtectSystem=full deixa /usr (e com ele o
+// /usr/local/bin) só para leitura. Sem a pasta aqui, o serviço do sistema não
+// consegue se atualizar: é por isso que quem instalou antes desta unit precisa
+// rodar o instalador mais uma vez (ele regrava a unit; ver `service refresh`).
+// O serviço já roda como root; liberar a pasta devolve a ele, só ali, a
+// escrita que o root teria sem o ProtectSystem.
+//
+// Vale a pasta do caminho registrado e a do caminho real (links resolvidos):
+// o rename acontece na real.
+func pastasGravaveis(cfg *config.Config, programa string) []string {
+	out := writablePaths(cfg)
+	visto := map[string]bool{}
+	for _, p := range out {
+		visto[p] = true
+	}
+	candidatos := []string{programa}
+	if real, err := filepath.EvalSymlinks(programa); err == nil {
+		candidatos = append(candidatos, real)
+	}
+	for _, c := range candidatos {
+		if c == "" || !filepath.IsAbs(c) {
+			continue
+		}
+		d := filepath.Dir(c)
+		if d == "/" {
+			continue
+		}
+		if a := argDaUnit(d); !visto[a] {
+			visto[a] = true
+			out = append(out, a)
+		}
 	}
 	return out
 }

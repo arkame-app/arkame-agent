@@ -424,6 +424,39 @@ func Install(ctx context.Context, cfg *config.Config, opts Options) (*Installed,
 	return inst, err
 }
 
+// Regravar reescreve o registro de um serviço já instalado com o modelo desta
+// versão do agente, sem habilitar nem reiniciar. Devolve o arquivo regravado,
+// ou "" na plataforma em que não há o que regravar. Ver regravarPlatform
+// (systemd.go).
+func Regravar(ctx context.Context, cfg *config.Config, opts Options) (string, error) {
+	if opts.Name == "" {
+		opts.Name = DefaultName
+	}
+	if !nameRe.MatchString(opts.Name) {
+		return "", fmt.Errorf("nome de serviço inválido %q", opts.Name)
+	}
+	if opts.Scope == "" {
+		opts.Scope = defaultScope()
+	}
+	if opts.Scope != ScopeSystem && opts.Scope != ScopeUser {
+		return "", fmt.Errorf("escopo inválido %q: use %q ou %q", opts.Scope, ScopeSystem, ScopeUser)
+	}
+	if opts.BinaryPath == "" {
+		exe, err := os.Executable()
+		if err != nil {
+			return "", fmt.Errorf("descobrindo o caminho do próprio binário: %w", err)
+		}
+		opts.BinaryPath = exe
+	}
+	if cfg.ConfigPath == "" {
+		return "", fmt.Errorf("não sei qual env-file o serviço carrega")
+	}
+	if err := ConferirPrograma(opts.Scope, opts.BinaryPath); err != nil {
+		return "", err
+	}
+	return regravarPlatform(ctx, cfg, opts)
+}
+
 // ConferirPrograma recusa registrar no escopo do sistema (root; no Windows,
 // LocalSystem) um programa que outro usuário pode trocar — ver
 // conferirPrograma (programa_unix.go, programa_windows.go). No escopo user não

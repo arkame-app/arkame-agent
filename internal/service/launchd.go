@@ -243,3 +243,10 @@ func uninstallPlatform(ctx context.Context, opts Options) error {
 	slog.Info("serviço removido", "label", lbl, "scope", string(opts.Scope))
 	return nil
 }
+
+// regravarPlatform: só a unit do systemd precisa mudar para a atualização
+// automática (a pasta do programa liberada para escrita). Aqui o registro do
+// serviço fica como está.
+func regravarPlatform(context.Context, *config.Config, Options) (string, error) {
+	return "", nil
+}

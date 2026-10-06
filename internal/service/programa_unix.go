@@ -112,3 +112,44 @@ func nomeDoGrupo(gid uint32) string {
 	}
 	return id
 }
+
+// PrepararProgramaNovo deixa o programa baixado pela atualização automática
+// com o dono e as permissões do atual, antes de ele ser executado e posto no
+// lugar. Sem programa atual (a primeira troca no volume do Docker), fica como
+// o download o deixou (0755, do usuário do processo).
+//
+// Quando o atual é do root (o serviço do sistema), o novo tem de passar na
+// mesma conferência do install: do root, sem escrita do grupo nem dos outros.
+// O arquivo acabou de ser criado por este processo, então só não passaria se
+// algo o trocou no caminho — e aí a troca para.
+func PrepararProgramaNovo(atual, novo string) error {
+	d, err := lerDono(atual)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("lendo o dono de %s: %w", atual, err)
+	}
+	modo := d.modo.Perm() &^ 0o022
+	if modo&0o100 == 0 {
+		modo |= 0o755
+	}
+	if err := os.Chmod(novo, modo); err != nil {
+		return fmt.Errorf("ajustando as permissões de %s: %w", novo, err)
+	}
+	if os.Geteuid() == 0 {
+		if err := os.Lchown(novo, int(d.uid), int(d.gid)); err != nil {
+			return fmt.Errorf("ajustando o dono de %s: %w", novo, err)
+		}
+	}
+	if d.uid == 0 {
+		if problema := problemaDoCaminho(novo); problema != "" {
+			return fmt.Errorf("o programa novo não é só do root: %s", problema)
+		}
+	}
+	return nil
+}
+
+// GarantirReligamento: fora do Windows o gerenciador já religa o serviço que
+// sai (Restart=always no systemd, KeepAlive no launchd).
+func GarantirReligamento(string) error { return nil }

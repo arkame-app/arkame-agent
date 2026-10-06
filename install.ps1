@@ -91,6 +91,11 @@ function Restart-ServicosDoExe {
     param([string[]]$Nomes)
     $falharam = @()
     foreach ($nome in $Nomes) {
+        # A atualizacao automatica do agente sai com codigo de erro para o
+        # Windows religar o servico com o programa novo: liga o reinicio
+        # tambem para quem para com erro (o servico registrado por um
+        # instalador antigo so era religado quando o processo morria).
+        try { & sc.exe failureflag $nome 1 | Out-Null } catch { }
         try {
             Restart-Service -Name $nome -Force -ErrorAction Stop
             Write-Ok "Servico $nome reiniciado com a versao nova"

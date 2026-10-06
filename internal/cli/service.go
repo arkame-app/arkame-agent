@@ -19,7 +19,7 @@ func newServiceCmd() *cobra.Command {
 		Use:   "service",
 		Short: "Instala, remove ou inspeciona o serviço do sistema operacional",
 	}
-	cmd.AddCommand(newServiceInstallCmd(), newServiceUninstallCmd(), newServiceStatusCmd())
+	cmd.AddCommand(newServiceInstallCmd(), newServiceUninstallCmd(), newServiceRefreshCmd(), newServiceStatusCmd())
 	return cmd
 }
 
@@ -79,6 +79,58 @@ func newServiceInstallCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&start, "start", true, "iniciar o serviço logo após instalar")
 	return cmd
 }
+
+// newServiceRefreshCmd regrava o registro de um serviço já instalado com o
+// modelo desta versão, sem registrar de novo no painel. O install.sh o chama
+// depois de trocar o programa: a unit de sistema instalada antes da
+// atualização automática não deixa o serviço gravar na pasta do programa.
+func newServiceRefreshCmd() *cobra.Command {
+	var (
+		name  string
+		scope string
+	)
+	cmd := &cobra.Command{
+		Use:   "refresh",
+		Short: "Regrava o registro de um serviço já instalado com o modelo desta versão (sem reiniciar)",
+		Long: `Regrava a unit do systemd de um agente já instalado, com o programa e o
+arquivo de configuração que ela já tem, e recarrega o systemd. Não habilita,
+não inicia e não reinicia o serviço, e não fala com o painel.
+
+É o passo da última atualização manual de quem instalou antes da atualização
+automática: a unit de sistema antiga não libera a pasta do programa para
+escrita, e o agente não conseguiria trocar o próprio programa. O instalador
+(install.sh) já o roda. No macOS e no Windows não há o que regravar.`,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			configFile, ok := configDoServico(name, service.Scope(scope))
+			if !ok || configFile == "" {
+				return fmt.Errorf("não achei o serviço %s (ou o registro dele não cita o arquivo de configuração)", name)
+			}
+			cfg, err := config.Load(configFile, config.Overrides{})
+			if err != nil {
+				return fmt.Errorf("carregando config: %w", err)
+			}
+			arquivo, err := regravarServico(cmd.Context(), cfg, service.Options{
+				Name:  name,
+				Scope: service.Scope(scope),
+			})
+			if err != nil {
+				return err
+			}
+			if arquivo == "" {
+				fmt.Fprintln(os.Stderr, "  Nada a regravar neste sistema.")
+				return nil
+			}
+			fmt.Fprintln(os.Stderr, "  ✓ Registro do serviço regravado:", arquivo)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&name, "name", service.DefaultName, "nome do serviço")
+	cmd.Flags().StringVar(&scope, "scope", "", "system ou user. Padrão: system se root, senão user")
+	return cmd
+}
+
+// regravarServico é o service.Regravar; os testes o trocam.
+var regravarServico = service.Regravar
 
 func newServiceUninstallCmd() *cobra.Command {
 	var (

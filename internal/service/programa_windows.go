@@ -3,8 +3,10 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -113,4 +115,42 @@ func conferirPrograma(programa string) error {
 		}
 	}
 	return nil
+}
+
+// PrepararProgramaNovo deixa o programa baixado pela atualização automática
+// com a lista de permissões do atual, e só o aceita se quem não é
+// administrador não puder trocá-lo.
+//
+// O arquivo novo nasce na pasta do programa (C:\Program Files\Arkame) e herda
+// dela; as entradas próprias do atual — se houver, ou se a herança dele estiver
+// cortada — são copiadas, com a mesma proteção. Depois vale a conferência do
+// install (conferirPrograma): o serviço roda como SYSTEM, e um programa que um
+// usuário comum pudesse regravar entre o download e a troca viraria SYSTEM no
+// próximo início. Sem programa atual, nada a copiar.
+func PrepararProgramaNovo(atual, novo string) error {
+	sd, err := windows.GetNamedSecurityInfo(atual, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		if errors.Is(err, windows.ERROR_FILE_NOT_FOUND) || errors.Is(err, windows.ERROR_PATH_NOT_FOUND) {
+			return nil
+		}
+		return fmt.Errorf("lendo as permissões de %s: %w", atual, err)
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil {
+		return fmt.Errorf("lendo as permissões de %s: %w", atual, err)
+	}
+	if dacl != nil {
+		info := windows.SECURITY_INFORMATION(windows.DACL_SECURITY_INFORMATION | windows.UNPROTECTED_DACL_SECURITY_INFORMATION)
+		if ctl, _, cerr := sd.Control(); cerr == nil && ctl&windows.SE_DACL_PROTECTED != 0 {
+			info = windows.DACL_SECURITY_INFORMATION | windows.PROTECTED_DACL_SECURITY_INFORMATION
+		}
+		// Sem a proteção, o Windows refaz as entradas herdadas a partir da
+		// pasta e mantém as próprias.
+		err = windows.SetNamedSecurityInfo(novo, windows.SE_FILE_OBJECT, info, nil, nil, dacl, nil)
+		runtime.KeepAlive(sd)
+		if err != nil {
+			return fmt.Errorf("copiando as permissões para %s: %w", novo, err)
+		}
+	}
+	return conferirPrograma(novo)
 }

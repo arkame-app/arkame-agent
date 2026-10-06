@@ -20,12 +20,14 @@ import (
 
 // pacoteFalso monta o tar.gz do release com um arkame-agent que só responde
 // "version" (e sai com $ARKAME_FALSO_STATUS, para simular o install que falha).
+// Com $ARKAME_FALSO_LOG, cada chamada deixa os argumentos nesse arquivo.
 func pacoteFalso(t *testing.T) []byte {
 	t.Helper()
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
-	bin := []byte("#!/bin/sh\necho arkame-agent falso\nexit ${ARKAME_FALSO_STATUS:-0}\n")
+	// Com ARKAME_FALSO_LOG, anota os argumentos de cada chamada.
+	bin := []byte("#!/bin/sh\n[ -n \"${ARKAME_FALSO_LOG:-}\" ] && echo \"$*\" >> \"$ARKAME_FALSO_LOG\"\necho arkame-agent falso\nexit ${ARKAME_FALSO_STATUS:-0}\n")
 	if err := tw.WriteHeader(&tar.Header{Name: "arkame-agent", Mode: 0o755, Size: int64(len(bin))}); err != nil {
 		t.Fatal(err)
 	}
@@ -705,5 +707,79 @@ so_parados "$(agentes_instalados "$bin")"`, "sh", script, sistema, usuario, bin)
 	slices.Sort(kicks)
 	if got := fmt.Sprint(kicks); got != "[gui/"+uid+"/app.arkame.agent-usr system/app.arkame.agent system/app.arkame.backup-oci]" {
 		t.Fatalf("kickstart = %v (o do --service-name fica com o install)\n%s", got, out)
+	}
+}
+
+// A atualização pelo install.sh (sem --token, servidor já instalado) regrava a
+// unit de cada agente do programa antes de reiniciá-lo: a unit de sistema de
+// antes da atualização automática não libera a pasta do programa, e trocar só
+// o programa deixaria o agente sem conseguir se atualizar sozinho. O parado
+// também é regravado (e continua parado); o que não chama o programa, não.
+func TestInstallShRegravaAsUnitsNaAtualizacao(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("systemd")
+	}
+	certo := func(pacote, sha string) string { return sha + "  " + pacote + "\n" }
+	binDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(binDir, "arkame-agent"), []byte("#!/bin/sh\necho arkame-agent antigo\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(binDir, "arkame-agent")
+	path, restarts := systemctlFalso(t, binDir, map[string]string{
+		"arkame-agent":        bin,
+		"arkame-agent-oci":    bin,
+		"p:arkame-agent-fora": bin,
+		"arkame-agent-outro":  "/opt/outro/arkame-agent",
+		"nginx":               "/usr/sbin/nginx",
+	})
+	log := filepath.Join(t.TempDir(), "chamadas.log")
+
+	out, terminou, _ := rodarInstallShEm(t, binDir, []string{path, "ARKAME_FALSO_LOG=" + log}, certo)
+	if !terminou {
+		t.Fatalf("não terminou:\n%s", out)
+	}
+	chamadas, _ := os.ReadFile(log)
+	var regravadas []string
+	for _, l := range strings.Split(string(chamadas), "\n") {
+		if strings.HasPrefix(l, "service refresh ") {
+			regravadas = append(regravadas, strings.TrimPrefix(l, "service refresh "))
+		}
+	}
+	slices.Sort(regravadas)
+	quer := []string{
+		"--name=arkame-agent --scope=system",
+		"--name=arkame-agent-fora --scope=system",
+		"--name=arkame-agent-oci --scope=system",
+	}
+	if fmt.Sprint(regravadas) != fmt.Sprint(quer) {
+		t.Fatalf("units regravadas = %v, queria %v\n%s", regravadas, quer, out)
+	}
+	// Regravar vem antes de reiniciar: a unit nova já vale na partida do novo.
+	primeiroRefresh := strings.Index(out, "pronto para se atualizar sozinho")
+	primeiroRestart := strings.Index(out, "reiniciado com a versão nova")
+	if primeiroRefresh < 0 || primeiroRestart < 0 || primeiroRefresh > primeiroRestart {
+		t.Fatalf("a unit não foi regravada antes do reinício:\n%s", out)
+	}
+	// O parado foi regravado, mas não reiniciado.
+	for _, r := range restarts() {
+		if r == "arkame-agent-fora" {
+			t.Fatalf("o serviço parado foi reiniciado: %v", restarts())
+		}
+	}
+
+	// Com o refresh falhando (programa antigo, que não conhece o comando), a
+	// atualização segue e avisa o que fazer.
+	binDir2 := t.TempDir()
+	_ = os.WriteFile(filepath.Join(binDir2, "arkame-agent"), []byte("#!/bin/sh\necho antigo\n"), 0o755)
+	path2, restarts2 := systemctlFalso(t, binDir2, map[string]string{"arkame-agent": filepath.Join(binDir2, "arkame-agent")})
+	out, terminou, _ = rodarInstallShEm(t, binDir2, []string{path2, "ARKAME_FALSO_STATUS=1"}, certo)
+	if !terminou {
+		t.Fatalf("com o refresh falhando, a atualização não terminou:\n%s", out)
+	}
+	if !strings.Contains(out, "não consegui regravar a unit do serviço arkame-agent") || !strings.Contains(out, "service refresh --name=arkame-agent --scope=system") {
+		t.Fatalf("sem o aviso do refresh que falhou:\n%s", out)
+	}
+	if len(restarts2()) == 0 {
+		t.Fatalf("com o refresh falhando, o serviço não foi reiniciado:\n%s", out)
 	}
 }
