@@ -1,0 +1,361 @@
+package daemon
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+	"os"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/arkame-app/agent/internal/api"
+	"github.com/arkame-app/agent/internal/atualizacao"
+	"github.com/arkame-app/agent/internal/config"
+	"github.com/arkame-app/agent/internal/service"
+	"github.com/arkame-app/agent/internal/storage"
+	"github.com/arkame-app/agent/pkg/version"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+)
+
+// ocupacao diz à atualização do programa se o daemon está no meio de algo que
+// ela não pode cortar, e segura esse algo enquanto a troca acontece.
+//
+// A troca termina com o processo saindo. Com backup em curso, a sessão
+// fecharia como interrompida; com expurgo, a rodada ficaria pela metade; com
+// restauração, o item voltaria a "running" para o próximo arranque. Nada disso
+// perde dado, mas a atualização pode esperar e o backup da noite, não: ela só
+// acontece com o bucket livre e sem restauração em curso — e, enquanto
+// acontece, nenhum dos três começa.
+type ocupacao struct {
+	// trava é a mesma do backup e do expurgo (exclusaoDoBucket).
+	trava *exclusaoDoBucket
+
+	mu          sync.Mutex
+	restaurando int
+	atualizando bool
+}
+
+// comecarRestauracao marca uma rodada de restauração com itens a executar.
+// false: há uma troca de programa em curso, e a rodada fica para o programa
+// que subir.
+func (o *ocupacao) comecarRestauracao() bool {
+	if o == nil {
+		return true
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.atualizando {
+		return false
+	}
+	o.restaurando++
+	return true
+}
+
+func (o *ocupacao) terminarRestauracao() {
+	if o == nil {
+		return
+	}
+	o.mu.Lock()
+	o.restaurando--
+	o.mu.Unlock()
+}
+
+// reservar fecha o daemon para a troca do programa: pega a trava do bucket
+// (sem esperar) e barra restauração nova. Com algo em curso, devolve o motivo
+// e não reserva nada.
+func (o *ocupacao) reservar() (liberar func(), motivo string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.restaurando > 0 {
+		return nil, atualizacao.AdiadaRestauracao
+	}
+	if !o.trava.mu.TryLock() {
+		if q, _ := o.trava.quem.Load().(string); q == atividadeExpurgo {
+			return nil, atualizacao.AdiadaExpurgo
+		}
+		return nil, atualizacao.AdiadaBackup
+	}
+	o.atualizando = true
+	return func() {
+		o.mu.Lock()
+		o.atualizando = false
+		o.mu.Unlock()
+		o.trava.mu.Unlock()
+	}, ""
+}
+
+// esperaDepoisDeFalha é por quanto tempo o agente não tenta de novo a versão
+// cuja troca falhou (download, conferência, auto-teste), salvo `force`. O
+// painel também para de oferecer a versão a quem relatou a falha; isto cobre o
+// intervalo até o relato chegar e o painel antigo.
+const esperaDepoisDeFalha = 6 * time.Hour
+
+// atualizador recebe do heartbeat o pedido de atualização do painel e faz a
+// troca num laço próprio — o download não pode segurar o heartbeat.
+type atualizador struct {
+	cfg *config.Config
+	oc  *ocupacao
+	// reiniciar encerra o daemon para o gerenciador de serviço subir o
+	// programa que está no lugar.
+	reiniciar func()
+	// programa é o arquivo que a troca substitui; impedimento, por que este
+	// processo não se atualiza sozinho ("" quando pode).
+	programa    string
+	impedimento string
+	svc         service.Detected
+	s3c         *s3.Client
+	prova       *atualizacao.Prova
+
+	pedidos chan api.UpdateOffer
+
+	mu sync.Mutex
+	// relato é o estado da tentativa em curso ou da última, na memória.
+	relato api.UpdateReport
+	// naoAntesDe: versão cuja troca falhou → quando tentar de novo.
+	naoAntesDe map[string]time.Time
+	// saindo: a troca foi feita e o processo está de saída.
+	saindo atomic.Bool
+
+	// aplicar é o atualizacao.Aplicar; os testes o trocam.
+	aplicar func(context.Context, atualizacao.Pedido, atualizacao.Opcoes) (*atualizacao.Resultado, error)
+}
+
+// programaDaTroca é o arquivo que a atualização substitui: o que o serviço
+// executa; no Docker, o do volume da configuração (o da imagem é só leitura).
+func programaDaTroca(cfg *config.Config) string {
+	if atualizacao.EmDocker() {
+		return atualizacao.ProgramaDoVolume(cfg.ConfigPath)
+	}
+	return service.ProgramaAtual()
+}
+
+func novoAtualizador(cfg *config.Config, svc service.Detected, s3c *s3.Client, oc *ocupacao, reiniciar func()) *atualizador {
+	programa := programaDaTroca(cfg)
+	inst := atualizacao.Instalacao{
+		Programa:    programa,
+		VersaoAtual: version.Version,
+		Desligada:   atualizacao.Desligada(cfg.AutoUpdate),
+		SobServico:  svc.Name != "" || atualizacao.EmDocker(),
+		TemChaves:   len(atualizacao.ChavesConfiaveis()) > 0,
+	}
+	a := &atualizador{
+		cfg:         cfg,
+		oc:          oc,
+		reiniciar:   reiniciar,
+		programa:    programa,
+		impedimento: inst.Impedimento(),
+		svc:         svc,
+		s3c:         s3c,
+		prova:       atualizacao.AbrirProva(programa, version.Version),
+		pedidos:     make(chan api.UpdateOffer, 1),
+		naoAntesDe:  map[string]time.Time{},
+		aplicar:     atualizacao.Aplicar,
+	}
+	if a.impedimento == "" {
+		slog.Info("atualização automática do programa ligada", "programa", programa)
+	} else {
+		slog.Info("este agente não se atualiza sozinho", "motivo", a.impedimento, "programa", programa)
+	}
+	return a
+}
+
+// capacidades é o que o agente declara ao painel. Sempre lista, nunca nil:
+// no JSON, ausente é agente antigo.
+func (a *atualizador) capacidades() []string {
+	if a == nil || a.impedimento != "" {
+		return []string{}
+	}
+	return []string{atualizacao.Capacidade}
+}
+
+// relatoDoHeartbeat monta o `update` do heartbeat: a tentativa em curso (ou a
+// última, se falhou), senão o que o registro da troca diz (em prova,
+// revertida), mais o impedimento. nil quando não há nada a dizer.
+func (a *atualizador) relatoDoHeartbeat() *api.UpdateReport {
+	if a == nil {
+		return nil
+	}
+	a.mu.Lock()
+	r := a.relato
+	a.mu.Unlock()
+	if r.State == "" {
+		r.State, r.Version, r.Error = atualizacao.Relato(a.programa, version.Version)
+	}
+	r.Blocked = a.impedimento
+	if r == (api.UpdateReport{}) {
+		return nil
+	}
+	return &r
+}
+
+func (a *atualizador) relatar(estado, versao, erro string) {
+	a.mu.Lock()
+	a.relato = api.UpdateReport{State: estado, Version: versao, Error: erro}
+	a.mu.Unlock()
+}
+
+// receber é chamado com o `update` da resposta do heartbeat. Não bloqueia:
+// com uma troca em curso, o pedido repetido é descartado (o painel repete a
+// cada heartbeat enquanto o agente dever atualizar).
+func (a *atualizador) receber(p *api.UpdateOffer) {
+	if a == nil || p == nil {
+		return
+	}
+	if a.impedimento != "" {
+		slog.Warn("o painel mandou atualizar, mas este agente não se atualiza sozinho",
+			"versao", p.Version, "motivo", a.impedimento)
+		return
+	}
+	select {
+	case a.pedidos <- *p:
+	default:
+	}
+}
+
+// laco aplica os pedidos, um de cada vez.
+func (a *atualizador) laco(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case p := <-a.pedidos:
+			a.tentar(ctx, p)
+		}
+	}
+}
+
+// tentar faz uma tentativa de troca. Com o daemon ocupado, adia (o painel
+// manda de novo no próximo heartbeat); com falha, relata e não insiste na
+// mesma versão por um tempo; com a troca feita, encerra o daemon.
+func (a *atualizador) tentar(ctx context.Context, p api.UpdateOffer) {
+	if a.saindo.Load() || ctx.Err() != nil {
+		return
+	}
+	if a.prova.Aberta() {
+		// Este programa ainda está provando que funciona: não empilha outra
+		// troca por cima de uma que pode ser desfeita.
+		return
+	}
+	a.mu.Lock()
+	ate, falhou := a.naoAntesDe[p.Version]
+	a.mu.Unlock()
+	if falhou && !p.Force && time.Now().Before(ate) {
+		return
+	}
+
+	liberar, motivo := a.oc.reservar()
+	if motivo != "" {
+		slog.Info("atualização do programa adiada: o agente está ocupado", "versao", p.Version, "motivo", motivo)
+		a.relatar("deferred", p.Version, motivo)
+		return
+	}
+	a.relatar("downloading", p.Version, "")
+	slog.Info("atualizando o programa do agente", "de", version.Version, "para", p.Version)
+
+	tctx, cancel := context.WithTimeout(ctx, atualizacao.PrazoDaTroca)
+	res, err := a.aplicar(tctx, atualizacao.Pedido{
+		Versao:  p.Version,
+		Sha256:  p.SHA256,
+		BaseURL: p.BaseURL,
+		Arquivo: p.File,
+		Forcar:  p.Force,
+	}, a.opcoes(tctx))
+	cancel()
+
+	var adiada *atualizacao.Adiada
+	switch {
+	case errors.As(err, &adiada):
+		liberar()
+		slog.Info("atualização do programa adiada", "versao", p.Version, "motivo", adiada.Motivo)
+		a.relatar("deferred", p.Version, adiada.Motivo)
+	case err != nil && ctx.Err() != nil:
+		// O serviço parou no meio: não é falha da versão.
+		liberar()
+		a.relatar("deferred", p.Version, atualizacao.AdiadaServicoSaindo)
+	case err != nil:
+		liberar()
+		slog.Error("a atualização do programa falhou; o programa atual continua", "versao", p.Version, "err", err)
+		a.mu.Lock()
+		a.naoAntesDe[p.Version] = time.Now().Add(esperaDepoisDeFalha)
+		a.mu.Unlock()
+		a.relatar("failed", p.Version, atualizacao.CodigoDaFalha(err))
+	default:
+		if res.JaNoLugar {
+			slog.Info("o programa novo já está no lugar (outro agente desta máquina fez a troca); reiniciando para usá-lo", "versao", res.Versao)
+		} else {
+			slog.Info("programa novo no lugar; o serviço reinicia para a prova", "versao", res.Versao)
+		}
+		// O SCM do Windows só religa quem sai com erro se estiver avisado
+		// (serviço instalado antes da atualização automática).
+		if err := service.GarantirReligamento(a.svc.Name); err != nil {
+			slog.Warn("não consegui confirmar o religamento automático do serviço", "err", err)
+		}
+		a.saindo.Store(true)
+		// Encerra antes de soltar a trava: um backup que esperava por ela não
+		// começa no programa que está de saída.
+		a.reiniciar()
+		liberar()
+	}
+}
+
+// opcoes monta o que a troca precisa desta instalação.
+func (a *atualizador) opcoes(ctx context.Context) atualizacao.Opcoes {
+	return atualizacao.Opcoes{
+		Programa:        a.programa,
+		VersaoAtual:     version.Version,
+		Chaves:          atualizacao.ChavesConfiaveis(),
+		Reserva:         atualizacao.ReleasesNoGitHub,
+		ArgsDoAutoTeste: ArgsDoAutoTeste(ctx, a.cfg, a.s3c),
+		PrepararNovo:    service.PrepararProgramaNovo,
+		PeloLancador:    atualizacao.EmDocker(),
+	}
+}
+
+// ArgsDoAutoTeste são os argumentos do `self-test` do programa novo: a
+// configuração deste agente e se o bucket tem de responder.
+//
+// O bucket só é exigido do programa novo quando responde ao atual: com a
+// chave do bucket errada (ou o provedor fora do ar) agora, o auto-teste
+// falharia por um motivo que não é do programa novo, e o agente nunca mais se
+// atualizaria.
+func ArgsDoAutoTeste(ctx context.Context, cfg *config.Config, s3c *s3.Client) []string {
+	args := []string{"self-test", "--config", cfg.ConfigPath}
+	if s3c != nil && cfg.StorageBucket != "" {
+		cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		if _, err := storage.VersioningStatus(cctx, s3c, cfg.StorageBucket); err == nil {
+			args = append(args, "--require-bucket")
+		}
+	}
+	return args
+}
+
+// vigiarProva dá ao programa novo o prazo da prova. Sem heartbeat aceito até
+// lá, o anterior volta ao lugar e o daemon encerra para o gerenciador subi-lo.
+func (a *atualizador) vigiarProva(ctx context.Context) {
+	if !a.prova.Aberta() {
+		return
+	}
+	slog.Info("programa novo em prova: precisa de um heartbeat aceito pelo painel",
+		"versao", version.Version, "prazo", atualizacao.PrazoDaProva)
+	timer := time.NewTimer(atualizacao.PrazoDaProva)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+	case <-timer.C:
+		if a.prova.Vencer() {
+			a.saindo.Store(true)
+			a.reiniciar()
+		}
+	}
+}
+
+// versaoDoLancador é a versão do programa da imagem quando este processo é o
+// programa do volume (Docker). Vazio fora disso.
+func versaoDoLancador() string {
+	if os.Getenv(atualizacao.EnvLancador) == "" {
+		return ""
+	}
+	return os.Getenv(atualizacao.EnvVersaoDoLancador)
+}

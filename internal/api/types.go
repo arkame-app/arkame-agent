@@ -113,6 +113,39 @@ type HeartbeatRequest struct {
 	// precisa do caminho real para montar o comando de trocar a chave. Vazio
 	// se o SO não disse.
 	ProgramPath string `json:"program_path,omitempty"`
+	// Capabilities: o que este agente sabe fazer além do protocolo de base
+	// ("self_update", …). O painel grava e só oferece o que foi declarado.
+	// Vai sempre como lista (vazia, nunca ausente): ausente é agente antigo,
+	// de antes das capacidades.
+	Capabilities []string `json:"capabilities"`
+	// Update: o que este agente tem a dizer sobre a atualização do próprio
+	// programa. Ausente quando não há nada.
+	Update *UpdateReport `json:"update,omitempty"`
+	// SelfTest: heartbeat do auto-teste do programa novo, antes da troca. O
+	// painel só confere o token e responde; não grava versão nem horário —
+	// quem está de pé ainda é o programa antigo.
+	SelfTest bool `json:"self_test,omitempty"`
+	// LauncherVersion: no Docker, a versão do programa da imagem quando quem
+	// roda é o programa baixado para o volume.
+	LauncherVersion string `json:"launcher_version,omitempty"`
+}
+
+// UpdateReport é o relato do agente sobre a atualização do próprio programa.
+type UpdateReport struct {
+	// State: "downloading" (baixando e conferindo), "deferred" (adiada: há
+	// backup, expurgo ou restauração em curso), "proving" (o programa novo
+	// está no lugar, em prova), "failed" (a troca não aconteceu) ou
+	// "rolled_back" (o programa novo não provou que funciona e o anterior
+	// voltou). Vazio com Blocked preenchido: só o impedimento.
+	State string `json:"state,omitempty"`
+	// Version é a versão a que o estado se refere.
+	Version string `json:"version,omitempty"`
+	// Error é o código do motivo (falha, adiamento ou reversão).
+	Error string `json:"error,omitempty"`
+	// Blocked: por que este agente não se atualiza sozinho ("disabled",
+	// "binary_dir_readonly", "no_service", …). Com ele o agente não declara
+	// a capacidade "self_update".
+	Blocked string `json:"blocked,omitempty"`
 }
 
 // HeartbeatResponse é a resposta do heartbeat.
@@ -122,6 +155,24 @@ type HeartbeatResponse struct {
 	// NewToken vem quando o token atual está perto de vencer (o painel renova
 	// com 90 dias de antecedência). Ausente: nada muda.
 	NewToken string `json:"new_token,omitempty"`
+	// Update vem só quando este agente deve atualizar o próprio programa
+	// agora (declarou "self_update", a política da organização permite, está
+	// na janela). Ausente: nada a fazer. Agente antigo ignora o campo.
+	Update *UpdateOffer `json:"update,omitempty"`
+}
+
+// UpdateOffer é a atualização que o painel manda aplicar.
+type UpdateOffer struct {
+	Version string `json:"version"` // "0.5.0"
+	// SHA256 do programa deste sistema, segundo o painel: tem de ser igual ao
+	// do checksums.txt assinado do release.
+	SHA256 string `json:"sha256"`
+	// BaseURL de onde baixar: <base_url>/v<version>/<file>.
+	BaseURL string `json:"base_url"`
+	// File é o nome do programa no release (arkame-agent_linux_amd64).
+	File string `json:"file"`
+	// Force: tentar de novo uma versão que esta máquina já pôs e reverteu.
+	Force bool `json:"force,omitempty"`
 }
 
 // --- Session / Manifest ---
@@ -139,6 +190,8 @@ type SessionStart struct {
 	// painel lê a seleção da sessão sob ele, não sob o prefixo em vigor.
 	PrefixRoot        string `json:"prefix_root"`
 	ConsistencyMethod string `json:"consistency_method"`
+	// Capabilities: as mesmas do heartbeat (ver HeartbeatRequest).
+	Capabilities []string `json:"capabilities"`
 }
 
 // SessionComplete é enviado ao fim da sessão com o version_map já

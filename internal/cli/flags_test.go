@@ -38,8 +38,9 @@ func TestFlagsNaoAnulamOAmbiente(t *testing.T) {
 	}
 }
 
-// A ajuda do `run` prometia self-update, update sob demanda e long-poll dos
-// planos — nada disso existe no daemon. Ela descreve o que ele faz.
+// A ajuda do `run` prometia update sob demanda e long-poll dos planos — nada
+// disso existe no daemon. Ela descreve o que ele faz; a atualização do próprio
+// programa passou a existir (internal/atualizacao) e a ajuda diz como desligar.
 func TestAjudaDoRunNaoPrometeOQueNaoExiste(t *testing.T) {
 	long := newRunCmd().Long
 	for _, promessa := range []string{"Aplica novas versões", "probe-storage, update", "long-poll + fallback"} {
@@ -47,7 +48,7 @@ func TestAjudaDoRunNaoPrometeOQueNaoExiste(t *testing.T) {
 			t.Errorf("a ajuda do run ainda promete %q:\n%s", promessa, long)
 		}
 	}
-	for _, fato := range []string{"POLL_INTERVAL_SEC", "HEARTBEAT_INTERVAL_SEC", "self-update ainda não existe"} {
+	for _, fato := range []string{"POLL_INTERVAL_SEC", "HEARTBEAT_INTERVAL_SEC", "ARKAME_AUTO_UPDATE=off", "self-test"} {
 		if !strings.Contains(long, fato) {
 			t.Errorf("a ajuda do run não diz %q:\n%s", fato, long)
 		}

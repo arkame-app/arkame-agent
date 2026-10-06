@@ -2,17 +2,20 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
 
+	"github.com/arkame-app/agent/internal/atualizacao"
 	"github.com/arkame-app/agent/internal/config"
 	"github.com/arkame-app/agent/internal/daemon"
 	"github.com/arkame-app/agent/internal/logarquivo"
 	"github.com/arkame-app/agent/internal/segredo"
 	"github.com/arkame-app/agent/internal/service"
+	"github.com/arkame-app/agent/pkg/version"
 	"github.com/spf13/cobra"
 )
 
@@ -35,9 +38,32 @@ func newRunCmd() *cobra.Command {
   - Testa o bucket de hora em hora e quando o painel pede (conferido a cada 30s)
   - Atende o explorador de pastas do painel (long-poll)
   - Aplica o expurgo de retenção autorizado pelo painel (de hora em hora)
-
-O programa não se atualiza sozinho: self-update ainda não existe.`,
+  - Atualiza o próprio programa quando o painel manda (na resposta do
+    heartbeat): baixa, confere a assinatura e o SHA-256, roda o self-test do
+    programa novo, troca e sai para o gerenciador de serviço religar. Só com o
+    bucket livre e sem restauração em curso. O programa novo tem 5 minutos
+    para um heartbeat aceito; sem isso, o anterior volta. ARKAME_AUTO_UPDATE=off
+    desliga (o comando 'update' continua valendo).`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			// Docker: o programa da imagem passa a vez ao do volume, se houver
+			// um válido e mais novo. Só volta daqui se não há, ou se falhou.
+			lancarDoVolume(configFile)
+			// Programa novo em prova: conta esta partida. Na terceira sem um
+			// heartbeat aceito, o anterior volta ao lugar e este processo sai
+			// para o gerenciador de serviço subi-lo. Antes de tudo o mais: um
+			// programa que quebra ao carregar a configuração também conta.
+			if atualizacao.RegistrarArranque(service.ProgramaAtual(), version.Version, configFile) {
+				// Sob o SCM do Windows, sai já com o serviço no ar: o processo
+				// que morre antes de se apresentar ao SCM é uma partida que
+				// falhou, e não um serviço que caiu — e só o segundo é religado.
+				if handled, _ := service.RunAsService(serviceName, func(context.Context) error {
+					sairParaReiniciar()
+					return nil
+				}); !handled {
+					sairParaReiniciar()
+				}
+				return nil
+			}
 			cfg, err := config.Load(configFile, config.Overrides{
 				HostRoot: hostRoot,
 			})
@@ -76,7 +102,15 @@ O programa não se atualiza sozinho: self-update ainda não existe.`,
 					"agent_id", cfg.AgentID,
 					"panel", cfg.PanelURL,
 					"host_root", cfg.HostRoot)
-				return daemon.Run(ctx, cfg)
+				err := daemon.Run(ctx, cfg)
+				if errors.Is(err, atualizacao.ErrReiniciar) {
+					// O programa no disco mudou. Sai daqui mesmo, sem voltar
+					// ao SCM do Windows: quem para sem avisar é religado pelas
+					// ações de recuperação do serviço.
+					slog.Info("saindo para o serviço reiniciar com o programa que está no lugar")
+					sairParaReiniciar()
+				}
+				return err
 			}
 
 			// No Windows, quando o processo é iniciado pelo Service Control
@@ -101,6 +135,64 @@ O programa não se atualiza sozinho: self-update ainda não existe.`,
 	cmd.Flags().StringVar(&serviceName, "service-name", service.DefaultName, "nome do serviço (usado só quando iniciado pelo gerenciador de serviços do Windows)")
 
 	return cmd
+}
+
+// sair é o os.Exit; os testes o trocam.
+var sair = os.Exit
+
+// sairParaReiniciar encerra o processo para o programa que está no disco
+// subir. No Docker não há gerenciador de serviço: este processo é trocado
+// pelo programa da imagem (o lançador), que decide de novo o que executar — o
+// container não para, e nada depende da política de reinício do docker run.
+// Fora dele, sai com o código que o gerenciador de serviço religa.
+func sairParaReiniciar() {
+	if atualizacao.EmDocker() {
+		lancador := os.Getenv(atualizacao.EnvLancador)
+		if lancador == "" {
+			lancador, _ = os.Executable()
+		}
+		if lancador != "" {
+			err := atualizacao.Executar(lancador, os.Args[1:], atualizacao.AmbienteSemLancador(os.Environ()))
+			slog.Error("não consegui voltar ao programa da imagem; saindo para o container reiniciar", "err", err)
+		}
+	}
+	sair(atualizacao.CodigoDeReinicio)
+}
+
+// lancarDoVolume é o lançador do Docker: se o volume da configuração tem um
+// programa baixado pela atualização automática, válido e mais novo que o da
+// imagem, este processo vira ele. Fora do Docker, com a atualização desligada
+// ou já lançado, não faz nada.
+func lancarDoVolume(configFile string) {
+	if !atualizacao.EmDocker() || os.Getenv(atualizacao.EnvLancador) != "" {
+		return
+	}
+	// ARKAME_AUTO_UPDATE vale no ambiente do container e no env-file.
+	desligada := atualizacao.Desligada(os.Getenv(atualizacao.EnvAutoUpdate))
+	if cfg, err := config.Load(configFile, config.Overrides{}); err == nil {
+		desligada = desligada || atualizacao.Desligada(cfg.AutoUpdate)
+	}
+	if desligada {
+		return
+	}
+	programa := atualizacao.ProgramaDoVolume(configFile)
+	escolhido, porque := atualizacao.EscolherDoVolume(programa, version.Version,
+		atualizacao.ChavesConfiaveis(), atualizacao.NomeNoRelease())
+	if escolhido == "" {
+		slog.Debug("lançador: sigo com o programa da imagem", "motivo", porque)
+		return
+	}
+	eu, err := os.Executable()
+	if err != nil {
+		slog.Warn("lançador: não sei o caminho do programa da imagem; sigo com ele", "err", err)
+		return
+	}
+	slog.Info("lançador: executando o programa baixado para o volume", "programa", escolhido, "imagem", version.Version)
+	err = atualizacao.Executar(escolhido, os.Args[1:], atualizacao.AmbienteDoLancado(os.Environ(), eu, version.Version))
+	// Só chega aqui se o programa do volume não executou (volume montado com
+	// noexec, arquivo de outra arquitetura): fica abandonado, e vale o da imagem.
+	slog.Error("lançador: o programa do volume não executou; sigo com o da imagem", "err", err)
+	atualizacao.AbandonarDoVolume(programa, atualizacao.MotivoNaoExecutou)
 }
 
 var _ = context.Background

@@ -86,6 +86,9 @@ type Config struct {
 	// Misc
 	HeartbeatIntervalSec int
 	PollIntervalSec      int
+	// AutoUpdate é o valor de ARKAME_AUTO_UPDATE (ambiente ou env-file):
+	// "off" desliga a atualização automática do programa. Vazio: ligada.
+	AutoUpdate string
 }
 
 // Overrides representa valores vindos da CLI que têm precedência sobre env.
@@ -160,6 +163,7 @@ func Load(envFile string, o Overrides) (*Config, error) {
 		SiblingBuckets:       splitCSV(get("SIBLING_BUCKETS")),
 		HeartbeatIntervalSec: segundosOu(get("HEARTBEAT_INTERVAL_SEC"), 60),
 		PollIntervalSec:      segundosOu(get("POLL_INTERVAL_SEC"), 60),
+		AutoUpdate:           get("ARKAME_AUTO_UPDATE"),
 	}
 
 	// O AGENT_ID só entrava pelo env-file, e só o `install` com a pergunta da

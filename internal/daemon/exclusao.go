@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 
 	"github.com/arkame-app/agent/internal/api"
 	"github.com/arkame-app/agent/internal/config"
@@ -37,14 +38,27 @@ import (
 //
 // É uma trava só e nenhum dos lados pega outra enquanto a segura: não há
 // deadlock possível.
+//
+// A atualização do programa pega a mesma trava (ocupacao.reservar, sem
+// esperar): só troca o programa com o bucket livre, e enquanto troca nem
+// backup nem limpeza começam.
 type exclusaoDoBucket struct {
 	mu sync.Mutex
+	// quem segura a trava agora (atividadeBackup ou atividadeExpurgo), para a
+	// atualização adiada dizer ao painel por quê.
+	quem atomic.Value
 }
+
+const (
+	atividadeBackup  = "backup"
+	atividadeExpurgo = "purge"
+)
 
 // backup roda fn com o bucket só para ele, esperando a limpeza em curso.
 func (e *exclusaoDoBucket) backup(fn func() error) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	e.quem.Store(atividadeBackup)
 	return fn()
 }
 
@@ -55,6 +69,7 @@ func (e *exclusaoDoBucket) limpeza(fn func()) bool {
 		return false
 	}
 	defer e.mu.Unlock()
+	e.quem.Store(atividadeExpurgo)
 	fn()
 	return true
 }
@@ -63,6 +78,11 @@ func (e *exclusaoDoBucket) limpeza(fn func()) bool {
 // de retenção do começo ao fim da sessão (do /start ao /complete).
 func executarPlanoExclusivo(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config.Config, plan api.Plan, trava *exclusaoDoBucket) error {
 	return trava.backup(func() error {
+		// A trava pode ter sido solta por uma troca de programa que acabou de
+		// encerrar o daemon: a sessão não abre no programa que está de saída.
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		return executePlan(ctx, c, s3c, cfg, plan)
 	})
 }

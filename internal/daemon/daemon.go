@@ -1,5 +1,6 @@
 // Package daemon implementa o loop principal do agent:
-//   - Heartbeat periódico ao painel
+//   - Heartbeat periódico ao painel (e, por ele, a atualização do próprio
+//     programa quando o painel manda — ver atualizacao.go)
 //   - Poll de plans ativos
 //   - Execução de plans conforme schedule + janelas + throttle
 //   - Probe periódico do bucket de storage (GetBucketVersioning, etc.)
@@ -18,10 +19,12 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/arkame-app/agent/internal/api"
+	"github.com/arkame-app/agent/internal/atualizacao"
 	"github.com/arkame-app/agent/internal/config"
 	"github.com/arkame-app/agent/internal/fsbrowse"
 	"github.com/arkame-app/agent/internal/hooks"
@@ -35,7 +38,11 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
-// Run é o loop principal do daemon. Bloqueia até ctx ser cancelado.
+// Run é o loop principal do daemon. Bloqueia até ctx ser cancelado — ou até o
+// programa do agente ser trocado (atualização automática, ou a volta ao
+// anterior quando o novo não prova que funciona): aí devolve
+// atualizacao.ErrReiniciar, e quem chama sai para o gerenciador de serviço
+// subir o programa que está no lugar.
 func Run(ctx context.Context, cfg *config.Config) error {
 	bearer, err := cfg.LoadToken()
 	if err != nil {
@@ -59,34 +66,59 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	}
 
 	// Backup e limpeza de retenção do bucket nunca rodam juntos (ver
-	// exclusaoDoBucket).
+	// exclusaoDoBucket). A troca do programa espera os dois e a restauração
+	// (ver ocupacao).
 	trava := &exclusaoDoBucket{}
+	oc := &ocupacao{trava: trava}
 
-	var wg sync.WaitGroup
-	wg.Add(6)
-	go func() { defer wg.Done(); heartbeatLoop(ctx, client, cfg) }()
-	go func() { defer wg.Done(); probeLoop(ctx, client, s3Client, cfg) }()
-	go func() { defer wg.Done(); planLoop(ctx, client, s3Client, cfg, trava) }()
-	go func() { defer wg.Done(); restoreLoop(ctx, client, s3Client, cfg) }()
-	go func() { defer wg.Done(); fsBrowseLoop(ctx, client, cfg) }()
-	go func() { defer wg.Done(); purgeLoop(ctx, client, s3Client, cfg, trava) }()
-
-	<-ctx.Done()
-	slog.Info("ctx cancelado, aguardando loops encerrarem...")
-	wg.Wait()
-	return nil
-}
-
-func heartbeatLoop(ctx context.Context, c *api.Client, cfg *config.Config) {
-	ticker := time.NewTicker(time.Duration(cfg.HeartbeatIntervalSec) * time.Second)
-	defer ticker.Stop()
+	ctx, parar := context.WithCancelCause(ctx)
+	defer parar(nil)
 
 	// Detecta o serviço uma vez (não muda em runtime) para o painel poder
 	// mostrar o comando exato de reinício quando o agent cair.
 	svc := service.Detect()
+	atl := novoAtualizador(cfg, svc, s3Client, oc, func() { parar(atualizacao.ErrReiniciar) })
+	capacidadesDeclaradas.Store(atl.capacidades())
+
+	var wg sync.WaitGroup
+	wg.Add(8)
+	go func() { defer wg.Done(); heartbeatLoop(ctx, client, cfg, svc, atl) }()
+	go func() { defer wg.Done(); probeLoop(ctx, client, s3Client, cfg) }()
+	go func() { defer wg.Done(); planLoop(ctx, client, s3Client, cfg, trava) }()
+	go func() { defer wg.Done(); restoreLoop(ctx, client, s3Client, cfg, oc) }()
+	go func() { defer wg.Done(); fsBrowseLoop(ctx, client, cfg) }()
+	go func() { defer wg.Done(); purgeLoop(ctx, client, s3Client, cfg, trava) }()
+	go func() { defer wg.Done(); atl.laco(ctx) }()
+	go func() { defer wg.Done(); atl.vigiarProva(ctx) }()
+
+	<-ctx.Done()
+	slog.Info("ctx cancelado, aguardando loops encerrarem...")
+	wg.Wait()
+	if errors.Is(context.Cause(ctx), atualizacao.ErrReiniciar) {
+		return atualizacao.ErrReiniciar
+	}
+	return nil
+}
+
+// capacidadesDeclaradas é o que este processo declara ao painel no heartbeat
+// e no /sessions/start (atualizador.capacidades). O Run a preenche.
+var capacidadesDeclaradas atomic.Value
+
+// capacidadesDoAgente devolve a lista declarada — sempre lista, nunca nil: no
+// JSON, o campo ausente é o agente antigo, de antes das capacidades.
+func capacidadesDoAgente() []string {
+	if c, ok := capacidadesDeclaradas.Load().([]string); ok && c != nil {
+		return c
+	}
+	return []string{}
+}
+
+func heartbeatLoop(ctx context.Context, c *api.Client, cfg *config.Config, svc service.Detected, atl *atualizador) {
+	ticker := time.NewTicker(time.Duration(cfg.HeartbeatIntervalSec) * time.Second)
+	defer ticker.Stop()
 
 	token := &estadoDoToken{}
-	send := func() { enviarHeartbeat(ctx, c, cfg, svc, token) }
+	send := func() { enviarHeartbeatCom(ctx, c, cfg, svc, token, atl) }
 
 	send()
 	for {
@@ -101,14 +133,24 @@ func heartbeatLoop(ctx context.Context, c *api.Client, cfg *config.Config) {
 
 // enviarHeartbeat manda um heartbeat e trata a resposta (renovação do token).
 func enviarHeartbeat(ctx context.Context, c *api.Client, cfg *config.Config, svc service.Detected, token *estadoDoToken) {
+	enviarHeartbeatCom(ctx, c, cfg, svc, token, nil)
+}
+
+// enviarHeartbeatCom é o enviarHeartbeat com a atualização do programa: o
+// heartbeat leva as capacidades e o relato da troca, a resposta aceita conta
+// como prova do programa novo, e o `update` que vier vai para o atualizador.
+func enviarHeartbeatCom(ctx context.Context, c *api.Client, cfg *config.Config, svc service.Detected, token *estadoDoToken, atl *atualizador) {
 	hb := api.HeartbeatRequest{
-		AgentID:      cfg.AgentID,
-		AgentVersion: version.Version,
-		OS:           runtime.GOOS + "-" + runtime.GOARCH,
-		ReportedAt:   time.Now().UTC(),
-		ServiceName:  svc.Name,
-		ServiceScope: svc.Scope,
-		ProgramPath:  service.ProgramaAtual(),
+		AgentID:         cfg.AgentID,
+		AgentVersion:    version.Version,
+		OS:              runtime.GOOS + "-" + runtime.GOARCH,
+		ReportedAt:      time.Now().UTC(),
+		ServiceName:     svc.Name,
+		ServiceScope:    svc.Scope,
+		ProgramPath:     service.ProgramaAtual(),
+		Capabilities:    atl.capacidades(),
+		Update:          atl.relatoDoHeartbeat(),
+		LauncherVersion: versaoDoLancador(),
 	}
 	var resp api.HeartbeatResponse
 	if err := c.POST(ctx, "/api/agents/"+cfg.AgentID+"/heartbeat", hb, &resp); err != nil {
@@ -116,7 +158,11 @@ func enviarHeartbeat(ctx context.Context, c *api.Client, cfg *config.Config, svc
 		return
 	}
 	slog.Debug("heartbeat ok")
+	if atl != nil {
+		atl.prova.Confirmar()
+	}
 	token.tratarRespostaDoHeartbeat(c, cfg, resp)
+	atl.receber(resp.Update)
 }
 
 // corpoProbe é o POST /api/agents/{id}/probe. Os campos seguem os de
@@ -394,12 +440,15 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 		PrefixRoot        string   `json:"prefix_root"`
 		ConsistencyMethod string   `json:"consistency_method,omitempty"`
 		AgentVersion      string   `json:"agent_version,omitempty"`
+		// As capacidades deste agente, como no heartbeat: sempre lista.
+		Capabilities []string `json:"capabilities"`
 	}{
 		PlanID:       plan.ID,
 		SourcePaths:  plan.SourcePaths,
 		ExcludeGlobs: exclusoes,
 		PrefixRoot:   prefixo,
 		AgentVersion: version.Version,
+		Capabilities: capacidadesDoAgente(),
 	}
 	var startResp struct {
 		SessionID string `json:"session_id"`
@@ -950,7 +999,7 @@ func agendarRecuo(m map[string]*esperaDeAquecimento, id string) {
 	e.proxima = time.Now().Add(e.recuo)
 }
 
-func restoreLoop(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config.Config) {
+func restoreLoop(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config.Config, oc *ocupacao) {
 	ticker := time.NewTicker(time.Duration(cfg.PollIntervalSec) * time.Second)
 	defer ticker.Stop()
 
@@ -959,7 +1008,7 @@ func restoreLoop(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 	// comportamento certo depois de uma queda.
 	aquecendo := map[string]*esperaDeAquecimento{}
 
-	run := func() { processarFilaDeRestore(ctx, c, s3c, cfg, aquecendo) }
+	run := func() { processarFilaDeRestoreCom(ctx, c, s3c, cfg, aquecendo, oc) }
 
 	// Primeiro tick imediato pra recuperar items "running" deixados num crash
 	run()
@@ -983,6 +1032,13 @@ const limiteDeRestoreItems = 500
 // Item ainda no recuo do aquecimento é pulado, e o laço segue para os outros
 // do lote.
 func processarFilaDeRestore(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config.Config, aquecendo map[string]*esperaDeAquecimento) {
+	processarFilaDeRestoreCom(ctx, c, s3c, cfg, aquecendo, nil)
+}
+
+// processarFilaDeRestoreCom é o processarFilaDeRestore que avisa a ocupacao:
+// com itens a executar, a troca do programa espera; com uma troca em curso, a
+// rodada fica para o programa que subir.
+func processarFilaDeRestoreCom(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config.Config, aquecendo map[string]*esperaDeAquecimento, oc *ocupacao) {
 	var resp api.ListRestoreItemsResponse
 	// storage_id: o painel devolve só os itens deste armazenamento (dois
 	// armazenamentos do agente podem ter bucket de mesmo nome). Painel antigo
@@ -1000,6 +1056,11 @@ func processarFilaDeRestore(ctx context.Context, c *api.Client, s3c *s3.Client, 
 		return
 	}
 	slog.Info("restore-items pendentes", "count", len(resp.Items))
+	if !oc.comecarRestauracao() {
+		slog.Info("restauração adiada: o programa do agente está sendo atualizado")
+		return
+	}
+	defer oc.terminarRestauracao()
 
 	exec := restore.Options{S3: s3c, HostRoot: cfg.HostRoot}
 	for _, item := range resp.Items {
