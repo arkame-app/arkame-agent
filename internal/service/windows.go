@@ -265,3 +265,6 @@ func uninstallPlatform(_ context.Context, opts Options) error {
 func regravarPlatform(context.Context, *config.Config, Options) (string, error) {
 	return "", nil
 }
+
+// EDropIn: só o systemd tem drop-in (ver systemd.go).
+func EDropIn(string) bool { return false }

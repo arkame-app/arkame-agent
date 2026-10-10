@@ -99,7 +99,13 @@ não inicia e não reinicia o serviço, e não fala com o painel.
 É o passo da última atualização manual de quem instalou antes da atualização
 automática: a unit de sistema antiga não libera a pasta do programa para
 escrita, e o agente não conseguiria trocar o próprio programa. O instalador
-(install.sh) já o roda. No macOS e no Windows não há o que regravar.`,
+(install.sh) já o roda. No macOS e no Windows não há o que regravar.
+
+A unit editada à mão não é reescrita: se ela tem qualquer linha que os
+modelos do agente não gravam (Environment=, limites de CPU ou memória, uma
+pasta a mais em ReadWritePaths=), fica como está, e a pasta do programa é
+liberada num drop-in ao lado dela
+(<unit>.service.d/10-arkame-atualizacao.conf), que o systemd soma à unit.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			configFile, ok := configDoServico(name, service.Scope(scope))
 			if !ok || configFile == "" {
@@ -117,7 +123,12 @@ escrita, e o agente não conseguiria trocar o próprio programa. O instalador
 				return err
 			}
 			if arquivo == "" {
-				fmt.Fprintln(os.Stderr, "  Nada a regravar neste sistema.")
+				fmt.Fprintln(os.Stderr, "  Nada a regravar: o registro do serviço já serve à atualização automática.")
+				return nil
+			}
+			if service.EDropIn(arquivo) {
+				fmt.Fprintln(os.Stderr, "  ✓ A unit do serviço foi editada à mão e ficou como está.")
+				fmt.Fprintln(os.Stderr, "    A pasta do programa foi liberada para escrita num drop-in:", arquivo)
 				return nil
 			}
 			fmt.Fprintln(os.Stderr, "  ✓ Registro do serviço regravado:", arquivo)

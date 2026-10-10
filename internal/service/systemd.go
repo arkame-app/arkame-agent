@@ -242,15 +242,27 @@ func installSystemd(ctx context.Context, cfg *config.Config, opts Options) (*Ins
 	return inst, nil
 }
 
-// regravarPlatform reescreve a unit de um serviço já instalado com o modelo
-// desta versão e recarrega o systemd — sem habilitar nem reiniciar: o serviço
-// parado de propósito continua parado, e quem reinicia é quem chamou.
+// regravarPlatform leva a unit de um serviço já instalado ao modelo desta
+// versão e recarrega o systemd — sem habilitar nem reiniciar: o serviço parado
+// de propósito continua parado, e quem reinicia é quem chamou.
 //
 // Existe para a última atualização manual de quem instalou antes da
 // atualização automática: a unit de sistema antiga não libera a pasta do
 // programa (ver pastasGravaveis), e trocar só o programa deixaria o agente sem
 // conseguir se atualizar sozinho. O install.sh a chama (`service refresh`)
 // depois de trocar o programa.
+//
+// A unit só é reescrita quando é um modelo do agente sem edição (unitSemEdicao):
+// reescrever por cima apagava o que o administrador pôs à mão — um proxy em
+// Environment=, um limite de CPU, um caminho a mais em ReadWritePaths=. A unit
+// editada fica como está, e o único trecho que precisa mudar — a pasta do
+// programa liberada para escrita — vai num drop-in
+// (<unit>.service.d/10-arkame-atualizacao.conf), que o systemd soma à unit.
+// No escopo do usuário não há ProtectSystem, e a unit editada não precisa de
+// nada.
+//
+// Devolve o arquivo gravado: a unit, o drop-in, ou "" quando não havia o que
+// mudar.
 func regravarPlatform(ctx context.Context, cfg *config.Config, opts Options) (string, error) {
 	var (
 		unitPath string
@@ -258,7 +270,7 @@ func regravarPlatform(ctx context.Context, cfg *config.Config, opts Options) (st
 	)
 	switch opts.Scope {
 	case ScopeSystem:
-		if os.Geteuid() != 0 {
+		if os.Geteuid() != 0 && !regravarSemRoot {
 			return "", fmt.Errorf("regravar a unit de um serviço do sistema exige root: repita com sudo")
 		}
 		unitPath = filepath.Join(dirUnitsDoSistema, opts.Name+".service")
@@ -283,14 +295,232 @@ func regravarPlatform(ctx context.Context, cfg *config.Config, opts Options) (st
 		opts.BinaryPath = p
 	}
 	unit := unitDoServico(cfg, opts)
-	if err := segredo.Gravar(unitPath, []byte(unit), 0o644); err != nil {
-		return "", fmt.Errorf("escrevendo %s: %w", unitPath, err)
+	dropIn := filepath.Join(unitPath+".d", arquivoDoDropIn)
+	gravado := ""
+	switch {
+	case string(atual) == unit:
+		// Já é o modelo desta versão.
+	case unitSemEdicao(string(atual), unit):
+		if err := segredo.Gravar(unitPath, []byte(unit), 0o644); err != nil {
+			return "", fmt.Errorf("escrevendo %s: %w", unitPath, err)
+		}
+		// O drop-in de uma passada anterior (quando a unit estava editada)
+		// repete o que o modelo já traz.
+		_ = os.Remove(dropIn)
+		_ = os.Remove(filepath.Dir(dropIn)) // só sai se ficou vazia
+		gravado = unitPath
+	default:
+		texto := dropInDaPastaDoPrograma(opts.Scope, string(atual), pastasDoPrograma(opts.BinaryPath))
+		if texto == "" {
+			slog.Info("a unit foi editada à mão e não precisa de mudança: fica como está", "path", unitPath)
+			return "", nil
+		}
+		if anterior, err := os.ReadFile(dropIn); err == nil && string(anterior) == texto {
+			return "", nil
+		}
+		if err := os.MkdirAll(filepath.Dir(dropIn), 0o755); err != nil {
+			return "", fmt.Errorf("criando %s: %w", filepath.Dir(dropIn), err)
+		}
+		if err := segredo.Gravar(dropIn, []byte(texto), 0o644); err != nil {
+			return "", fmt.Errorf("escrevendo %s: %w", dropIn, err)
+		}
+		slog.Info("a unit foi editada à mão e fica como está; a pasta do programa foi liberada num drop-in",
+			"unit", unitPath, "drop_in", dropIn)
+		gravado = dropIn
+	}
+	if gravado == "" {
+		return "", nil
 	}
 	args = append(args, "daemon-reload")
 	if out, err := executar(ctx, "systemctl", args...); err != nil {
 		return "", fmt.Errorf("systemctl %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}
-	return unitPath, nil
+	return gravado, nil
+}
+
+// regravarSemRoot: os testes regravam uma "unit de sistema" numa pasta
+// temporária sem ser root.
+var regravarSemRoot = false
+
+// arquivoDoDropIn é o drop-in que o `service refresh` grava ao lado da unit
+// editada à mão.
+const arquivoDoDropIn = "10-arkame-atualizacao.conf"
+
+// EDropIn diz se o arquivo devolvido pelo Regravar é o drop-in (a unit foi
+// preservada) e não a unit.
+func EDropIn(arquivo string) bool { return filepath.Base(arquivo) == arquivoDoDropIn }
+
+// diretiva é uma linha Chave=Valor de uma seção da unit.
+type diretiva struct{ secao, chave, valor string }
+
+// diretivasDaUnit lê as diretivas de uma unit, na ordem, sem comentários nem
+// linhas em branco.
+func diretivasDaUnit(texto string) []diretiva {
+	var ds []diretiva
+	secao := ""
+	for _, l := range strings.Split(texto, "\n") {
+		l = strings.TrimSpace(l)
+		if l == "" || strings.HasPrefix(l, "#") || strings.HasPrefix(l, ";") {
+			continue
+		}
+		if strings.HasPrefix(l, "[") && strings.HasSuffix(l, "]") {
+			secao = l[1 : len(l)-1]
+			continue
+		}
+		chave, valor, ok := strings.Cut(l, "=")
+		if !ok {
+			ds = append(ds, diretiva{secao, l, ""})
+			continue
+		}
+		ds = append(ds, diretiva{secao, strings.TrimSpace(chave), strings.TrimSpace(valor)})
+	}
+	return ds
+}
+
+// valoresDeModelo são, por diretiva, os valores fixos que algum modelo do
+// agente já gravou (da primeira unit, de maio, à desta versão). As diretivas
+// que dependem da instalação (ExecStart, EnvironmentFile, as pastas de
+// escrita) são conferidas à parte, em unitSemEdicao.
+var valoresDeModelo = map[string][]string{
+	"Unit/Documentation":      {"https://arkame.app/docs", "https://docs.arkame.app"},
+	"Unit/After":              {"network-online.target"},
+	"Unit/Wants":              {"network-online.target"},
+	"Service/Type":            {"simple"},
+	"Service/Restart":         {"always"},
+	"Service/RestartSec":      {"10s", "5s"},
+	"Service/User":            {"root"},
+	"Service/Group":           {"root"},
+	"Service/NoNewPrivileges": {"true"},
+	"Service/ProtectSystem":   {"full", "strict"},
+	"Service/ProtectHome":     {"read-only"},
+	"Service/PrivateTmp":      {"true"},
+	"Install/WantedBy":        {"multi-user.target", "default.target"},
+}
+
+// unitSemEdicao diz se a unit instalada é um modelo do agente — o desta
+// versão ou um anterior — sem nada posto à mão: toda diretiva dela é uma que
+// algum modelo grava, com um valor que algum modelo grava. Aí reescrevê-la com
+// o modelo novo não apaga decisão de ninguém.
+//
+// Não é comparação de texto com os modelos antigos: o jeito de escrever os
+// caminhos mudou entre versões (aspas, o % escapado), e a unit de quem nunca a
+// editou não bateria. O que se confere é o que cada linha diz.
+func unitSemEdicao(instalada, modelo string) bool {
+	doModelo := map[string][]string{}
+	for _, d := range diretivasDaUnit(modelo) {
+		doModelo[d.secao+"/"+d.chave] = append(doModelo[d.secao+"/"+d.chave], d.valor)
+	}
+	pastasDoModelo := map[string]bool{"/var/lib/arkame": true} // a da primeira unit
+	for _, chave := range []string{"Service/ReadWritePaths", "Service/ReadWriteDirectories"} {
+		for _, v := range doModelo[chave] {
+			for _, p := range camposDaLinha(v) {
+				pastasDoModelo[p] = true
+			}
+		}
+	}
+	execDoModelo := ""
+	if v := doModelo["Service/ExecStart"]; len(v) == 1 {
+		execDoModelo = strings.Join(camposDaLinha(v[0]), "\x00")
+	}
+	configDoModelo := configDaUnit(modelo)
+	for _, d := range diretivasDaUnit(instalada) {
+		chave := d.secao + "/" + d.chave
+		switch chave {
+		case "Unit/Description":
+			if !strings.HasPrefix(d.valor, "Arkame Backup Agent") {
+				return false
+			}
+		case "Service/ExecStart":
+			// Mesmo programa, mesmos argumentos — com ou sem aspas.
+			if strings.Join(camposDaLinha(d.valor), "\x00") != execDoModelo {
+				return false
+			}
+		case "Service/EnvironmentFile":
+			v := strings.ReplaceAll(strings.Trim(strings.TrimPrefix(d.valor, "-"), `"`), "%%", "%")
+			// A primeira unit apontava o EnvironmentFile para outro arquivo
+			// do agente; qualquer arquivo ao lado da configuração é do modelo.
+			if v != configDoModelo && filepath.Dir(v) != filepath.Dir(configDoModelo) {
+				return false
+			}
+		case "Service/TimeoutStopSec":
+			if !contem(doModelo[chave], d.valor) {
+				return false
+			}
+		case "Service/ReadWritePaths", "Service/ReadWriteDirectories":
+			// Só pastas que o modelo novo também libera: uma a mais é do
+			// administrador.
+			for _, p := range camposDaLinha(d.valor) {
+				if !pastasDoModelo[p] {
+					return false
+				}
+			}
+		default:
+			if !contem(valoresDeModelo[chave], d.valor) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func contem(lista []string, v string) bool {
+	for _, x := range lista {
+		if x == v {
+			return true
+		}
+	}
+	return false
+}
+
+// pastasDoPrograma são as pastas que a atualização automática precisa
+// gravar: a do caminho registrado e a do caminho real (ver pastasGravaveis).
+func pastasDoPrograma(programa string) []string {
+	return pastasGravaveis(&config.Config{}, programa)[1:] // sem o /etc/arkame do writablePaths vazio
+}
+
+// dropInDaPastaDoPrograma é o texto do drop-in que libera a pasta do programa
+// na unit editada à mão, ou "" quando ela não precisa: escopo do usuário (sem
+// ProtectSystem), unit sem ProtectSystem, ou pastas que ela já libera.
+//
+// ReadWritePaths= é uma lista que o systemd soma entre a unit e os drop-ins:
+// o que a unit já libera continua valendo. ReadWriteDirectories= repete para
+// o systemd anterior ao 231 (ver systemUnitTmpl).
+func dropInDaPastaDoPrograma(escopo Scope, instalada string, pastas []string) string {
+	if escopo != ScopeSystem || len(pastas) == 0 {
+		return ""
+	}
+	protegida := false
+	liberadas := map[string]bool{}
+	for _, d := range diretivasDaUnit(instalada) {
+		switch d.secao + "/" + d.chave {
+		case "Service/ProtectSystem":
+			protegida = d.valor != "" && d.valor != "no" && d.valor != "false"
+		case "Service/ReadWritePaths", "Service/ReadWriteDirectories":
+			for _, p := range camposDaLinha(d.valor) {
+				liberadas[p] = true
+			}
+		}
+	}
+	if !protegida {
+		return ""
+	}
+	var faltam []string
+	for _, p := range pastas {
+		if !liberadas[p] && !liberadas[strings.ReplaceAll(p, "%%", "%")] {
+			faltam = append(faltam, p)
+		}
+	}
+	if len(faltam) == 0 {
+		return ""
+	}
+	lista := strings.Join(faltam, " ")
+	return "# Gravado pelo `arkame-agent service refresh`. A unit ao lado foi editada à\n" +
+		"# mão e ficou como está; este arquivo só libera a pasta do programa do agente\n" +
+		"# para escrita, que é o que a atualização automática precisa. Pode ser apagado\n" +
+		"# se a unit já a liberar (ReadWritePaths=).\n" +
+		"[Service]\n" +
+		"ReadWritePaths=" + lista + "\n" +
+		"ReadWriteDirectories=" + lista + "\n"
 }
 
 // servicosDoAgente: as units do sistema e do usuário que são do agente — as
