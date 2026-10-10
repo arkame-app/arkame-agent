@@ -4,10 +4,25 @@ on:
   push:
     tags: ['v*']
 
-permissions:
-  contents: write   # criar o release e subir os artefatos
-  packages: write   # publicar a imagem no ghcr
-  id-token: write   # OIDC para a assinatura keyless do cosign
+# Sem permissão no nível do workflow: cada job declara a dele, a mínima.
+permissions: {}
+
+# As actions são fixadas pelo SHA do commit, com a versão ao lado (ver a nota
+# no ci.yml sobre o porquê e sobre como atualizar). O GoReleaser também tem a
+# versão fixa.
+#
+# Três jobs, em sequência:
+#
+#   testes      prova o commit da tag. Só lê o repositório.
+#   goreleaser  compila, empacota, assina com o cosign (keyless) e cria o
+#               release como RASCUNHO. Não vê a chave Ed25519.
+#   assinar     no environment `release` (aprovação obrigatória): assina o
+#               checksums.txt com a chave Ed25519, sobe a assinatura e só
+#               então publica o release.
+#
+# O release só fica público depois de assinado. Se o job `assinar` falhar, ou
+# a aprovação for negada, o workflow fica vermelho e o rascunho não é
+# publicado — não existe release público sem `checksums.txt.ed25519`.
 
 jobs:
   # A tag sozinha não basta para publicar.
@@ -23,9 +38,13 @@ jobs:
   testes:
     name: Prova antes de publicar
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: '1.25'
           cache: true
@@ -88,48 +107,122 @@ jobs:
           shellcheck install.sh
 
   goreleaser:
+    name: Compila, empacota e cria o rascunho do release
     needs: testes
     runs-on: ubuntu-latest
-    # A chave Ed25519 que assina o checksums.txt para a atualização automática
-    # mora neste environment, com aprovação obrigatória: quem empurra uma tag
-    # não publica (nem assina) sem um segundo "sim". O environment e o segredo
-    # são criados à mão no GitHub — docs/RELEASE-ASSINATURA.md.
-    environment: release
+    # Sem environment e sem a chave Ed25519: este job roda o GoReleaser, o
+    # cosign, o buildx e o go-winres — código de terceiros demais para ter nas
+    # mãos a chave que os agentes aceitam. A assinatura Ed25519 é do job
+    # `assinar`, abaixo.
+    permissions:
+      contents: write   # criar o rascunho do release e subir os artefatos
+      packages: write   # publicar a imagem no ghcr
+      id-token: write   # OIDC para a assinatura keyless do cosign
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0   # o changelog precisa do histórico completo
+          persist-credentials: false
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: '1.25'
           cache: true
 
-      - uses: sigstore/cosign-installer@v3
+      - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.9.1
 
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       - name: Login no ghcr
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: goreleaser/goreleaser-action@v6
+      - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6.4.0
         with:
-          version: '~> v2'
+          # Versão fixa: com `~> v2` o release saía com o GoReleaser que
+          # existisse no dia, sem ninguém ter olhado.
+          version: 'v2.18.3'
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ARKAME_RELEASE_ED25519_KEY: ${{ secrets.ARKAME_RELEASE_ED25519_KEY }}
 
-      # O que foi publicado confere com a chave que os agentes têm embutida:
-      # a assinatura existe e é da versão desta tag. Sem este passo, um release
-      # assinado com a chave errada só apareceria quando nenhum agente o
-      # aceitasse.
-      - name: Confere a assinatura Ed25519 do checksums.txt
+      # O checksums.txt deste build vai ao job `assinar` como artefato do
+      # workflow: é o arquivo que o GoReleaser acabou de gerar, e não o que
+      # estiver no release quando a aprovação chegar.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: checksums
+          path: build/release/checksums.txt
+          if-no-files-found: error
+          retention-days: 7
+
+  assinar:
+    name: Assina o checksums.txt (Ed25519) e publica o release
+    needs: goreleaser
+    runs-on: ubuntu-latest
+    # A chave Ed25519 que assina o checksums.txt para a atualização automática
+    # mora neste environment, com aprovação obrigatória: o release de quem
+    # empurra uma tag não é assinado — nem publicado — sem um segundo "sim". O
+    # environment e o segredo são criados à mão no GitHub
+    # (docs/RELEASE-ASSINATURA.md).
+    #
+    # Neste job só rodam o checkout e o setup-go, fixados por SHA, a
+    # ferramenta deste repositório (só biblioteca padrão e o código do
+    # agente) e o `gh` que já vem no runner. Sem cache: um cache escrito por
+    # outro job não entra no processo que vê a chave.
+    environment: release
+    permissions:
+      contents: write   # subir a assinatura e publicar o rascunho
+      actions: read     # baixar o checksums.txt do job de build
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: '1.25'
+          cache: false
+
+      - name: Baixa o checksums.txt do job de build
+        run: gh run download "$GITHUB_RUN_ID" --name checksums --dir assinatura
+
+      # O que vai ser assinado é o que está no release: se o checksums.txt do
+      # rascunho não for, byte a byte, o do build, alguém mexeu no release
+      # entre os dois jobs — e a assinatura não sai.
+      - name: Confere o checksums.txt do release com o do build
         run: |
-          go run -tags release ./cmd/assinar-release verificar "${GITHUB_REF_NAME}" \
-            build/release/checksums.txt build/release/checksums.txt.ed25519
+          gh release download "$TAG" --pattern checksums.txt --dir do-release
+          cmp assinatura/checksums.txt do-release/checksums.txt
+
+      - name: Assina
+        env:
+          ARKAME_RELEASE_ED25519_KEY: ${{ secrets.ARKAME_RELEASE_ED25519_KEY }}
+        run: |
+          go run -tags release ./cmd/assinar-release assinar "$TAG" \
+            assinatura/checksums.txt assinatura/checksums.txt.ed25519
+
+      # A assinatura confere com a chave que os agentes têm embutida, para a
+      # versão desta tag. (O `assinar` já recusa a chave que não é uma das
+      # embutidas; este passo roda sem a chave no ambiente.)
+      - name: Confere a assinatura
+        run: |
+          go run -tags release ./cmd/assinar-release verificar "$TAG" \
+            assinatura/checksums.txt assinatura/checksums.txt.ed25519
+
+      - name: Sobe a assinatura ao release
+        run: gh release upload "$TAG" assinatura/checksums.txt.ed25519
+
+      # Só agora o release deixa de ser rascunho. Se qualquer passo acima
+      # falhar, o job falha, o workflow fica vermelho e o release continua
+      # rascunho: não há release público sem a assinatura Ed25519.
+      - name: Publica o release
+        run: gh release edit "$TAG" --draft=false

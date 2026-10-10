@@ -87,26 +87,12 @@ signs:
     artifacts: checksum
     output: true
 
-  # A assinatura que o AGENTE confere antes de trocar o próprio programa:
-  # Ed25519, com a chave de release (segredo ARKAME_RELEASE_ED25519_KEY do
-  # environment `release`), sobre a versão e o conteúdo do checksums.txt. O
-  # cosign acima fica para a auditoria humana — conferi-lo dentro do agente
-  # exigiria rede (TUF/Rekor) e uma biblioteca pesada. A ferramenta é deste
-  # repositório, só biblioteca padrão; sem a chave no ambiente ela falha e o
-  # release não sai. Ver docs/RELEASE-ASSINATURA.md.
-  - id: ed25519
-    cmd: go
-    signature: "${artifact}.ed25519"
-    args:
-      - run
-      - -tags=release
-      - ./cmd/assinar-release
-      - assinar
-      - "{{ .Version }}"
-      - "${artifact}"
-      - "${signature}"
-    artifacts: checksum
-    output: true
+# A assinatura que o AGENTE confere antes de trocar o próprio programa — a
+# Ed25519 do checksums.txt (`checksums.txt.ed25519`) — NÃO é feita aqui. Ela é
+# do job `assinar` do workflow de release, que roda depois deste, no
+# environment `release`, só com a ferramenta deste repositório
+# (cmd/assinar-release): a chave não fica no ambiente em que rodam o
+# GoReleaser, o cosign, o buildx e o go-winres. Ver docs/RELEASE-ASSINATURA.md.
 
 dockers:
   - id: amd64
@@ -157,6 +143,12 @@ release:
   github:
     owner: arkame-app
     name: arkame-agent
+  # O release nasce rascunho: quem o publica é o job `assinar`, depois de subir
+  # o checksums.txt.ed25519. Assim não existe release público sem a assinatura
+  # que os agentes conferem — e o install.sh, que baixa o "latest", não entrega
+  # uma versão que a aprovação do environment `release` ainda não viu.
+  draft: true
+  replace_existing_draft: true
   header: |
     ## Agent Arkame {{ .Version }}
 

@@ -3,9 +3,11 @@
 // programa (internal/atualizacao). Só biblioteca padrão; roda com `go run` na
 // release (.goreleaser.yaml) e na mão de quem guarda a chave.
 //
-//	assinar-release gerar
-//	    Gera um par de chaves e o imprime: a privada (uma linha, base64) e a
-//	    pública (a que vai em internal/atualizacao/chaves.go). Nada é gravado.
+//	assinar-release gerar --saida <arquivo>
+//	    Gera um par de chaves. A privada (uma linha, base64) é gravada no
+//	    arquivo dado, com modo 0600, e nunca aparece no terminal; o comando
+//	    recusa gravar por cima de um arquivo que já existe. Imprime só a
+//	    pública (a que vai em internal/atualizacao/chaves.go) e o caminho.
 //
 //	assinar-release assinar <versão> <checksums.txt> [<saída>]
 //	    Assina com a chave de ARKAME_RELEASE_ED25519_KEY e grava a assinatura
@@ -25,6 +27,8 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"strings"
 
@@ -47,11 +51,15 @@ func main() {
 
 func rodar(args []string) error {
 	if len(args) == 0 {
-		return errors.New("uso: assinar-release gerar | assinar <versão> <checksums.txt> [<saída>] | verificar <versão> <checksums.txt> [<assinatura>]")
+		return errors.New("uso: assinar-release gerar --saida <arquivo> | assinar <versão> <checksums.txt> [<saída>] | verificar <versão> <checksums.txt> [<assinatura>]")
 	}
 	switch args[0] {
 	case "gerar":
-		return gerar()
+		saida, err := saidaDoGerar(args[1:])
+		if err != nil {
+			return err
+		}
+		return gerar(saida, os.Stdout)
 	case "assinar":
 		if len(args) < 3 || len(args) > 4 {
 			return errors.New("uso: assinar-release assinar <versão> <checksums.txt> [<saída>]")
@@ -74,16 +82,60 @@ func rodar(args []string) error {
 	return fmt.Errorf("comando desconhecido: %s", args[0])
 }
 
-func gerar() error {
+// saidaDoGerar lê `--saida <arquivo>` (ou `--saida=<arquivo>`): onde a chave
+// privada vai ser gravada. Obrigatória — sem ela a privada só teria o
+// terminal para onde ir.
+func saidaDoGerar(args []string) (string, error) {
+	uso := errors.New("uso: assinar-release gerar --saida <arquivo>  (a chave privada vai para o arquivo, com modo 0600, e não para o terminal)")
+	switch {
+	case len(args) == 2 && (args[0] == "--saida" || args[0] == "-saida") && args[1] != "":
+		return args[1], nil
+	case len(args) == 1:
+		for _, prefixo := range []string{"--saida=", "-saida="} {
+			if v, ok := strings.CutPrefix(args[0], prefixo); ok && v != "" {
+				return v, nil
+			}
+		}
+	}
+	return "", uso
+}
+
+// gerar cria o par. A privada vai para o arquivo — criado aqui, com modo
+// 0600, nunca por cima de um que exista (O_EXCL): impressa no terminal ela
+// ficava no histórico de rolagem, no log de uma sessão gravada e em quem
+// estivesse olhando a tela. No terminal saem só a pública e o caminho.
+func gerar(saida string, w io.Writer) error {
 	publica, privada, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		return err
 	}
-	fmt.Println("Chave privada (segredo " + envChavePrivada + " do environment `release`; guarde também uma cópia fora do GitHub):")
-	fmt.Println(base64.StdEncoding.EncodeToString(privada.Seed()))
-	fmt.Println()
-	fmt.Println("Chave pública (constante chavePublicaAtual ou chavePublicaProxima em internal/atualizacao/chaves.go):")
-	fmt.Println(base64.StdEncoding.EncodeToString(publica))
+	f, err := os.OpenFile(saida, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			return fmt.Errorf("%s já existe: não gravo uma chave por cima de outro arquivo (escolha outro caminho, ou apague-o se for mesmo o caso)", saida)
+		}
+		return err
+	}
+	_, err = f.WriteString(base64.StdEncoding.EncodeToString(privada.Seed()) + "\n")
+	if serr := f.Sync(); err == nil {
+		err = serr
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		_ = os.Remove(saida)
+		return fmt.Errorf("gravando a chave privada em %s: %w", saida, err)
+	}
+	fmt.Fprintln(w, "Chave privada gravada em (modo 0600; não foi impressa):")
+	fmt.Fprintln(w, saida)
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Chave pública (constante chavePublicaAtual ou chavePublicaProxima em internal/atualizacao/chaves.go):")
+	fmt.Fprintln(w, base64.StdEncoding.EncodeToString(publica))
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Próximos passos (docs/RELEASE-ASSINATURA.md): guarde uma cópia do arquivo no cofre, grave o segredo com")
+	fmt.Fprintln(w, "  gh secret set "+envChavePrivada+" --env release < "+saida)
+	fmt.Fprintln(w, "e apague o arquivo.")
 	return nil
 }
 

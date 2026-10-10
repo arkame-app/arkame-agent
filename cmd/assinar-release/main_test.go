@@ -1,11 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/arkame-app/agent/internal/atualizacao"
@@ -69,5 +72,68 @@ func TestAssinarSemChaveFalha(t *testing.T) {
 	}
 	if _, err := os.Stat(arquivo + ".ed25519"); err == nil {
 		t.Fatal("ficou um arquivo de assinatura depois da falha")
+	}
+}
+
+// `gerar` grava a chave privada num arquivo 0600 e não a imprime: no terminal
+// saem só a pública e o caminho. Não grava por cima de arquivo que exista.
+func TestGerarGravaAPrivadaEmArquivoENaoAImprime(t *testing.T) {
+	saida := filepath.Join(t.TempDir(), "release.key")
+	var tela bytes.Buffer
+	if err := gerar(saida, &tela); err != nil {
+		t.Fatal(err)
+	}
+	conteudo, err := os.ReadFile(saida)
+	if err != nil {
+		t.Fatal(err)
+	}
+	privada := strings.TrimSpace(string(conteudo))
+	seed, err := base64.StdEncoding.DecodeString(privada)
+	if err != nil || len(seed) != ed25519.SeedSize {
+		t.Fatalf("o arquivo não traz o seed Ed25519 em base64: %q", conteudo)
+	}
+	if runtime.GOOS != "windows" {
+		fi, _ := os.Stat(saida)
+		if fi.Mode().Perm() != 0o600 {
+			t.Fatalf("modo do arquivo da chave = %v, queria 0600", fi.Mode().Perm())
+		}
+	}
+	if strings.Contains(tela.String(), privada) {
+		t.Fatalf("a chave privada foi impressa:\n%s", tela.String())
+	}
+	publica := base64.StdEncoding.EncodeToString(ed25519.NewKeyFromSeed(seed).Public().(ed25519.PublicKey))
+	if !strings.Contains(tela.String(), publica) || !strings.Contains(tela.String(), saida) {
+		t.Fatalf("a saída não traz a pública e o caminho:\n%s", tela.String())
+	}
+	// O arquivo gravado é o que o `assinar` lê do ambiente.
+	t.Setenv(envChavePrivada, string(conteudo))
+	t.Setenv(envChavePublica, publica)
+	checksums := filepath.Join(t.TempDir(), "checksums.txt")
+	_ = os.WriteFile(checksums, []byte("abc  arkame-agent_linux_amd64\n"), 0o644)
+	if err := rodar([]string{"assinar", "0.5.0", checksums}); err != nil {
+		t.Fatalf("assinar com a chave gerada: %v", err)
+	}
+	if err := rodar([]string{"verificar", "0.5.0", checksums}); err != nil {
+		t.Fatalf("verificar com a pública gerada: %v", err)
+	}
+
+	// Por cima de arquivo que existe: recusa, e o arquivo fica como estava.
+	if err := gerar(saida, &tela); err == nil {
+		t.Fatal("gravou uma chave nova por cima da que existia")
+	}
+	if depois, _ := os.ReadFile(saida); string(depois) != string(conteudo) {
+		t.Fatal("o arquivo da chave mudou na segunda tentativa")
+	}
+	// Sem --saida, não gera nada.
+	for _, args := range [][]string{{"gerar"}, {"gerar", "--saida"}, {"gerar", "--saida="}, {"gerar", "arquivo"}} {
+		if err := rodar(args); err == nil {
+			t.Fatalf("%v gerou uma chave sem ter onde gravar", args)
+		}
+	}
+	if s, err := saidaDoGerar([]string{"--saida=" + saida}); err != nil || s != saida {
+		t.Fatalf("--saida=: %q %v", s, err)
+	}
+	if s, err := saidaDoGerar([]string{"--saida", saida}); err != nil || s != saida {
+		t.Fatalf("--saida: %q %v", s, err)
 	}
 }
