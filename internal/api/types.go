@@ -224,6 +224,14 @@ type SessionStats struct {
 	FilesDeleted  int64 `json:"files_deleted"`
 	BytesUploaded int64 `json:"bytes_uploaded"`
 	BytesTotal    int64 `json:"bytes_total"`
+	// Estatísticas do índice em lotes (opcionais no contrato). Ponteiros: só
+	// vão quando o índice foi em lotes — no /complete inline o corpo é o de
+	// sempre.
+	FilesNew         *int64 `json:"files_new,omitempty"`
+	FilesChanged     *int64 `json:"files_changed,omitempty"`
+	FilesRemoved     *int64 `json:"files_removed,omitempty"`
+	FilesUnselected  *int64 `json:"files_unselected,omitempty"`
+	ChangedSameMtime *int64 `json:"changed_same_mtime,omitempty"`
 }
 
 type FileEntry struct {
@@ -232,6 +240,73 @@ type FileEntry struct {
 	Size       int64     `json:"size"`
 	SHA256     string    `json:"sha256"` // hex
 	ModifiedAt time.Time `json:"modified_at"`
+}
+
+// --- Índice em lotes e delta (contrato: escala, fase 2) ---
+
+// Capacidades do índice que o agente declara no heartbeat e no
+// /sessions/start. O painel só oferece o que foi declarado.
+const (
+	CapacidadeIndiceEmLotes = "index_batches"
+	CapacidadeIndiceDelta   = "index_delta"
+)
+
+// Operações de uma entrada do índice em lotes.
+const (
+	OpUpsert     = "upsert"     // presente nesta sessão com esta versão
+	OpRemoved    = "removed"    // estava na base e saiu da origem
+	OpUnselected = "unselected" // estava na base e saiu da seleção do plano
+)
+
+// IndexOffer é o `index` da resposta do /sessions/start. Ausente (ou Mode
+// "inline"): painel de antes do índice em lotes, e o /complete leva o
+// version_map inteiro, como sempre.
+type IndexOffer struct {
+	Mode       string `json:"mode"` // "inline" | "batches"
+	Delta      bool   `json:"delta"`
+	MaxEntries int    `json:"max_entries"`
+	MaxBytes   int    `json:"max_bytes"`
+	// BaseSessionID é a última sessão concluída deste agente + plano, ou
+	// vazio. O delta é relativo a ela.
+	BaseSessionID string `json:"base_session_id"`
+}
+
+// IndexEntry é uma entrada de um lote do índice
+// (POST /api/agents/{id}/sessions/{sid}/files).
+type IndexEntry struct {
+	Op         string     `json:"op"`
+	Key        string     `json:"key"`
+	VersionID  string     `json:"version_id,omitempty"`
+	Size       *int64     `json:"size,omitempty"`
+	SHA256     string     `json:"sha256,omitempty"`
+	ModifiedAt *time.Time `json:"modified_at,omitempty"`
+}
+
+// Upsert monta a entrada de um arquivo presente na sessão.
+func Upsert(e FileEntry) IndexEntry {
+	tam, data := e.Size, e.ModifiedAt
+	return IndexEntry{Op: OpUpsert, Key: e.Key, VersionID: e.VersionID, Size: &tam, SHA256: e.SHA256, ModifiedAt: &data}
+}
+
+// IndexBatch é o corpo de um lote.
+type IndexBatch struct {
+	Seq     int          `json:"seq"`
+	Entries []IndexEntry `json:"entries"`
+}
+
+// IndexBatchResponse é a resposta 200 de um lote.
+type IndexBatchResponse struct {
+	OK       bool  `json:"ok"`
+	Seq      int   `json:"seq"`
+	Received int64 `json:"received"`
+}
+
+// IndexSummary é o `index` do /complete quando o índice foi em lotes.
+type IndexSummary struct {
+	Mode          string  `json:"mode"` // "full" | "delta"
+	BaseSessionID *string `json:"base_session_id"`
+	Batches       int     `json:"batches"`
+	EntriesSent   int64   `json:"entries_sent"`
 }
 
 // --- Storage probe (discovered config) ---
