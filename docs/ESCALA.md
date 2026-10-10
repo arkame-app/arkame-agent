@@ -117,7 +117,7 @@ Leituras:
   ficaria em ~20–40 s com o cache de disco quente; com disco frio manda a varredura
   (`lstat` de cada arquivo), que é o que a bancada na VM tem de medir.
 - **Memória:** com lotes, o pico não acompanha o número de arquivos (45 MB na primeira com
-  100 mil; no teste em processo, 35–51 MiB com 100 mil e com 300 mil). No caminho inline o
+  100 mil; no teste em processo, 37–59 MiB com 300 mil). No caminho inline o
   mapa inteiro continua na memória, como antes — é o protocolo antigo, e o painel o limita
   em 150 mil arquivos.
 - **Painel antigo:** os três corpos do `/complete` têm exatamente o tamanho dos da
@@ -134,16 +134,16 @@ Leituras:
 Teste em processo (`TestEscalaMuitosArquivosPequenos`, caminho inteiro do daemon, bucket e
 painel falsos sem memória própria), arquivos de ~48 bytes:
 
-| Arquivos | Primeira | Sem mudança | 0,1% alterado | Pico de RSS (sem mudança) |
+| Arquivos | Primeira | Sem mudança | 0,1% alterado | Pico de RSS (primeira / sem mudança / 0,1%) |
 |---|---|---|---|---|
-| 20.000 | 9,1 s | 0,24 s | 0,28 s | 33 MiB |
-| 100.000 | 64,7 s | 2,4 s | 2,6 s | 35 MiB |
-| 300.000 | 145–168 s | 4,4–6,6 s | 4,7–8,7 s | 153 MiB ¹ |
+| 20.000 | 9,1 s | 0,24 s | 0,28 s | 48 / 33 / 34 MiB |
+| 100.000 | 64,7 s | 2,4 s | 2,6 s | 49 / 35 / 36 MiB |
+| 300.000 | 147 s | 4,1 s | 4,1 s | 50 / 37 / 59 MiB |
 
-¹ Medido antes do commit `5a9581d`, que tirou o arquivo de estado da conta (a 100 mil o
-pico caiu de ~75 para 35 MiB). **300 mil não foi medido de novo depois dele**, e 1 milhão
-não coube nesta máquina (o `/tmp` tem 1.048.576 inodes e a memória estava no limite): os
-dois ficam para a VM.
+O pico não acompanha o número de arquivos. Antes do commit `5a9581d` acompanhava: 153 MiB
+com 300 mil sem mudança, todos do arquivo de estado mapeado (o bbolt percorria o arquivo
+inteiro a cada abertura). 1 milhão não coube nesta máquina (o `/tmp` tem 1.048.576 inodes
+e a memória estava no limite): fica para a VM, com `ARKAME_TESTE_ESCALA=1000000`.
 
 ## Como medir
 
