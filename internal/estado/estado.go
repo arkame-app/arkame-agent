@@ -138,7 +138,7 @@ func abrirArquivo(caminho string, id Identidade) (b *Base, err error) {
 			err = fmt.Errorf("%w: %v", ErrCorrompido, r)
 		}
 		if err != nil && db != nil {
-			_ = db.Close()
+			_ = fecharComPrazo(db)
 		}
 	}()
 	antes := debug.SetPanicOnFault(true)
@@ -209,13 +209,35 @@ func (b *Base) Fechar() error {
 	return err
 }
 
-func (b *Base) fecharSemApagar() (err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			err = fmt.Errorf("%w: %v", ErrCorrompido, r)
-		}
+func (b *Base) fecharSemApagar() error {
+	return fecharComPrazo(b.db)
+}
+
+// prazoParaFechar é quanto o fechamento do arquivo pode levar.
+var prazoParaFechar = 5 * time.Second
+
+// fecharComPrazo fecha o arquivo sem ficar preso nele. Um pânico dentro do
+// bbolt (arquivo adulterado ou cortado) pode deixar uma trava interna dele
+// tomada, e o Close esperaria por ela para sempre — com o backup e a trava do
+// bucket presos junto. Passado o prazo o arquivo é largado aberto: é um
+// descritor a mais até o processo sair, e o estado é descartado de qualquer
+// forma.
+func fecharComPrazo(db *bolt.DB) error {
+	feito := make(chan error, 1)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				feito <- fmt.Errorf("%w: %v", ErrCorrompido, r)
+			}
+		}()
+		feito <- db.Close()
 	}()
-	return b.db.Close()
+	select {
+	case err := <-feito:
+		return err
+	case <-time.After(prazoParaFechar):
+		return fmt.Errorf("%w: o arquivo não fechou em %s", ErrCorrompido, prazoParaFechar)
+	}
 }
 
 // Corrompida diz se alguma operação acusou corrupção nesta abertura.
