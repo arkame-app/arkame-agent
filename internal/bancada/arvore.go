@@ -91,6 +91,10 @@ func escrever(caminho string, n int64, semente uint64) error {
 	return f.Close()
 }
 
+// dataBase é a data de modificação do primeiro arquivo gerado; os seguintes
+// vêm um segundo depois cada.
+var dataBase = time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+
 // Gerar cria a árvore. Devolve o total de bytes.
 func (a Arvore) Gerar() (int64, error) {
 	a.padroes()
@@ -106,6 +110,13 @@ func (a Arvore) Gerar() (int64, error) {
 		}
 		t := a.tamanhoDe(i)
 		if err := escrever(p, t, a.Semente+uint64(i)); err != nil {
+			return total, err
+		}
+		// Datas fixas e antigas, como numa árvore de verdade: arquivo
+		// gravado há menos de 2 s é "data suspeita" para o agente, e o
+		// backup seguinte o releria.
+		quando := dataBase.Add(time.Duration(i) * time.Second)
+		if err := os.Chtimes(p, quando, quando); err != nil {
 			return total, err
 		}
 		total += t
