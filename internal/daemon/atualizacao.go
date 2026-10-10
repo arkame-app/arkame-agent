@@ -216,6 +216,13 @@ func (a *atualizador) relatoDoHeartbeat() *api.UpdateReport {
 			r.At = &em
 		}
 	}
+	if r.At != nil {
+		idade := int64(time.Since(*r.At) / time.Second)
+		if idade < 0 {
+			idade = 0 // o relógio andou para trás desde o estado
+		}
+		r.AgeSeconds = &idade
+	}
 	r.Blocked = a.impedimento
 	if r == (api.UpdateReport{}) {
 		return nil

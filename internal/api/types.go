@@ -147,6 +147,11 @@ type UpdateReport struct {
 	// do disco): com o instante, o painel não toma o relato antigo pelo
 	// resultado de uma oferta nova. Ausente no agente anterior a este campo.
 	At *time.Time `json:"at,omitempty"`
+	// AgeSeconds é há quantos segundos o estado relatado é o atual, medido no
+	// relógio deste servidor no instante do envio. É o que o painel usa de
+	// preferência ao At: uma idade não depende de o relógio do servidor estar
+	// certo — e servidor com o relógio horas fora não é raro.
+	AgeSeconds *int64 `json:"age_s,omitempty"`
 	// Blocked: por que este agente não se atualiza sozinho ("disabled",
 	// "binary_dir_readonly", "no_service", …). Com ele o agente não declara
 	// a capacidade "self_update".

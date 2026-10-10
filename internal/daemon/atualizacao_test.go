@@ -495,6 +495,11 @@ func TestRelatoDoHeartbeatLevaOInstante(t *testing.T) {
 	if relato["state"] != "rolled_back" || relato["at"] != "2026-10-05T02:05:00Z" {
 		t.Fatalf("update = %#v", corpo()["update"])
 	}
+	// E a idade do estado, que não depende do relógio do servidor estar certo.
+	quer := time.Since(time.Date(2026, 10, 5, 2, 5, 0, 0, time.UTC)).Seconds()
+	if idade, ok := relato["age_s"].(float64); !ok || idade < quer-5 || idade > quer+5 {
+		t.Fatalf("age_s = %#v, queria perto de %.0f", relato["age_s"], quer)
+	}
 
 	antes := time.Now().Add(-time.Second)
 	a.relatar("failed", "0.5.0", atualizacao.FalhaDownload)
@@ -503,6 +508,9 @@ func TestRelatoDoHeartbeatLevaOInstante(t *testing.T) {
 	em, err := time.Parse(time.RFC3339Nano, fmt.Sprint(relato["at"]))
 	if err != nil || em.Before(antes) || relato["state"] != "failed" {
 		t.Fatalf("update = %#v (%v)", corpo()["update"], err)
+	}
+	if idade, ok := relato["age_s"].(float64); !ok || idade < 0 || idade > 5 {
+		t.Fatalf("age_s da falha recém-anotada = %#v", relato["age_s"])
 	}
 }
 
