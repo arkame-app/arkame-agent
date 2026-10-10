@@ -169,9 +169,21 @@ func OutrosAgentes(name string) []string {
 	return outrosEntre(runtime.GOOS, servicosDoAgente(ProgramaAtual()), name)
 }
 
-// ProgramaAtual é o executável deste processo, com links resolvidos. Vazio
-// quando o SO não diz. Vai ao painel no heartbeat (program_path).
-func ProgramaAtual() string {
+// ProgramaAtual é o executável deste processo, com links resolvidos, como
+// era quando o processo subiu. Vazio quando o SO não diz. Vai ao painel no
+// heartbeat (program_path).
+//
+// Lido uma vez, no arranque: no Linux o os.Executable lê /proc/self/exe a
+// cada chamada, e o nome segue o arquivo. Depois de uma troca por
+// renomeia-e-renomeia (sistema de arquivos sem link) feita pelo agente
+// vizinho, o processo que ainda roda o programa antigo passava a responder
+// "…/arkame-agent.anterior": o program_path ia errado ao painel, e quem
+// perguntasse "quais serviços usam este programa" deixava de achar os outros.
+func ProgramaAtual() string { return programaNoArranque }
+
+var programaNoArranque = lerProgramaAtual()
+
+func lerProgramaAtual() string {
 	exe, err := os.Executable()
 	if err != nil {
 		return ""

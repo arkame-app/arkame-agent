@@ -155,6 +155,7 @@ func enviarHeartbeatCom(ctx context.Context, c *api.Client, cfg *config.Config, 
 	var resp api.HeartbeatResponse
 	if err := c.POST(ctx, "/api/agents/"+cfg.AgentID+"/heartbeat", hb, &resp); err != nil {
 		slog.Warn("heartbeat falhou", "err", err)
+		atl.ouviuDoPainel(err)
 		return
 	}
 	slog.Debug("heartbeat ok")

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/http"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -116,6 +117,9 @@ type atualizador struct {
 	naoAntesDe map[string]time.Time
 	// saindo: a troca foi feita e o processo está de saída.
 	saindo atomic.Bool
+	// painel é o que o último heartbeat ouviu (atualizacao.RespostaDoPainel):
+	// decide se a prova que vence é estendida (painel fora do ar) ou não.
+	painel atomic.Int32
 
 	// aplicar é o atualizacao.Aplicar; os testes o trocam.
 	aplicar func(context.Context, atualizacao.Pedido, atualizacao.Opcoes) (*atualizacao.Resultado, error)
@@ -180,7 +184,11 @@ func (a *atualizador) relatoDoHeartbeat() *api.UpdateReport {
 	r := a.relato
 	a.mu.Unlock()
 	if r.State == "" {
-		r.State, r.Version, r.Error = atualizacao.Relato(a.programa, version.Version)
+		var em time.Time
+		r.State, r.Version, r.Error, em = atualizacao.RelatoComInstante(a.programa, version.Version)
+		if r.State != "" && !em.IsZero() {
+			r.At = &em
+		}
 	}
 	r.Blocked = a.impedimento
 	if r == (api.UpdateReport{}) {
@@ -190,9 +198,25 @@ func (a *atualizador) relatoDoHeartbeat() *api.UpdateReport {
 }
 
 func (a *atualizador) relatar(estado, versao, erro string) {
+	em := time.Now().UTC()
 	a.mu.Lock()
-	a.relato = api.UpdateReport{State: estado, Version: versao, Error: erro}
+	a.relato = api.UpdateReport{State: estado, Version: versao, Error: erro, At: &em}
 	a.mu.Unlock()
+}
+
+// ouviuDoPainel anota o resultado de um heartbeat: aceito (nil), não atendido
+// (rede, 5xx, 408, 429) ou recusado (os demais 4xx).
+func (a *atualizador) ouviuDoPainel(err error) {
+	if a == nil || err == nil {
+		return
+	}
+	resposta := atualizacao.PainelIndisponivel
+	var he *api.HTTPError
+	if errors.As(err, &he) && he.Status >= 400 && he.Status < 500 &&
+		he.Status != http.StatusRequestTimeout && he.Status != http.StatusTooManyRequests {
+		resposta = atualizacao.PainelRecusou
+	}
+	a.painel.Store(int32(resposta))
 }
 
 // receber é chamado com o `update` da resposta do heartbeat. Não bloqueia:
@@ -333,21 +357,42 @@ func ArgsDoAutoTeste(ctx context.Context, cfg *config.Config, s3c *s3.Client) []
 
 // vigiarProva dá ao programa novo o prazo da prova. Sem heartbeat aceito até
 // lá, o anterior volta ao lugar e o daemon encerra para o gerenciador subi-lo.
+//
+// Com o painel fora do ar — o último heartbeat deu erro de rede ou 5xx — a
+// prova é estendida, de passo em passo, até o teto (atualizacao.TetoDaProva):
+// um programa novo não pode ser desfeito porque o painel caiu logo depois da
+// troca. Voltam atrás no prazo normal: o processo que nem chegou a tentar um
+// heartbeat, e o que ouviu 401/403 até o fim do prazo. O processo que cai é
+// com a contagem de partidas (RegistrarArranque).
 func (a *atualizador) vigiarProva(ctx context.Context) {
 	if !a.prova.Aberta() {
 		return
 	}
 	slog.Info("programa novo em prova: precisa de um heartbeat aceito pelo painel",
 		"versao", version.Version, "prazo", atualizacao.PrazoDaProva)
+	inicio := time.Now()
 	timer := time.NewTimer(atualizacao.PrazoDaProva)
 	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-	case <-timer.C:
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+		}
+		if !a.prova.Aberta() {
+			return
+		}
+		if a.prova.Estende(atualizacao.RespostaDoPainel(a.painel.Load()), time.Since(inicio)) {
+			slog.Warn("o prazo da prova venceu com o painel fora do ar; a prova é estendida",
+				"versao", version.Version, "teto", atualizacao.TetoDaProva)
+			timer.Reset(atualizacao.PassoDaExtensao)
+			continue
+		}
 		if a.prova.Vencer() {
 			a.saindo.Store(true)
 			a.reiniciar()
 		}
+		return
 	}
 }
 

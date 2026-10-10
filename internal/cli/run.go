@@ -48,22 +48,10 @@ func newRunCmd() *cobra.Command {
 			// Docker: o programa da imagem passa a vez ao do volume, se houver
 			// um válido e mais novo. Só volta daqui se não há, ou se falhou.
 			lancarDoVolume(configFile)
-			// Programa novo em prova: conta esta partida. Na terceira sem um
-			// heartbeat aceito, o anterior volta ao lugar e este processo sai
-			// para o gerenciador de serviço subi-lo. Antes de tudo o mais: um
-			// programa que quebra ao carregar a configuração também conta.
-			if atualizacao.RegistrarArranque(service.ProgramaAtual(), version.Version, configFile) {
-				// Sob o SCM do Windows, sai já com o serviço no ar: o processo
-				// que morre antes de se apresentar ao SCM é uma partida que
-				// falhou, e não um serviço que caiu — e só o segundo é religado.
-				if handled, _ := service.RunAsService(serviceName, func(context.Context) error {
-					sairParaReiniciar()
-					return nil
-				}); !handled {
-					sairParaReiniciar()
-				}
-				return nil
-			}
+			// Este processo é o `.anterior` de uma troca que parou no meio
+			// (o caminho do programa ficou vazio): põe o programa de volta
+			// antes de seguir. Ver atualizacao.Recuperar.
+			recuperarSeSouOAnterior()
 			cfg, err := config.Load(configFile, config.Overrides{
 				HostRoot: hostRoot,
 			})
@@ -75,6 +63,25 @@ func newRunCmd() *cobra.Command {
 			}
 			if cfg.AgentID == "" {
 				return fmt.Errorf("agent sem identidade: nem AGENT_ID em %s nem o arquivo %s — rode 'arkame-agent install' de novo", configFile, cfg.AgentIDPath)
+			}
+			// Programa novo em prova: conta esta partida. Na terceira sem um
+			// heartbeat aceito, o anterior volta ao lugar e este processo sai
+			// para o gerenciador de serviço subi-lo. Só depois de a
+			// configuração carregar e de haver identidade e token: a partida
+			// que para antes disso é de um agente que não subiria com programa
+			// nenhum (o vizinho mal configurado, um `run` com o arquivo
+			// errado), e contá-la desfazia a troca de quem está bem.
+			if registrarArranque(service.ProgramaAtual(), version.Version, configFile) {
+				// Sob o SCM do Windows, sai já com o serviço no ar: o processo
+				// que morre antes de se apresentar ao SCM é uma partida que
+				// falhou, e não um serviço que caiu — e só o segundo é religado.
+				if handled, _ := service.RunAsService(serviceName, func(context.Context) error {
+					sairParaReiniciar()
+					return nil
+				}); !handled {
+					sairParaReiniciar()
+				}
+				return nil
 			}
 			// Instalações anteriores gravaram o token e a chave privada com
 			// os.WriteFile(0600), que no Windows não restringe nada. Protege
@@ -139,6 +146,24 @@ func newRunCmd() *cobra.Command {
 
 // sair é o os.Exit; os testes o trocam.
 var sair = os.Exit
+
+// registrarArranque é o atualizacao.RegistrarArranque; os testes o trocam.
+var registrarArranque = atualizacao.RegistrarArranque
+
+// recuperarSeSouOAnterior: quando quem está rodando é o `arkame-agent.anterior`
+// e o caminho do programa está vazio, a troca parou entre os dois renames.
+// Alguém executou o anterior à mão (ou por uma ação de recuperação do
+// serviço): ele põe o programa de volta no lugar.
+func recuperarSeSouOAnterior() {
+	programa, ok := atualizacao.ProgramaDoAnterior(service.ProgramaAtual())
+	if !ok {
+		return
+	}
+	if feito := atualizacao.Recuperar(programa); feito != "" {
+		slog.Warn("a troca do programa tinha parado no meio; pus o programa de volta no lugar",
+			"programa", programa, "qual", feito)
+	}
+}
 
 // sairParaReiniciar encerra o processo para o programa que está no disco
 // subir. No Docker não há gerenciador de serviço: este processo é trocado

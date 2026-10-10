@@ -142,6 +142,11 @@ type UpdateReport struct {
 	Version string `json:"version,omitempty"`
 	// Error é o código do motivo (falha, adiamento ou reversão).
 	Error string `json:"error,omitempty"`
+	// At é de quando é o estado relatado. O agente segue relatando a falha ou
+	// a reversão de uma tentativa até a próxima (a reversão fica no registro
+	// do disco): com o instante, o painel não toma o relato antigo pelo
+	// resultado de uma oferta nova. Ausente no agente anterior a este campo.
+	At *time.Time `json:"at,omitempty"`
 	// Blocked: por que este agente não se atualiza sozinho ("disabled",
 	// "binary_dir_readonly", "no_service", …). Com ele o agente não declara
 	// a capacidade "self_update".

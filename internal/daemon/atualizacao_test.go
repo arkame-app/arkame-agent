@@ -309,6 +309,13 @@ func TestHeartbeatDeclaraCapacidadesEEntregaOPedido(t *testing.T) {
 // lado e o registro da troca em prova — como a troca deixa.
 func instalacaoEmProva(t *testing.T) (programa string) {
 	t.Helper()
+	return instalacaoEmProvaDesde(t, time.Date(2026, 10, 5, 2, 0, 0, 0, time.UTC))
+}
+
+// instalacaoEmProvaDesde é a instalação em prova com a troca feita em quando
+// (o teto da prova conta dali).
+func instalacaoEmProvaDesde(t *testing.T, quando time.Time) (programa string) {
+	t.Helper()
 	dir := t.TempDir()
 	programa = filepath.Join(dir, "arkame-agent")
 	l := atualizacao.LugarDe(programa)
@@ -318,7 +325,8 @@ func instalacaoEmProva(t *testing.T) (programa string) {
 	if err := os.WriteFile(l.Anterior, []byte("anterior"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	registro := fmt.Sprintf(`{"situacao":"em_prova","versao":%q,"versao_anterior":"0.4.31","sha256":"x","aplicada_em":"2026-10-05T02:00:00Z"}`, version.Version)
+	registro := fmt.Sprintf(`{"situacao":"em_prova","versao":%q,"versao_anterior":"0.4.31","sha256":"x","aplicada_em":%q}`,
+		version.Version, quando.UTC().Format(time.RFC3339Nano))
 	if err := os.WriteFile(l.Estado, []byte(registro), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -342,7 +350,9 @@ func TestProgramaNovoSemHeartbeatVoltaAoAnterior(t *testing.T) {
 	t.Cleanup(func() { atualizacao.PrazoDaProva = antes })
 	atualizacao.PrazoDaProva = 150 * time.Millisecond
 
-	programa := instalacaoEmProva(t)
+	// A troca é de agora: o teto da prova está longe, e mesmo assim quem
+	// ouve "não" do painel volta no prazo normal.
+	programa := instalacaoEmProvaDesde(t, time.Now())
 	a, reinicios := atualizadorDeTeste(t, &trocaFalsa{})
 	a.programa = programa
 	a.prova = atualizacao.AbrirProva(programa, version.Version)
@@ -350,7 +360,7 @@ func TestProgramaNovoSemHeartbeatVoltaAoAnterior(t *testing.T) {
 		t.Fatal("a instalação em prova não abriu a prova")
 	}
 	// O painel recusa todos os heartbeats do programa novo.
-	c, _ := painelDoHeartbeat(t, func() (int, string) { return 500, `{"error":"x"}` })
+	c, _ := painelDoHeartbeat(t, func() (int, string) { return 401, `{"error":"x"}` })
 	enviarHeartbeatCom(context.Background(), c, a.cfg, service.Detected{}, &estadoDoToken{}, a)
 
 	a.vigiarProva(context.Background())
@@ -367,6 +377,132 @@ func TestProgramaNovoSemHeartbeatVoltaAoAnterior(t *testing.T) {
 	a.tentar(context.Background(), oferta)
 	if reinicios.Load() != 1 {
 		t.Fatal("uma troca nova começou com o daemon de saída")
+	}
+}
+
+// prazosDaProva encurta o prazo, o passo e o teto da prova para o teste.
+func prazosDaProva(t *testing.T, prazo, passo, teto time.Duration) {
+	t.Helper()
+	p, s, x := atualizacao.PrazoDaProva, atualizacao.PassoDaExtensao, atualizacao.TetoDaProva
+	t.Cleanup(func() { atualizacao.PrazoDaProva, atualizacao.PassoDaExtensao, atualizacao.TetoDaProva = p, s, x })
+	atualizacao.PrazoDaProva, atualizacao.PassoDaExtensao, atualizacao.TetoDaProva = prazo, passo, teto
+}
+
+// O painel cai logo depois da troca (5xx, 429, ou nem responde): o prazo da
+// prova vence e o programa novo NÃO é desfeito — a prova é estendida. Quando o
+// painel volta e aceita um heartbeat, a troca é confirmada.
+func TestProvaComPainelForaDoArEEstendida(t *testing.T) {
+	for nome, status := range map[string]int{"500": 500, "503": 503, "429": 429, "sem resposta": 0} {
+		t.Run(nome, func(t *testing.T) {
+			prazosDaProva(t, 100*time.Millisecond, 30*time.Millisecond, time.Minute)
+			programa := instalacaoEmProvaDesde(t, time.Now())
+			a, reinicios := atualizadorDeTeste(t, &trocaFalsa{})
+			a.programa = programa
+			a.prova = atualizacao.AbrirProva(programa, version.Version)
+
+			var noAr atomic.Bool
+			c, _ := painelDoHeartbeat(t, func() (int, string) {
+				if noAr.Load() {
+					return 200, `{"ok":true}`
+				}
+				return status, `{"error":"x"}`
+			})
+			if status == 0 {
+				// Ninguém escutando: erro de rede.
+				morto := httptest.NewServer(http.NotFoundHandler())
+				morto.Close()
+				fora, _ := api.New(api.Options{BaseURL: morto.URL, Bearer: "t"})
+				enviarHeartbeatCom(context.Background(), fora, a.cfg, service.Detected{}, &estadoDoToken{}, a)
+			} else {
+				enviarHeartbeatCom(context.Background(), c, a.cfg, service.Detected{}, &estadoDoToken{}, a)
+			}
+
+			fim := make(chan struct{})
+			go func() { a.vigiarProva(context.Background()); close(fim) }()
+			select {
+			case <-fim:
+				t.Fatalf("a prova terminou com o painel fora do ar: reinícios=%d, no lugar %q", reinicios.Load(), lerArquivo(t, programa))
+			case <-time.After(4 * atualizacao.PrazoDaProva):
+			}
+			if got := lerArquivo(t, programa); got != "novo" || reinicios.Load() != 0 {
+				t.Fatalf("o programa novo foi desfeito com o painel fora do ar: no lugar %q, reinícios %d", got, reinicios.Load())
+			}
+			// O painel volta.
+			noAr.Store(true)
+			enviarHeartbeatCom(context.Background(), c, a.cfg, service.Detected{}, &estadoDoToken{}, a)
+			select {
+			case <-fim:
+			case <-time.After(5 * time.Second):
+				t.Fatal("a prova confirmada não encerrou a vigia")
+			}
+			if reinicios.Load() != 0 || lerArquivo(t, programa) != "novo" {
+				t.Fatal("a troca confirmada depois da extensão foi desfeita")
+			}
+			if !strings.Contains(lerArquivo(t, atualizacao.LugarDe(programa).Estado), `"situacao": "confirmada"`) {
+				t.Fatalf("registro:\n%s", lerArquivo(t, atualizacao.LugarDe(programa).Estado))
+			}
+		})
+	}
+}
+
+// A extensão tem teto: o painel fora do ar além dele, o anterior volta.
+func TestProvaEstendidaVoltaNoTeto(t *testing.T) {
+	prazosDaProva(t, 50*time.Millisecond, 20*time.Millisecond, 400*time.Millisecond)
+	programa := instalacaoEmProvaDesde(t, time.Now())
+	a, reinicios := atualizadorDeTeste(t, &trocaFalsa{})
+	a.programa = programa
+	a.prova = atualizacao.AbrirProva(programa, version.Version)
+	c, _ := painelDoHeartbeat(t, func() (int, string) { return 503, `{"error":"x"}` })
+	enviarHeartbeatCom(context.Background(), c, a.cfg, service.Detected{}, &estadoDoToken{}, a)
+
+	inicio := time.Now()
+	a.vigiarProva(context.Background())
+	if d := time.Since(inicio); d < 300*time.Millisecond {
+		t.Fatalf("voltou em %v: não estendeu até o teto", d)
+	}
+	if reinicios.Load() != 1 || lerArquivo(t, programa) != "anterior" {
+		t.Fatalf("passado o teto, o anterior devia voltar: reinícios=%d, no lugar %q", reinicios.Load(), lerArquivo(t, programa))
+	}
+}
+
+// O processo que nem chegou a tentar um heartbeat não ganha extensão.
+func TestProvaSemNenhumHeartbeatVoltaNoPrazo(t *testing.T) {
+	prazosDaProva(t, 80*time.Millisecond, 20*time.Millisecond, time.Minute)
+	programa := instalacaoEmProvaDesde(t, time.Now())
+	a, reinicios := atualizadorDeTeste(t, &trocaFalsa{})
+	a.programa = programa
+	a.prova = atualizacao.AbrirProva(programa, version.Version)
+	a.vigiarProva(context.Background())
+	if reinicios.Load() != 1 || lerArquivo(t, programa) != "anterior" {
+		t.Fatalf("reinícios=%d, no lugar %q", reinicios.Load(), lerArquivo(t, programa))
+	}
+}
+
+// O relato leva o instante do estado relatado (`at`): o da reversão vem do
+// registro do disco; o da tentativa em curso, de quando ela foi anotada.
+func TestRelatoDoHeartbeatLevaOInstante(t *testing.T) {
+	programa := instalacaoEmProva(t)
+	l := atualizacao.LugarDe(programa)
+	registro := `{"situacao":"revertida","versao":"0.5.0","sha256":"x","aplicada_em":"2026-10-05T02:00:00Z","mudou_em":"2026-10-05T02:05:00Z","motivo":"no_heartbeat"}`
+	if err := os.WriteFile(l.Estado, []byte(registro), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a, _ := atualizadorDeTeste(t, &trocaFalsa{})
+	a.programa = programa
+	c, corpo := painelDoHeartbeat(t, func() (int, string) { return 200, `{"ok":true}` })
+	enviarHeartbeatCom(context.Background(), c, a.cfg, service.Detected{}, &estadoDoToken{}, a)
+	relato, _ := corpo()["update"].(map[string]any)
+	if relato["state"] != "rolled_back" || relato["at"] != "2026-10-05T02:05:00Z" {
+		t.Fatalf("update = %#v", corpo()["update"])
+	}
+
+	antes := time.Now().Add(-time.Second)
+	a.relatar("failed", "0.5.0", atualizacao.FalhaDownload)
+	enviarHeartbeatCom(context.Background(), c, a.cfg, service.Detected{}, &estadoDoToken{}, a)
+	relato, _ = corpo()["update"].(map[string]any)
+	em, err := time.Parse(time.RFC3339Nano, fmt.Sprint(relato["at"]))
+	if err != nil || em.Before(antes) || relato["state"] != "failed" {
+		t.Fatalf("update = %#v (%v)", corpo()["update"], err)
 	}
 }
 
