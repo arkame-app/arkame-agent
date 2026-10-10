@@ -321,4 +321,8 @@ Lidas do env-file ou das env vars do processo (CLI tem precedência).
 | `SIBLING_BUCKETS` | Buckets atendidos por outros processos deste agente no host (CSV): planos e restaurações desses buckets ficam para o irmão |
 | `POLL_INTERVAL_SEC` | Intervalo de consulta de planos e restaurações (padrão 60) |
 | `HEARTBEAT_INTERVAL_SEC` | Intervalo do heartbeat (padrão 60) |
+| `ARKAME_STATE_DIR` | Pasta do estado local do backup (o que o agente já sabe de cada arquivo, para não reler o que não mudou). Padrão: `<HOST_ROOT>/var/lib/arkame/estado` (Linux, root), `~/.local/state/arkame/estado` (Linux, usuário), `%ProgramData%\Arkame\estado` (Windows), `/Library/Application Support/Arkame/estado` (macOS). `off` desliga: todo backup lê e confere tudo. A pasta nunca entra no backup; apagá-la é seguro (o backup seguinte a reconstrói, sem reenviar arquivo igual). Ver `docs/ESCALA.md` |
+| `ARKAME_REHASH_ALL` | `1`: todo backup relê e confere no bucket todos os arquivos, ignorando o atalho do estado (o mesmo que `run --rehash-all`) |
+| `ARKAME_VERIFY_DAYS` | Ciclo, em dias, da reconferência rotativa — cada arquivo é relido e conferido no bucket uma vez por ciclo (padrão 30) |
+| `UPLOAD_CONCURRENCY` | Quantos arquivos o backup lê e envia ao mesmo tempo (padrão: 4, ou o número de CPUs se menor). O limite de banda do plano vale para a soma |
 

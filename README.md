@@ -250,6 +250,8 @@ only. Process environment variables override the file.
 | `POLL_INTERVAL_SEC`, `HEARTBEAT_INTERVAL_SEC` | Plan/restore polling and heartbeat intervals (default 60) |
 | `TOKEN_PATH`, `PRIVATE_KEY_PATH`, `AGENT_ID_PATH`, `AGENT_ID` | Agent identity files (written at enrollment) |
 | `SIBLING_BUCKETS` | Buckets served by other agent processes on the same host |
+| `ARKAME_STATE_DIR` | Folder for the local backup state (what the agent already knows about each file, so unchanged files are not re-read). Default `/var/lib/arkame/estado` under `HOST_ROOT` (per-user and per-OS equivalents elsewhere); `off` disables it. Never backed up; safe to delete |
+| `ARKAME_REHASH_ALL`, `ARKAME_VERIFY_DAYS`, `UPLOAD_CONCURRENCY` | Force a full re-read on every backup (`1`); rotating re-verification cycle in days (default 30); files processed in parallel (default 4) |
 | `HTTPS_PROXY`, `NO_PROXY` | Standard proxy variables, honored for panel calls. Read from the process environment only; see below |
 
 `HTTPS_PROXY` and `NO_PROXY` are not settings the agent reads from the file:
