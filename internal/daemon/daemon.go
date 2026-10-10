@@ -208,7 +208,8 @@ func valorOuNada(n *int64) any {
 	return *n
 }
 
-// probeLoop chama Probe periodicamente (1×/h) e também atende solicitações
+// probeLoop sonda o bucket periodicamente (1×/h; a medição de ocupação, em
+// bucket grande, 1×/dia — ver medidorDeUso) e também atende solicitações
 // on-demand ("Testar conexão" no painel) via poll a cada 30s do endpoint
 // /probe-request — assim o usuário não espera até 1h pra ver o resultado.
 func probeLoop(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config.Config) {
@@ -216,12 +217,20 @@ func probeLoop(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config.C
 	defer periodic.Stop()
 	onDemand := time.NewTicker(30 * time.Second)
 	defer onDemand.Stop()
+	medidor := novoMedidorDeUso(cfg)
 
 	run := func() {
 		if cfg.StorageBucket == "" || cfg.StorageID == "" {
 			return
 		}
-		report := storage.Probe(ctx, s3c, cfg.StorageBucket, cfg.StorageID)
+		report := storage.ProbeConfig(ctx, s3c, cfg.StorageBucket, cfg.StorageID)
+		if report.Error == "" {
+			// A ocupação lista o bucket inteiro: em bucket grande, uma vez
+			// por dia (ver medidorDeUso); entre uma e outra vai a última.
+			if uso := medidor.uso(ctx, s3c, cfg.StorageBucket); uso != nil {
+				report.UsedBytes, report.ObjectCount = &uso.Bytes, &uso.Objetos
+			}
+		}
 		body := corpoDoProbe(report)
 		if err := c.POST(ctx, "/api/agents/"+cfg.AgentID+"/probe", body, nil); err != nil {
 			slog.Warn("probe POST falhou", "err", err)

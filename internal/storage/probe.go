@@ -37,6 +37,28 @@ func VersioningStatus(ctx context.Context, client *s3.Client, bucket string) (st
 //   - GetObjectLockConfiguration (pode falhar se bucket não tem Object Lock)
 //   - GetBucketLifecycleConfiguration (pode falhar se não há lifecycle setado)
 func Probe(ctx context.Context, client *s3.Client, bucket, storageID string) api.ProbeReport {
+	report := ProbeConfig(ctx, client, bucket, storageID)
+	if report.Error != "" {
+		return report
+	}
+	// Ocupação real: soma o tamanho de todas as versões (ListObjectVersions
+	// paginado). O bucket é versionado e a cobrança do provedor conta cada
+	// versão antiga; o ListObjectsV2 só via a atual e subestimava a ocupação.
+	// Não fatal se falhar — o resto do probe ainda é útil —, mas aí os campos
+	// vão ausentes: um 0 aparecia no painel como "0 B", bucket vazio.
+	if uso, err := MedirUso(ctx, client, bucket); err == nil {
+		report.UsedBytes = &uso.Bytes
+		report.ObjectCount = &uso.Objetos
+	}
+	return report
+}
+
+// ProbeConfig é o Probe sem a medição de ocupação: só as consultas baratas
+// (versionamento, Object Lock, ciclo de vida), uma requisição cada. A
+// ocupação lista o bucket inteiro — mil versões por requisição — e num
+// bucket grande não cabe na sondagem de hora em hora; quem chama decide
+// quando medi-la (MedirUso).
+func ProbeConfig(ctx context.Context, client *s3.Client, bucket, storageID string) api.ProbeReport {
 	report := api.ProbeReport{
 		StorageID: storageID,
 		ProbedAt:  time.Now().UTC(),
@@ -79,16 +101,6 @@ func Probe(ctx context.Context, client *s3.Client, bucket, storageID string) api
 		report.Lifecycle, report.NoncurrentExpirationDays, report.NoncurrentTransitions = lerLifecycle(lr.Rules)
 	case !IsBenignProbeError(err):
 		report.LifecycleError = textoDoErro(err)
-	}
-
-	// Ocupação real: soma o tamanho de todas as versões (ListObjectVersions
-	// paginado). O bucket é versionado e a cobrança do provedor conta cada
-	// versão antiga; o ListObjectsV2 só via a atual e subestimava a ocupação.
-	// Não fatal se falhar — o resto do probe ainda é útil —, mas aí os campos
-	// vão ausentes: um 0 aparecia no painel como "0 B", bucket vazio.
-	if used, count, err := measureUsage(ctx, client, bucket); err == nil {
-		report.UsedBytes = &used
-		report.ObjectCount = &count
 	}
 
 	return report
@@ -147,28 +159,40 @@ func lerLifecycle(rules []types.LifecycleRule) (regras []api.Lifecycle, menorNao
 	return regras, menorNaoAtual, classesNaoAtuais
 }
 
-// measureUsage pagina ListObjectVersions: bytes é a soma de todas as versões
-// (a ocupação que o provedor cobra) e objects é o nº de arquivos presentes
-// (versões atuais; delete marker não tem tamanho nem conta como arquivo).
-// Para buckets muito grandes isto pode ser caro; o probe roda só 1×/h ou
-// on-demand.
-func measureUsage(ctx context.Context, client *s3.Client, bucket string) (bytes, objects int64, err error) {
+// Uso é a ocupação medida do bucket.
+type Uso struct {
+	// Bytes é a soma de todas as versões (a ocupação que o provedor cobra).
+	Bytes int64 `json:"bytes"`
+	// Objetos é o nº de arquivos presentes (versões atuais; delete marker não
+	// tem tamanho nem conta como arquivo).
+	Objetos int64 `json:"objetos"`
+	// Versoes é quantas versões a listagem percorreu — o tamanho da própria
+	// medição: uma requisição a cada mil.
+	Versoes int64 `json:"versoes"`
+}
+
+// MedirUso pagina ListObjectVersions pelo bucket inteiro. Caro em bucket
+// grande (uma requisição e ~400 KB de XML a cada mil versões): quem chama
+// espaça as medições.
+func MedirUso(ctx context.Context, client *s3.Client, bucket string) (Uso, error) {
+	var u Uso
 	p := s3.NewListObjectVersionsPaginator(client, &s3.ListObjectVersionsInput{Bucket: &bucket})
 	for p.HasMorePages() {
 		page, err := p.NextPage(ctx)
 		if err != nil {
-			return 0, 0, err
+			return Uso{}, err
 		}
 		for _, v := range page.Versions {
+			u.Versoes++
 			if v.Size != nil {
-				bytes += *v.Size
+				u.Bytes += *v.Size
 			}
 			if v.IsLatest != nil && *v.IsLatest {
-				objects++
+				u.Objetos++
 			}
 		}
 	}
-	return bytes, objects, nil
+	return u, nil
 }
 
 // textoDoErro resume o erro do S3 para o painel: o código e a mensagem do
