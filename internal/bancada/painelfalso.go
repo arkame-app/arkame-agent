@@ -41,6 +41,9 @@ type PainelFalso struct {
 	// Responder, se devolver status != 0, responde no lugar do painel. rota é
 	// o último segmento do caminho ("start", "files", "complete", "fail"…).
 	Responder func(rota string, r *http.Request, corpo []byte) (int, string)
+	// Engolir, se devolver true, faz o painel processar a requisição e
+	// responder 502: o pedido chegou e a resposta se perdeu.
+	Engolir func(rota string, corpo []byte) bool
 	// Planos é o que GET /plans devolve. Iniciar a sessão de um plano tira o
 	// next_run_at dele (disparo único), como o painel faz com o plano manual.
 	Planos []api.Plan
@@ -253,6 +256,13 @@ func (p *PainelFalso) anotar(rota string, bytes, status int) {
 	e.Status[status]++
 }
 
+// descarte joga fora a resposta do painel (ver Engolir).
+type descarte struct{}
+
+func (descarte) Header() http.Header         { return http.Header{} }
+func (descarte) Write(b []byte) (int, error) { return len(b), nil }
+func (descarte) WriteHeader(int)             {}
+
 // gravador anota o status de cada resposta.
 type gravador struct {
 	http.ResponseWriter
@@ -278,8 +288,20 @@ func (p *PainelFalso) ServeHTTP(w0 http.ResponseWriter, r *http.Request) {
 	if len(seg) == 5 && seg[3] == "fs-requests" {
 		rota = "fs-requests"
 	}
+	engolida := false
+	if p.Engolir != nil && p.Engolir(rota, corpo) {
+		engolida = true
+		real := w0
+		w0 = descarte{}
+		defer func() {
+			real.WriteHeader(http.StatusBadGateway)
+		}()
+	}
 	w := &gravador{ResponseWriter: w0, status: 200}
 	defer func() {
+		if engolida {
+			w.status = http.StatusBadGateway
+		}
 		p.mu.Lock()
 		p.anotar(rota, len(corpo), w.status)
 		p.mu.Unlock()

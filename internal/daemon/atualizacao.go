@@ -135,6 +135,15 @@ func programaDaTroca(cfg *config.Config) string {
 	return service.ProgramaAtual()
 }
 
+// arquivoNaPastaDoEstado é um arquivo qualquer da pasta do estado local, para
+// ela entrar nas pastasDoAgente ("" sem estado).
+func arquivoNaPastaDoEstado(cfg *config.Config) string {
+	if cfg.StateDir == "" {
+		return ""
+	}
+	return filepath.Join(cfg.StateDir, "estado.db")
+}
+
 // pastasDoAgente são as pastas onde a restauração nunca grava
 // (restore.ErrDestinoProtegido): a do programa que este processo executa, a do
 // programa que a atualização troca (no Docker, bin/ no volume) e as da
@@ -145,6 +154,7 @@ func pastasDoAgente(cfg *config.Config) []string {
 	for _, arquivo := range []string{
 		service.ProgramaAtual(), programaDaTroca(cfg),
 		cfg.ConfigPath, cfg.TokenPath, cfg.PrivateKeyPath, cfg.AgentIDPath,
+		arquivoNaPastaDoEstado(cfg),
 	} {
 		if arquivo == "" || !filepath.IsAbs(arquivo) {
 			continue
@@ -193,10 +203,17 @@ func novoAtualizador(cfg *config.Config, svc service.Detected, s3c *s3.Client, o
 // capacidades é o que o agente declara ao painel. Sempre lista, nunca nil:
 // no JSON, ausente é agente antigo.
 func (a *atualizador) capacidades() []string {
+	caps := capacidadesDoIndice()
 	if a == nil || a.impedimento != "" {
-		return []string{}
+		return caps
 	}
-	return []string{atualizacao.Capacidade}
+	return append(caps, atualizacao.Capacidade)
+}
+
+// capacidadesDoIndice são as que todo agente desta versão declara: o índice
+// em lotes e em delta. Não dependem da instalação.
+func capacidadesDoIndice() []string {
+	return []string{api.CapacidadeIndiceEmLotes, api.CapacidadeIndiceDelta}
 }
 
 // relatoDoHeartbeat monta o `update` do heartbeat: a tentativa em curso (ou a

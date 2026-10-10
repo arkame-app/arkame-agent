@@ -149,6 +149,18 @@ func (r *Result) Guardados() int64 {
 // blocoDoEstado é de quantas em quantas entradas o estado local é gravado.
 var blocoDoEstado = 2048
 
+// EntradaDoEstado monta, a partir do estado local, a entrada do índice de um
+// arquivo presente — a mesma que o atalho emite.
+func EntradaDoEstado(prefixo, rel string, ent estado.Entrada) api.FileEntry {
+	return api.FileEntry{
+		Key:        prefixo + rel,
+		VersionID:  ent.Versao,
+		Size:       ent.Tamanho,
+		SHA256:     hex.EncodeToString(ent.SHA256[:]),
+		ModifiedAt: dataParaOPainel(time.Unix(ent.MtimeSeg, int64(ent.MtimeNano))),
+	}
+}
+
 // ErrIndice: uma entrada do índice não pôde ser entregue a EngineOptions.Emitir.
 var ErrIndice = errors.New("não consegui registrar o índice da sessão")
 

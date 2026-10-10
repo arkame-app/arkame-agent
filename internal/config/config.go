@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 )
@@ -89,6 +90,21 @@ type Config struct {
 	// AutoUpdate é o valor de ARKAME_AUTO_UPDATE (ambiente ou env-file):
 	// "off" desliga a atualização automática do programa. Vazio: ligada.
 	AutoUpdate string
+
+	// StateDir é a pasta do estado local do backup (ARKAME_STATE_DIR; "off"
+	// desliga): o que o agente já sabe de cada arquivo, para não reler nem
+	// conferir no bucket o que não mudou. Vazio: sem estado — todo backup lê
+	// e confere tudo. O Load dá o padrão do sistema (PastaDoEstado).
+	StateDir string
+	// UploadConcurrency é quantos arquivos o backup trata ao mesmo tempo
+	// (UPLOAD_CONCURRENCY). Zero: min(4, CPUs).
+	UploadConcurrency int
+	// RehashAll (ARKAME_REHASH_ALL=1, ou `run --rehash-all`): todo backup
+	// relê e confere todos os arquivos, mesmo os que o estado diria iguais.
+	RehashAll bool
+	// VerifyDays é o ciclo, em dias, da reconferência rotativa
+	// (ARKAME_VERIFY_DAYS). Zero: 30.
+	VerifyDays int
 }
 
 // Overrides representa valores vindos da CLI que têm precedência sobre env.
@@ -96,6 +112,8 @@ type Overrides struct {
 	EnrollmentToken string
 	PanelURL        string
 	HostRoot        string
+	// RehashAll liga Config.RehashAll (a flag --rehash-all).
+	RehashAll bool
 	// Pendentes são linhas do env-file ("CHAVE=valor") que o install ainda
 	// não gravou: valem como se estivessem no arquivo (o ambiente do processo
 	// continua vencendo). O install só as grava com a aprovação
@@ -164,6 +182,16 @@ func Load(envFile string, o Overrides) (*Config, error) {
 		HeartbeatIntervalSec: segundosOu(get("HEARTBEAT_INTERVAL_SEC"), 60),
 		PollIntervalSec:      segundosOu(get("POLL_INTERVAL_SEC"), 60),
 		AutoUpdate:           get("ARKAME_AUTO_UPDATE"),
+		UploadConcurrency:    naoNegativo(get("UPLOAD_CONCURRENCY")),
+		RehashAll:            o.RehashAll || ligado(get("ARKAME_REHASH_ALL")),
+		VerifyDays:           naoNegativo(get("ARKAME_VERIFY_DAYS")),
+	}
+	switch dir := get("ARKAME_STATE_DIR"); {
+	case strings.EqualFold(dir, "off"):
+	case dir != "":
+		cfg.StateDir = dir
+	default:
+		cfg.StateDir = PastaDoEstado(cfg.HostRoot)
 	}
 
 	// O AGENT_ID só entrava pelo env-file, e só o `install` com a pergunta da
@@ -218,6 +246,71 @@ func (c *Config) LoadToken() (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(b)), nil
+}
+
+// PastaDoEstado é a pasta padrão do estado local do backup neste sistema e
+// escopo. Fica fora de /etc (só leitura para o serviço do Linux) e, no
+// Docker, no disco do servidor (/host), que persiste entre containers.
+//
+//   - Linux, root: <HostRoot>/var/lib/arkame/estado
+//   - Linux, usuário: $XDG_STATE_HOME/arkame/estado, ou ~/.local/state/arkame/estado
+//   - Windows: %ProgramData%\Arkame\estado
+//   - macOS: /Library/Application Support/Arkame/estado (root), ou a do usuário
+//
+// Vazio quando não há como saber (usuário sem home).
+func PastaDoEstado(hostRoot string) string {
+	return pastaDoEstado(runtime.GOOS, os.Geteuid() == 0, hostRoot, os.Getenv, os.UserHomeDir)
+}
+
+func pastaDoEstado(sistema string, root bool, hostRoot string, env func(string) string, home func() (string, error)) string {
+	doUsuario := func(partes ...string) string {
+		h, err := home()
+		if err != nil || h == "" {
+			return ""
+		}
+		return filepath.Join(append([]string{h}, partes...)...)
+	}
+	switch sistema {
+	case "windows":
+		pd := env("ProgramData")
+		if pd == "" {
+			pd = `C:\ProgramData`
+		}
+		return filepath.Join(pd, "Arkame", "estado")
+	case "darwin":
+		if root {
+			return "/Library/Application Support/Arkame/estado"
+		}
+		return doUsuario("Library", "Application Support", "Arkame", "estado")
+	}
+	if root {
+		if hostRoot == "" {
+			hostRoot = "/"
+		}
+		return filepath.Join(hostRoot, "var", "lib", "arkame", "estado")
+	}
+	if x := env("XDG_STATE_HOME"); filepath.IsAbs(x) {
+		return filepath.Join(x, "arkame", "estado")
+	}
+	return doUsuario(".local", "state", "arkame", "estado")
+}
+
+// ligado lê um sim/não de variável: 1, true, yes, on, sim.
+func ligado(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes", "on", "sim":
+		return true
+	}
+	return false
+}
+
+// naoNegativo lê um inteiro; inválido ou negativo vira zero (o padrão).
+func naoNegativo(v string) int {
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
 }
 
 func firstNonEmpty(vv ...string) string {

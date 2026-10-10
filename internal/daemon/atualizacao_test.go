@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	gosync "sync"
 	"sync/atomic"
@@ -228,8 +229,8 @@ func TestAgenteImpedidoNaoDeclaraNemAplica(t *testing.T) {
 	f := &trocaFalsa{}
 	a, _ := atualizadorDeTeste(t, f)
 	a.impedimento = atualizacao.ImpedidaPastaSoLeitura
-	if c := a.capacidades(); c == nil || len(c) != 0 {
-		t.Fatalf("capacidades = %#v, queria a lista vazia", c)
+	if c := a.capacidades(); c == nil || slices.Contains(c, atualizacao.Capacidade) || !slices.Equal(c, capacidadesDoIndice()) {
+		t.Fatalf("capacidades = %#v, queria só as do índice, sem a de atualização", c)
 	}
 	if r := a.relatoDoHeartbeat(); r == nil || r.Blocked != atualizacao.ImpedidaPastaSoLeitura {
 		t.Fatalf("relato = %+v", r)
@@ -278,7 +279,8 @@ func TestHeartbeatDeclaraCapacidadesEEntregaOPedido(t *testing.T) {
 
 	enviado := corpo()
 	caps, ok := enviado["capabilities"].([]any)
-	if !ok || len(caps) != 1 || caps[0] != atualizacao.Capacidade {
+	if !ok || len(caps) != 3 || !slices.Contains(caps, any(atualizacao.Capacidade)) ||
+		!slices.Contains(caps, any(api.CapacidadeIndiceEmLotes)) || !slices.Contains(caps, any(api.CapacidadeIndiceDelta)) {
 		t.Fatalf("capabilities = %#v", enviado["capabilities"])
 	}
 	relato, _ := enviado["update"].(map[string]any)
@@ -295,9 +297,10 @@ func TestHeartbeatDeclaraCapacidadesEEntregaOPedido(t *testing.T) {
 	}
 
 	// Sem atualizador (o heartbeat de um comando avulso) e com o agente
-	// impedido, o campo vai como lista vazia — ausente é agente antigo.
+	// impedido, o campo leva só as capacidades do índice, que não dependem
+	// da instalação — sempre lista: ausente é agente antigo.
 	enviarHeartbeat(context.Background(), c, a.cfg, service.Detected{}, &estadoDoToken{})
-	if caps, ok := corpo()["capabilities"].([]any); !ok || len(caps) != 0 {
+	if caps, ok := corpo()["capabilities"].([]any); !ok || len(caps) != 2 || slices.Contains(caps, any(atualizacao.Capacidade)) {
 		t.Fatalf("sem atualizador: capabilities = %#v", corpo()["capabilities"])
 	}
 	if _, tem := corpo()["update"]; tem {

@@ -110,7 +110,7 @@ func capacidadesDoAgente() []string {
 	if c, ok := capacidadesDeclaradas.Load().([]string); ok && c != nil {
 		return c
 	}
-	return []string{}
+	return capacidadesDoIndice()
 }
 
 func heartbeatLoop(ctx context.Context, c *api.Client, cfg *config.Config, svc service.Detected, atl *atualizador) {
@@ -414,7 +414,10 @@ func versionamentoAtivo(ctx context.Context, s3c *s3.Client, bucket string) erro
 // executePlan implementa o ciclo backup completo:
 //  1. POST /sessions/start → recebe sessionId
 //  2. syncengine.Run percorre paths, hash + upload S3 streamed
-//  3. POST /sessions/[sid]/complete com version_map inline
+//  3. POST /sessions/[sid]/complete — com o version_map inline, ou, quando o
+//     painel oferece o índice em lotes (`index` na resposta do /start), só
+//     com as estatísticas: as entradas já foram por /sessions/[sid]/files
+//     durante o backup (ver sessao_indice.go)
 //  4. Em erro de upload: POST /sessions/[sid]/fail
 func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config.Config, plan api.Plan) error {
 	// As exclusões vão ao painel junto com as pastas: são as que o walker usa
@@ -455,6 +458,9 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 		SessionID string `json:"session_id"`
 		StorageID string `json:"storage_id"`
 		StartedAt string `json:"started_at"`
+		// Index: como o painel quer o índice desta sessão. Ausente: painel de
+		// antes do índice em lotes — o /complete leva o version_map inteiro.
+		Index *api.IndexOffer `json:"index"`
 	}
 	if err := c.POST(ctx, "/api/agents/"+cfg.AgentID+"/sessions/start", startReq, &startResp); err != nil {
 		return fmt.Errorf("session start: %w", err)
@@ -536,15 +542,25 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 		slog.Info("comando de antes concluído", "plan_id", plan.ID, "duracao", r.Duration)
 	}
 
-	result, syncErr := rodarSync(ctx, syncengine.EngineOptions{
+	prefixoDasChaves := prefixo + "data/" + cfg.AgentID + "/"
+	indice, err := abrirSessaoDeIndice(ctx, c, cfg, plan, startResp.SessionID, startResp.Index, prefixoDasChaves)
+	if err != nil {
+		slog.Error("não consegui preparar o índice da sessão; backup abortado", "plan_id", plan.ID, "err", err)
+		marcarFalha(ctx, c, cfg, startResp.SessionID, corpoDaFalha{ErrorCode: "sync_failed", ErrorMessage: err.Error()})
+		return err
+	}
+	defer indice.fechar()
+	opcoes := syncengine.EngineOptions{
 		S3:           s3c,
 		Bucket:       plan.StorageRef.Bucket,
-		PrefixRoot:   prefixo + "data/" + cfg.AgentID + "/",
+		PrefixRoot:   prefixoDasChaves,
 		HostRoot:     cfg.HostRoot,
 		SourcePaths:  plan.SourcePaths,
 		ExcludeGlobs: exclusoes,
 		MaxMbps:      plan.Throttle.MaxMbps,
-	})
+	}
+	indice.configurar(&opcoes, cfg)
+	result, syncErr := rodarSync(ctx, opcoes)
 	// Comando de depois: roda com sucesso OU com falha, porque é ele que limpa
 	// o dump temporário — deixar o arquivo para trás encheria o disco do
 	// cliente justamente nos dias em que o backup deu errado.
@@ -595,7 +611,7 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 	// version_map, a sessão fecha como agent_stopped; com parte guardada,
 	// segue parcial (o que subiu é restaurável) com sync_interrupted.
 	envioInterrompido := errors.Is(syncErr, context.Canceled) && ctx.Err() != nil
-	if envioInterrompido && (result == nil || len(result.VersionMap) == 0) {
+	if envioInterrompido && result.Guardados() == 0 {
 		slog.Warn("envio interrompido pela parada do serviço; nada foi guardado", "plan_id", plan.ID)
 		marcarFalha(ctx, c, cfg, startResp.SessionID, struct {
 			ErrorCode    string `json:"error_code"`
@@ -635,51 +651,35 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 		return fmt.Errorf("backup falhou: %s", msg)
 	}
 
-	// Mapeia FileEntry pro JSON que o painel espera
-	type entry struct {
-		Key        string    `json:"key"`
-		VersionID  string    `json:"version_id"`
-		Size       int64     `json:"size"`
-		SHA256     string    `json:"sha256"`
-		ModifiedAt time.Time `json:"modified_at"`
-	}
-	versionMap := make([]entry, 0, len(result.VersionMap))
-	for _, e := range result.VersionMap {
-		// FileEntry.SHA256 já vem em hex do engine; garante lowercase
-		sha := e.SHA256
-		if _, err := hex.DecodeString(sha); err != nil {
-			slog.Warn("entry com sha256 inválido, ignorando", "key", e.Key)
-			continue
-		}
-		versionMap = append(versionMap, entry{
-			Key:        e.Key,
-			VersionID:  e.VersionID,
-			Size:       e.Size,
-			SHA256:     sha,
-			ModifiedAt: e.ModifiedAt,
-		})
-	}
-
-	completeBody := struct {
-		Status       string           `json:"status"`
-		Stats        api.SessionStats `json:"stats"`
-		VersionMap   []entry          `json:"version_map"`
-		ErrorCode    string           `json:"error_code,omitempty"`
-		ErrorMessage string           `json:"error_message,omitempty"`
-		// Arquivos do OneDrive só na nuvem que ficaram de fora. Com ele, o
-		// painel não trata a sessão como inventário da origem: a falta
-		// desses arquivos não é remoção. Vai sempre, mesmo com 0: sem o
-		// campo, o painel não separa "nada pulado" de "agente antigo".
-		CloudOnlySkipped int `json:"cloud_only_skipped"`
-		// Reparse points fora do OneDrive (Azure File Sync em camada fria,
-		// HSM) ou ilegíveis que ficaram de fora. Mesma regra: vai sempre.
-		ReparseSkipped int `json:"reparse_skipped"`
-	}{
+	completeBody := corpoDeConclusao{
 		Status:           completeStatus,
 		Stats:            result.Stats,
-		VersionMap:       versionMap,
 		CloudOnlySkipped: result.CloudOnlySkipped,
 		ReparseSkipped:   result.ReparseSkipped,
+	}
+	guardados := result.Guardados()
+	// Mapeia FileEntry pro JSON que o painel espera. Só no caminho inline:
+	// com o índice em lotes as entradas já saíram durante o backup.
+	var versionMap []entradaDoMapa
+	if !indice.emLotes {
+		versionMap = make([]entradaDoMapa, 0, len(result.VersionMap))
+		for _, e := range result.VersionMap {
+			// FileEntry.SHA256 já vem em hex do engine; garante lowercase
+			sha := e.SHA256
+			if _, err := hex.DecodeString(sha); err != nil {
+				slog.Warn("entry com sha256 inválido, ignorando", "key", e.Key)
+				continue
+			}
+			versionMap = append(versionMap, entradaDoMapa{
+				Key:        e.Key,
+				VersionID:  e.VersionID,
+				Size:       e.Size,
+				SHA256:     sha,
+				ModifiedAt: e.ModifiedAt,
+			})
+		}
+		completeBody.VersionMap = &versionMap
+		guardados = int64(len(versionMap))
 	}
 	if completeStatus == "partial" {
 		// A causa da sessão parcial ia embora: o painel via "parcial" sem
@@ -689,7 +689,7 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 		completeBody.ErrorMessage = causaDoParcial(result, syncErr)
 		if envioInterrompido {
 			completeBody.ErrorCode = codigoEnvioInterrompido
-			completeBody.ErrorMessage = fmt.Sprintf(msgEnvioInterrompido, len(versionMap))
+			completeBody.ErrorMessage = fmt.Sprintf(msgEnvioInterrompido, guardados)
 		}
 		completeBody.ErrorMessage += nota
 		slog.Warn("backup parcial", "plan_id", plan.ID, "session_id", startResp.SessionID,
@@ -703,11 +703,20 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 		completeBody.ErrorCode = "post_hook_interrupted"
 		completeBody.ErrorMessage = msgDoDepoisInterrompido
 	}
-	var completeResp struct {
-		// Ponteiro: ausente (resposta de "not_running", painel antigo) não é
-		// zero indexado.
-		FilesIndexed *int `json:"files_indexed"`
+	if indice.emLotes {
+		reabrir := func(rctx context.Context) (string, *api.IndexOffer, error) {
+			var nova struct {
+				SessionID string          `json:"session_id"`
+				Index     *api.IndexOffer `json:"index"`
+			}
+			if err := c.POST(rctx, "/api/agents/"+cfg.AgentID+"/sessions/start", startReq, &nova); err != nil {
+				return "", nil, err
+			}
+			return nova.SessionID, nova.Index, nil
+		}
+		return indice.concluirEmLotes(ctx, c, cfg, startResp.SessionID, &completeBody, result, reabrir)
 	}
+	var completeResp respostaDoComplete
 	// O /complete carrega o version_map inteiro — é o que torna o backup
 	// restaurável. Perdê-lo num erro passageiro jogava fora o trabalho todo
 	// (e a sessão ficava "running" para sempre): tenta de novo com recuo,
@@ -737,6 +746,8 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 		}
 		return fmt.Errorf("session complete: %w", err)
 	}
+	// O painel aceitou: o que o estado local gravou nesta sessão passa a valer.
+	indice.confirmar(startResp.SessionID, result)
 	indexados := -1
 	if completeResp.FilesIndexed != nil {
 		indexados = *completeResp.FilesIndexed
@@ -940,7 +951,7 @@ func avaliarSessao(result *syncengine.Result, syncErr error) (falhou bool, statu
 		return true, ""
 	}
 	houveErro := syncErr != nil || result.FilesFailed > 0
-	if houveErro && len(result.VersionMap) == 0 {
+	if houveErro && result.Guardados() == 0 {
 		return true, ""
 	}
 	if houveErro {
@@ -1371,6 +1382,10 @@ func expurgar(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config.Co
 		Bucket:     cfg.StorageBucket,
 		PrefixRoot: plano.PrefixRoot,
 	}, versoes)
+
+	// O estado local do backup não pode seguir afirmando versões que saíram
+	// do bucket.
+	esquecerVersoesApagadas(cfg, apagadas)
 
 	relato := api.PurgeResult{RunID: plano.RunID}
 	for _, v := range apagadas {
