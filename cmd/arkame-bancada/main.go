@@ -320,6 +320,11 @@ func medirCaso(c *Caso, agente, config string, s3f *bancada.S3Falso, painel *ban
 		}
 	}
 	c.TempoS = time.Since(inicio).Seconds()
+	// O pico de memória é lido do próprio processo, antes de ele sair: o
+	// ru_maxrss que o wait devolve começa do tamanho DESTE processo no
+	// instante do fork (o filho nasce no espaço de memória do pai), e o
+	// bucket e o painel falsos moram aqui.
+	c.RSSMB = picoDoProcesso(cmd.Process.Pid)
 	// Pelo PID do processo que este comando criou.
 	_ = cmd.Process.Signal(syscall.SIGTERM)
 	select {
@@ -328,7 +333,9 @@ func medirCaso(c *Caso, agente, config string, s3f *bancada.S3Falso, painel *ban
 		_ = cmd.Process.Kill()
 		<-morreu
 	}
-	c.RSSMB = rssEmMB(cmd.ProcessState.SysUsage())
+	if c.RSSMB == 0 {
+		c.RSSMB = rssEmMB(cmd.ProcessState.SysUsage())
+	}
 	c.CPUS = (cmd.ProcessState.UserTime() + cmd.ProcessState.SystemTime()).Seconds()
 
 	ss := painel.Sessoes()
@@ -354,6 +361,22 @@ func medirCaso(c *Caso, agente, config string, s3f *bancada.S3Falso, painel *ban
 		c.Estatistica = st
 	}
 	return nil
+}
+
+// picoDoProcesso lê o pico de memória residente (VmHWM) de um processo, em
+// MiB. Zero onde não há /proc.
+func picoDoProcesso(pid int) float64 {
+	b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/status")
+	if err != nil {
+		return 0
+	}
+	for _, l := range strings.Split(string(b), "\n") {
+		if f := strings.Fields(l); len(f) >= 2 && f[0] == "VmHWM:" {
+			kb, _ := strconv.ParseFloat(f[1], 64)
+			return kb / 1024
+		}
+	}
+	return 0
 }
 
 func fimDoLog(arquivo string) string {
