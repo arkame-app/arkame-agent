@@ -498,3 +498,39 @@ func TestInlineSaiNaOrdemDaVarredura(t *testing.T) {
 		_ = plano.Confirmar("s", r.Stats.FilesTotal, ex.Ger)
 	}
 }
+
+// Versão trocada dentro do arquivo de estado, sem quebrar a estrutura dele: o
+// atalho não pode levar ao índice uma versão que não é a do arquivo. O CRC da
+// entrada acusa, o estado é largado e o resto da execução confere no bucket.
+func TestVersaoAdulteradaNoEstadoNaoVaiAoIndice(t *testing.T) {
+	m := novaMesa(t)
+	m.trabalhad = 1
+	m.semear(50)
+	m.rodar()
+	alvo := m.presenca[m.chave("p03/arquivo-0003.txt")].VersionID
+	arq := m.ultimaBase.Caminho()
+	bruto, _ := os.ReadFile(arq)
+	n := 0
+	for i := 0; i+len(alvo) <= len(bruto); i++ {
+		if string(bruto[i:i+len(alvo)]) == alvo {
+			copy(bruto[i:], "v00009999")
+			n++
+		}
+	}
+	if n == 0 || len(alvo) != len("v00009999") {
+		t.Fatalf("não achei a versão %q no estado", alvo)
+	}
+	if err := os.WriteFile(arq, bruto, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m.delta = false // inventário completo: toda entrada do atalho vai ao índice
+	m.s3.Zerar()
+	r, _ := m.rodar()
+	if !r.EstadoFalhou {
+		t.Fatal("o estado adulterado tinha de ser largado")
+	}
+	if m.s3.N("PutObject") != 0 {
+		t.Fatalf("nada sobe de novo: %v", m.s3.Requisicoes())
+	}
+	m.conferir()
+}

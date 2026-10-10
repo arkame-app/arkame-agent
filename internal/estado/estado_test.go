@@ -258,3 +258,55 @@ func TestVarrerEEsquecer(t *testing.T) {
 		t.Fatal("entrada de outra versão tinha de ficar")
 	}
 }
+
+// Um byte trocado dentro de uma entrada, sem estragar a estrutura do arquivo
+// (o caso que o bbolt não vê): o CRC da entrada acusa, em vez de o estado
+// afirmar uma versão que não é a do arquivo.
+func TestEntradaAdulteradaEAcusadaPeloCRC(t *testing.T) {
+	dir := t.TempDir()
+	b := abrir(t, dir)
+	p, _ := b.Plano("p1", "data/ag1/")
+	ex, _ := p.Comecar("s1")
+	alvo := entrada(7)
+	alvo.Versao = "versao-unica-do-alvo"
+	_ = ex.Gravar([]Gravacao{{Chave: "a.txt", Ent: entrada(1)}, {Chave: "alvo.txt", Ent: alvo}})
+	_ = p.Confirmar("s1", 2, ex.Ger)
+	_ = b.Fechar()
+
+	arq := NomeDoArquivo(dir, idDeTeste)
+	bruto, _ := os.ReadFile(arq)
+	n := 0
+	for i := 0; i+len(alvo.Versao) <= len(bruto); i++ {
+		if string(bruto[i:i+len(alvo.Versao)]) == alvo.Versao {
+			bruto[i+7] = 'X' // "versao-Xnica-do-alvo"
+			n++
+		}
+	}
+	if n == 0 {
+		t.Fatal("não achei a entrada no arquivo")
+	}
+	if err := os.WriteFile(arq, bruto, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	b, err := Abrir(dir, idDeTeste)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, _ = b.Plano("p1", "data/ag1/")
+	ex, _ = p.Comecar("s2")
+	if ent, achou, err := ex.Buscar("a.txt"); err != nil || !achou || ent.Versao != "v1" {
+		t.Fatalf("a entrada intacta tinha de ler: %+v %v", ent, err)
+	}
+	ent, achou, err := ex.Buscar("alvo.txt")
+	if !errors.Is(err, ErrCorrompido) || achou {
+		t.Fatalf("entrada adulterada devolvida como boa: %+v achou=%v err=%v", ent, achou, err)
+	}
+	if !b.Corrompida() {
+		t.Fatal("a base tinha de ficar marcada")
+	}
+	_ = b.Fechar()
+	if _, err := os.Stat(arq); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("estado adulterado tem de ser apagado ao fechar")
+	}
+}
