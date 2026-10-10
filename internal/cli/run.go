@@ -42,7 +42,8 @@ func newRunCmd() *cobra.Command {
     heartbeat): baixa, confere a assinatura e o SHA-256, roda o self-test do
     programa novo, troca e sai para o gerenciador de serviço religar. Só com o
     bucket livre e sem restauração em curso. O programa novo tem 5 minutos
-    para um heartbeat aceito; sem isso, o anterior volta. ARKAME_AUTO_UPDATE=off
+    para um heartbeat aceito; sem isso, o anterior volta (com o painel fora do
+    ar, a prova é estendida até 30 minutos da troca). ARKAME_AUTO_UPDATE=off
     desliga (o comando 'update' continua valendo).`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			// Docker: o programa da imagem passa a vez ao do volume, se houver

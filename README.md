@@ -291,7 +291,8 @@ Things you should know before relying on it:
   checksums and the value sent by the panel, runs the new program's
   `self-test`, swaps the file and lets the service manager restart it. The new
   program has 5 minutes to get a heartbeat accepted; otherwise the previous
-  one is put back. On Docker the new program is stored in the config volume
+  one is put back (the proof is extended, up to 30 minutes after the swap,
+  while the panel itself is unreachable). On Docker the new program is stored in the config volume
   (`/etc/arkame/bin/`) and the image's program launches it. Turn it off with
   `ARKAME_AUTO_UPDATE=off` (environment or `agent.env`), switch your
   organization to manual updates in the panel, or hold a single server on its
@@ -310,6 +311,11 @@ Things you should know before relying on it:
 - **Native Linux service restores** into `/etc`, `/usr` or `/boot` fail because
   the systemd unit uses `ProtectSystem=full`; restore elsewhere and copy. The
   Docker install can write there.
+- **Restores never write into the agent's own folders** — the folder of its
+  program and the folder of its configuration (`/etc/arkame`). Such an item
+  fails with `protected_destination`: that folder is writable by the service
+  so it can update itself, and a restored file there would bypass the release
+  signature. Restore elsewhere and copy.
 - **Docker on host reboot:** the 150 s stop timeout applies to `docker stop` and
   `docker restart`, but on a reboot `docker.service`'s own stop timeout wins
   (often 90 s). Use the native agent, or raise `TimeoutStopSec` for

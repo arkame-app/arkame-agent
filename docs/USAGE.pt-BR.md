@@ -92,6 +92,13 @@ O `curl.exe` vem no Windows 10 (1803+), 11 e Server 2019+. No Server 2016, use o
 > explicação. Restaure em outra pasta (`/restore`, por exemplo) e copie de lá. No
 > Docker o mesmo pedido funciona: a raiz do servidor vai montada com escrita.
 
+> **Restaurar para a pasta do próprio agente:** a restauração nunca grava na
+> pasta do programa do agente (`/usr/local/bin`, na instalação padrão) nem na da
+> configuração dele (`/etc/arkame`). O item falha com o código
+> `protected_destination`: o serviço pode gravar ali para se atualizar sozinho, e
+> um arquivo restaurado naquela pasta entraria sem a assinatura do release.
+> Restaure em outra pasta e copie de lá.
+
 O arquivo gravado (`/etc/arkame/agent.env`; no Windows `C:\etc\arkame\agent.env`)
 fica legível só pelo administrador (0600; no Windows, Administradores e SYSTEM).
 Na instalação sem root (`--service-scope user`, o padrão de quem roda sem
@@ -170,7 +177,8 @@ ou restauração. Ele baixa a versão, confere a assinatura Ed25519 do
 com o do `checksums.txt` assinado **e** com o que o painel mandou, roda o
 `self-test` do programa novo, troca e sai para o serviço religar. O programa
 novo tem 5 minutos para um heartbeat aceito pelo painel; sem isso (ou na
-terceira partida seguida sem sucesso), o anterior volta ao lugar.
+terceira partida seguida sem sucesso), o anterior volta ao lugar. Com o painel
+fora do ar a prova é estendida, até 30 minutos contados da troca.
 
 ```bash
 # Atualizar agora, à mão, com as mesmas conferências (ignora a janela)

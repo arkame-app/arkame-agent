@@ -50,7 +50,8 @@ func newUpdateCmd() *cobra.Command {
      usam o programa.
 
 O programa novo tem cinco minutos para um heartbeat aceito pelo painel; sem
-isso, o anterior volta sozinho.
+isso, o anterior volta sozinho (com o painel fora do ar, a prova é estendida
+até 30 minutos da troca).
 
 Ignora a janela e a política de atualização da organização: quem roda o
 comando decidiu atualizar agora. Reiniciar o serviço interrompe um backup em
