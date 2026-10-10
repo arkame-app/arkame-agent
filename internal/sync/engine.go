@@ -12,11 +12,14 @@ import (
 	"log/slog"
 	"os"
 	"path"
+	gosync "sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/arkame-app/agent/internal/api"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"golang.org/x/time/rate"
 )
 
 // MultipartThresholdBytes — arquivos >= 100 MB sobem via s3manager.Uploader
@@ -24,113 +27,8 @@ import (
 // PutObject simples basta.
 const MultipartThresholdBytes = 100 * 1024 * 1024
 
-// EngineOptions configura uma execução de sync.
-type EngineOptions struct {
-	S3           *s3.Client
-	Bucket       string
-	PrefixRoot   string   // "data/<agent-ulid>/"
-	HostRoot     string   // raiz do fs (em Docker: /host)
-	SourcePaths  []string // paths do plano
-	ExcludeGlobs []string
-	MaxMbps      int // throttle
-}
-
-// Result é o retorno do Run — montado no formato que o painel espera em SessionComplete.
-type Result struct {
-	Stats       api.SessionStats
-	VersionMap  []api.FileEntry
-	FilesFailed int // arquivos que falharam no upload (pulados); usado p/ decidir partial/failed
-	// PrimeiraFalha é o primeiro arquivo que falhou e por quê — exemplo que
-	// vai ao painel numa sessão parcial.
-	PrimeiraFalha string
-	// CloudOnlySkipped conta os arquivos do OneDrive que ficaram de fora por
-	// estarem só na nuvem (lê-los baixaria o OneDrive inteiro). Vai ao painel
-	// no /complete: a sessão não é um inventário completo da origem, e a
-	// falta desses arquivos não pode virar "removido na origem".
-	CloudOnlySkipped int
-	// ReparseSkipped conta os reparse points que não são do OneDrive (Azure
-	// File Sync em camada fria, HSM) ou que não deu para ler: ficam de fora e
-	// vão ao painel no /complete pelo mesmo motivo do CloudOnlySkipped.
-	ReparseSkipped int
-	// NaoPermitido: alguma leitura (varredura ou arquivo) voltou EPERM. No
-	// macOS é o TCC: o serviço precisa de Acesso Total ao Disco, e a causa da
-	// sessão parcial diz isso.
-	NaoPermitido bool
-}
-
-// Run executa o sync de um plano.
-//
-// Fluxo:
-//  1. Walk(hostRoot, sourcePaths, excludeGlobs) → stream de FileInfo
-//  2. Para cada arquivo:
-//     a) Calcula SHA-256
-//     b) Se já existe no bucket com mesmo hash → pula (dedup)
-//     c) PutObject com throttle → recebe VersionId do S3
-//     d) Append em version_map
-//  3. Retorna stats + version_map — caller envia ao painel via SessionComplete
-//
-// IMPORTANTE: esta é uma implementação skeleton. O "c) PutObject" está
-// simplificado (single-part). Para arquivos grandes, trocar por
-// CreateMultipartUpload + UploadPart (em TODO abaixo).
-func Run(ctx context.Context, o EngineOptions) (*Result, error) {
-	// Cancelado na saída: um retorno antecipado (bucket sem versionamento)
-	// não pode deixar o walker bloqueado no canal.
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	var pulados puladosDoWalk
-	fileCh, errCh := walk(ctx, o.HostRoot, o.SourcePaths, o.ExcludeGlobs, &pulados)
-	result := &Result{}
-
-	for fi := range fileCh {
-		if ctx.Err() != nil {
-			return result, ctx.Err()
-		}
-
-		entry, dedupHit, err := processFile(ctx, o, fi)
-		if errors.Is(err, ErrBucketSemVersionamento) {
-			// Não é falha deste arquivo: é do bucket, e vale para todos.
-			// Seguir subiria tudo de novo só para nada ser indexado.
-			return result, err
-		}
-		if err != nil {
-			slog.Warn("arquivo falhou, pulando",
-				"path", fi.RelativePath,
-				"err", err)
-			result.FilesFailed++
-			result.NaoPermitido = result.NaoPermitido || naoPermitido(err)
-			if result.PrimeiraFalha == "" {
-				result.PrimeiraFalha = fi.RelativePath + ": " + err.Error()
-			}
-			continue
-		}
-		result.Stats.FilesTotal++
-		result.Stats.BytesTotal += fi.Size
-		if entry != nil {
-			result.VersionMap = append(result.VersionMap, *entry)
-			if !dedupHit {
-				result.Stats.FilesUploaded++
-				result.Stats.BytesUploaded += fi.Size
-			}
-		}
-	}
-	walkErr := <-errCh
-	// A contagem do walker é gravada antes de o canal fechar: lê-se com ele
-	// fechado.
-	for range errCh {
-	}
-	result.CloudOnlySkipped = pulados.SoNaNuvem
-	result.ReparseSkipped = pulados.Reparse
-	result.NaoPermitido = result.NaoPermitido || pulados.NaoPermitido
-	// Cancelado no meio da varredura, o walker fecha o canal sem erro: sem
-	// esta checagem, a sessão saía "complete" com só parte dos arquivos.
-	if err := ctx.Err(); err != nil {
-		return result, err
-	}
-	if walkErr != nil {
-		return result, walkErr
-	}
-	return result, nil
-}
+// limiarDoMultipart é o MultipartThresholdBytes; os testes o baixam.
+var limiarDoMultipart int64 = MultipartThresholdBytes
 
 // processFile sobe um arquivo individual.
 //
@@ -203,54 +101,14 @@ func processFile(ctx context.Context, o EngineOptions, fi FileInfo) (*api.FileEn
 	// não serve: o metadado sha256 já foi enviado com o hash antigo, e o
 	// conteúdo pode ser uma mistura de antes e depois, que não é uma versão
 	// de verdade do arquivo.
-	var versionID string
-	if fi.Size >= MultipartThresholdBytes {
-		// Multipart manual: ContentLength explícito + corpo seekable por parte,
-		// sem ChecksumAlgorithm — evita o Content-Encoding aws-chunked que o
-		// s3/manager emite e que provedores S3-compat (OCI) não suportam (501).
-		versionID, err = uploadMultipart(ctx, o.S3, o.Bucket, key, f, meta, o.MaxMbps, hash, fi.Size)
-		if err != nil {
-			return nil, false, fmt.Errorf("multipart put %s: %w", key, err)
-		}
-	} else {
-		size := fi.Size
-		lido := newLeitorComHash(io.NewSectionReader(f, 0, size))
-		putOut, err := o.S3.PutObject(ctx, &s3.PutObjectInput{
-			Bucket:        &o.Bucket,
-			Key:           &key,
-			Body:          NewThrottledReader(lido, o.MaxMbps),
-			Metadata:      meta,
-			ContentLength: &size, // S3-compat (OCI) exige Content-Length; sem isso o SDK manda chunked → 411
-		})
-		if err != nil {
-			return nil, false, fmt.Errorf("put %s: %w", key, err)
-		}
-		if putOut.VersionId != nil {
-			versionID = *putOut.VersionId
-		}
-		if !lido.confere(hash, size) {
-			// O objeto já está no bucket, com o metadado sha256 do conteúdo
-			// antigo. Deixá-lo lá envenenaria o dedup: se o arquivo voltar ao
-			// conteúdo antigo, o HeadObject acharia "mesmo hash" e o índice
-			// apontaria para o conteúdo errado. Sai a versão recém-criada.
-			removerEnvioInvalido(ctx, o.S3, o.Bucket, key, versionID)
-			return nil, false, fmt.Errorf("put %s: %w", key, ErrArquivoMudou)
-		}
-	}
-
-	if versionID == "" {
-		// O objeto subiu, mas sem VersionId: o bucket não versiona. O painel
-		// descarta entrada sem version_id, e a sessão terminaria "complete"
-		// com zero arquivos indexados — um backup que não restaura nada.
-		return nil, false, ErrBucketSemVersionamento
-	}
-	if versionID == "null" {
-		// Versionamento suspenso: o envio grava a versão "null", que
-		// sobrescreve a "null" anterior — cada backup apaga o de antes, e o
-		// índice apontaria todas as datas para o mesmo conteúdo. Só o envio
-		// conta: a versão "null" que o dedup reaproveita é de antes de o
-		// versionamento ser ativado, e é legítima.
-		return nil, false, ErrVersionamentoSuspenso
+	// O primeiro envio da execução vai sozinho (portaoDoVersionamento): com
+	// vários trabalhadores, um bucket suspenso teria várias versões "null"
+	// sobrescritas antes de o primeiro envio acusar.
+	versionID, err := o.portao.com(func() (string, error) {
+		return enviarArquivo(ctx, o, fi, f, key, hash, meta)
+	})
+	if err != nil {
+		return nil, false, err
 	}
 
 	return &api.FileEntry{
@@ -262,6 +120,108 @@ func processFile(ctx context.Context, o EngineOptions, fi FileInfo) (*api.FileEn
 	}, false, nil
 }
 
+// enviarArquivo sobe o conteúdo já hasheado e devolve o VersionId do
+// provedor. Bucket sem versionamento ou suspenso é erro, não versão.
+func enviarArquivo(ctx context.Context, o EngineOptions, fi FileInfo, f *os.File, key, hash string, meta map[string]string) (string, error) {
+	var versionID string
+	var err error
+	if fi.Size >= limiarDoMultipart {
+		// Multipart manual: ContentLength explícito + corpo seekable por parte,
+		// sem ChecksumAlgorithm — evita o Content-Encoding aws-chunked que o
+		// s3/manager emite e que provedores S3-compat (OCI) não suportam (501).
+		// No máximo dois multiparts ao mesmo tempo: cada um segura um buffer
+		// do tamanho da parte (16 MiB ou mais).
+		if o.multiparts != nil {
+			select {
+			case o.multiparts <- struct{}{}:
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+		}
+		versionID, err = uploadMultipartCom(ctx, o.S3, o.Bucket, key, f, meta, o.limitador(), hash, fi.Size)
+		if o.multiparts != nil {
+			<-o.multiparts
+		}
+		if err != nil {
+			return "", fmt.Errorf("multipart put %s: %w", key, err)
+		}
+	} else {
+		size := fi.Size
+		lido := newLeitorComHash(io.NewSectionReader(f, 0, size))
+		putOut, err := o.S3.PutObject(ctx, &s3.PutObjectInput{
+			Bucket:        &o.Bucket,
+			Key:           &key,
+			Body:          leitorLimitado(ctx, lido, o.limitador()),
+			Metadata:      meta,
+			ContentLength: &size, // S3-compat (OCI) exige Content-Length; sem isso o SDK manda chunked → 411
+		})
+		if err != nil {
+			return "", fmt.Errorf("put %s: %w", key, err)
+		}
+		if putOut.VersionId != nil {
+			versionID = *putOut.VersionId
+		}
+		if !lido.confere(hash, size) {
+			// O objeto já está no bucket, com o metadado sha256 do conteúdo
+			// antigo. Deixá-lo lá envenenaria o dedup: se o arquivo voltar ao
+			// conteúdo antigo, o HeadObject acharia "mesmo hash" e o índice
+			// apontaria para o conteúdo errado. Sai a versão recém-criada.
+			removerEnvioInvalido(ctx, o.S3, o.Bucket, key, versionID)
+			return "", fmt.Errorf("put %s: %w", key, ErrArquivoMudou)
+		}
+	}
+
+	if versionID == "" {
+		// O objeto subiu, mas sem VersionId: o bucket não versiona. O painel
+		// descarta entrada sem version_id, e a sessão terminaria "complete"
+		// com zero arquivos indexados — um backup que não restaura nada.
+		return "", ErrBucketSemVersionamento
+	}
+	if versionID == "null" {
+		// Versionamento suspenso: o envio grava a versão "null", que
+		// sobrescreve a "null" anterior — cada backup apaga o de antes, e o
+		// índice apontaria todas as datas para o mesmo conteúdo. Só o envio
+		// conta: a versão "null" que o dedup reaproveita é de antes de o
+		// versionamento ser ativado, e é legítima.
+		return "", ErrVersionamentoSuspenso
+	}
+
+	return versionID, nil
+}
+
+// portaoDoVersionamento faz o primeiro envio de uma execução acontecer
+// sozinho: enquanto nenhum envio voltou com um VersionId de verdade, os
+// outros esperam. Se o primeiro acusa bucket sem versionamento (ou
+// suspenso), ninguém mais envia.
+type portaoDoVersionamento struct {
+	mu      gosync.Mutex
+	provado atomic.Bool
+	negado  error
+}
+
+func (p *portaoDoVersionamento) com(enviar func() (string, error)) (string, error) {
+	if p == nil || p.provado.Load() {
+		return enviar()
+	}
+	p.mu.Lock()
+	if p.provado.Load() {
+		p.mu.Unlock()
+		return enviar()
+	}
+	defer p.mu.Unlock()
+	if p.negado != nil {
+		return "", p.negado
+	}
+	v, err := enviar()
+	switch {
+	case err == nil:
+		p.provado.Store(true)
+	case errors.Is(err, ErrBucketSemVersionamento):
+		p.negado = err
+	}
+	return v, err
+}
+
 // uploadMultipart sobe um arquivo grande em partes (sequenciais) via multipart
 // manual. Cada UploadPart usa um corpo seekable (bytes.Reader, opcionalmente
 // throttled) + ContentLength explícito e SEM ChecksumAlgorithm, evitando o
@@ -269,6 +229,12 @@ func processFile(ctx context.Context, o EngineOptions, fi FileInfo) (*api.FileEn
 // provedores S3-compat como a OCI (501 NotImplemented). Em qualquer falha,
 // aborta o multipart pra não deixar partes órfãs no bucket.
 func uploadMultipart(ctx context.Context, s3c *s3.Client, bucket, key string, f *os.File, meta map[string]string, maxMbps int, hashEsperado string, tamanho int64) (string, error) {
+	return uploadMultipartCom(ctx, s3c, bucket, key, f, meta, novoLimitador(maxMbps), hashEsperado, tamanho)
+}
+
+// uploadMultipartCom é o uploadMultipart com o limitador de banda dado (o da
+// execução).
+func uploadMultipartCom(ctx context.Context, s3c *s3.Client, bucket, key string, f *os.File, meta map[string]string, lim *rate.Limiter, hashEsperado string, tamanho int64) (string, error) {
 	partSize := tamanhoDaParte(tamanho)
 
 	create, err := s3c.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
@@ -318,7 +284,7 @@ func uploadMultipart(ctx context.Context, s3c *s3.Client, bucket, key string, f 
 				UploadId:      uploadID,
 				PartNumber:    &pn,
 				ContentLength: &cl,
-				Body:          NewThrottledReader(bytes.NewReader(buf[:n]), maxMbps),
+				Body:          leitorLimitado(ctx, bytes.NewReader(buf[:n]), lim),
 			})
 			if uerr != nil {
 				abort()

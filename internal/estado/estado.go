@@ -533,6 +533,9 @@ func (p *Plano) Comecar(sessao string, adotar ...uint32) (*Execucao, error) {
 	return e, nil
 }
 
+// Arquivos é quantos arquivos a última sessão confirmada do plano viu.
+func (e *Execucao) Arquivos() int64 { return e.p.meta.Arquivos }
+
 // Vale diz se a entrada é de uma geração confirmada (ou adotada).
 func (e *Execucao) Vale(ent Entrada) bool {
 	return e.p.meta.confirmada(ent.Ger) || e.adotadas[ent.Ger]

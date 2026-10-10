@@ -30,6 +30,12 @@ type FileInfo struct {
 	// fora disso (relógio errado, arquivo de teste) ia ao índice com a data
 	// dando a volta.
 	ModTime time.Time
+	// CtimeSeg/CtimeNano: quando o inode mudou pela última vez (conteúdo,
+	// dono, permissão, nome). Entra no atalho do estado local: um arquivo
+	// regravado com a data de modificação reposta ainda muda o ctime. Zero
+	// onde o sistema não o dá (Windows).
+	CtimeSeg  int64
+	CtimeNano uint32
 }
 
 // Walk percorre os paths fornecidos, respeitando excludeGlobs (patterns tipo *.tmp, node_modules).
@@ -77,6 +83,13 @@ func linkSemAlvo(err error) bool {
 // é gravado antes de o canal de erros fechar: só se lê depois de vê-lo fechado
 // (receber o erro não basta, ele vai antes da gravação).
 func walk(ctx context.Context, hostRoot string, sourcePaths []string, excludeGlobs []string, puladosOut *puladosDoWalk) (<-chan FileInfo, <-chan error) {
+	return walkSem(ctx, hostRoot, sourcePaths, excludeGlobs, puladosOut, nil)
+}
+
+// walkSem é o walk que nunca entra nas pastas de ignorar (caminhos reais,
+// absolutos): a pasta do estado local do agente, que muda durante o backup e
+// não é dado do cliente.
+func walkSem(ctx context.Context, hostRoot string, sourcePaths []string, excludeGlobs []string, puladosOut *puladosDoWalk, ignorar []string) (<-chan FileInfo, <-chan error) {
 	out := make(chan FileInfo, 128)
 	errs := make(chan error, 1)
 
@@ -173,6 +186,9 @@ func walk(ctx context.Context, hostRoot string, sourcePaths []string, excludeGlo
 					return nil
 				}
 				if d.IsDir() {
+					if pastaIgnorada(path, ignorar) {
+						return filepath.SkipDir
+					}
 					return nil
 				}
 				leitura := path
@@ -228,12 +244,12 @@ func walk(ctx context.Context, hostRoot string, sourcePaths []string, excludeGlo
 				select {
 				case <-ctx.Done():
 					return ctx.Err()
-				case out <- FileInfo{
+				case out <- comCtime(FileInfo{
 					AbsolutePath: leitura,
 					RelativePath: chave(path),
 					Size:         info.Size(),
 					ModTime:      info.ModTime(),
-				}:
+				}, info):
 				}
 				return nil
 			})
@@ -264,6 +280,26 @@ func walk(ctx context.Context, hostRoot string, sourcePaths []string, excludeGlo
 	}()
 
 	return out, errs
+}
+
+// pastaIgnorada diz se p é uma das pastas que a varredura nunca abre.
+func pastaIgnorada(p string, ignorar []string) bool {
+	for _, ig := range ignorar {
+		if ig != "" && p == ig {
+			return true
+		}
+	}
+	return false
+}
+
+// lerCtime é o ctimeDe do sistema; os testes o trocam para simular o Windows,
+// que não dá o ctime.
+var lerCtime = ctimeDe
+
+// comCtime preenche o ctime do arquivo, onde o sistema o dá.
+func comCtime(fi FileInfo, info fs.FileInfo) FileInfo {
+	fi.CtimeSeg, fi.CtimeNano = lerCtime(info)
+	return fi
 }
 
 // abrirParaLer é o os.Open da checagem do WOF/dedup; os testes o trocam.
