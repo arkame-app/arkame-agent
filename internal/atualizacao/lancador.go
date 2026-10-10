@@ -2,7 +2,10 @@ package atualizacao
 
 import (
 	"crypto/ed25519"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -50,8 +53,8 @@ func ProgramaDoVolume(configPath string) string {
 	return filepath.Join(filepath.Dir(configPath), "bin", "arkame-agent")
 }
 
-// EscolherDoVolume decide se o programa do volume deve ser executado no lugar
-// do da imagem. Devolve o caminho, ou "" com o porquê.
+// AbrirDoVolume decide se o programa do volume deve ser executado no lugar do
+// da imagem. Devolve o arquivo ABERTO e conferido, ou nil com o porquê.
 //
 // Só vale o programa que: tem registro de troca feita pelo lançador, não
 // abandonada; é de versão maior que a da imagem (quem puxou uma imagem mais
@@ -59,79 +62,122 @@ func ProgramaDoVolume(configPath string) string {
 // assinado guardado ao lado dele; e, em prova, ainda não gastou as partidas.
 // O que não confere é abandonado, para o painel saber e para não ser
 // conferido a cada partida.
-func EscolherDoVolume(programa, versaoDaImagem string, chaves []ed25519.PublicKey, nomeNoRelease string) (string, string) {
+//
+// O arquivo é aberto uma vez, sem seguir link; o SHA-256 é lido pelo
+// descritor, e é pelo descritor que o lançador o executa (ExecutarAberto).
+// Conferido pelo caminho e executado pelo caminho, sobrava a janela entre os
+// dois: quem trocasse o arquivo ali rodava o que quisesse como o agente.
+func AbrirDoVolume(programa, versaoDaImagem string, chaves []ed25519.PublicKey, nomeNoRelease string) (*os.File, string) {
 	l := LugarDe(programa)
 	e, ok := l.lerEstado()
 	if !ok || !e.PeloLancador {
-		return "", "sem programa baixado no volume"
+		return nil, "sem programa baixado no volume"
 	}
 	if e.Situacao != SituacaoEmProva && e.Situacao != SituacaoConfirmada {
-		return "", "o programa do volume foi abandonado (" + e.Motivo + ")"
+		return nil, "o programa do volume foi abandonado (" + e.Motivo + ")"
 	}
 	doVolume, err := LerVersao(e.Versao)
 	if err != nil {
-		return "", "registro com versão inválida"
+		return nil, "registro com versão inválida"
 	}
 	daImagem, err := LerVersao(versaoDaImagem)
 	if err != nil {
-		return "", "a imagem é um build de desenvolvimento"
+		return nil, "a imagem é um build de desenvolvimento"
 	}
 	if !doVolume.Maior(daImagem) {
-		return "", fmt.Sprintf("a imagem (%s) não é mais antiga que o programa do volume (%s)", daImagem, doVolume)
+		return nil, fmt.Sprintf("a imagem (%s) não é mais antiga que o programa do volume (%s)", daImagem, doVolume)
 	}
-	abandonar := func(motivo, detalhe string) (string, string) {
+	abandonar := func(motivo, detalhe string) (*os.File, string) {
 		e.Situacao = SituacaoAbandonada
 		e.Motivo = motivo
 		if err := l.gravarEstado(e); err != nil {
 			slog.Warn("não consegui registrar o abandono do programa do volume", "err", err)
 		}
-		return "", detalhe
+		return nil, detalhe
 	}
-	if err := conferirDoVolume(l, e, doVolume, chaves, nomeNoRelease); err != nil {
+	aberto, err := conferirDoVolume(l, e, doVolume, chaves, nomeNoRelease)
+	if err != nil {
 		return abandonar(MotivoInvalido, "o programa do volume não confere: "+err.Error())
 	}
+	aposConferirDoVolume()
 	if e.Situacao == SituacaoEmProva {
 		if e.Arranques == nil {
 			e.Arranques = map[string]int{}
 		}
 		e.Arranques[chaveDoLancador]++
 		if e.Arranques[chaveDoLancador] >= MaximoDeArranques {
+			_ = aberto.Close()
 			return abandonar(MotivoArranques, "o programa do volume subiu três vezes sem um heartbeat aceito")
 		}
 		if err := l.gravarEstado(e); err != nil {
 			// Sem conseguir contar, a prova não tem fim: não arrisca.
-			return "", "não consegui contar a partida no registro: " + err.Error()
+			_ = aberto.Close()
+			return nil, "não consegui contar a partida no registro: " + err.Error()
 		}
 	}
-	return l.Atual, ""
+	return aberto, ""
 }
 
-// conferirDoVolume refaz as conferências da troca com o que está no disco.
-func conferirDoVolume(l Lugar, e Estado, versao Versao, chaves []ed25519.PublicKey, nome string) error {
+// aposConferirDoVolume: os testes trocam o arquivo do caminho aqui, entre a
+// conferência e a execução.
+var aposConferirDoVolume = func() {}
+
+// EscolherDoVolume é o AbrirDoVolume para quem só quer saber se há programa
+// válido no volume: devolve o caminho, ou "" com o porquê. Quem executa usa o
+// AbrirDoVolume, que entrega o arquivo aberto.
+func EscolherDoVolume(programa, versaoDaImagem string, chaves []ed25519.PublicKey, nomeNoRelease string) (string, string) {
+	aberto, porque := AbrirDoVolume(programa, versaoDaImagem, chaves, nomeNoRelease)
+	if aberto == nil {
+		return "", porque
+	}
+	_ = aberto.Close()
+	return LugarDe(programa).Atual, ""
+}
+
+// conferirDoVolume refaz as conferências da troca com o que está no disco e
+// devolve o programa aberto — o mesmo arquivo cujo SHA-256 conferiu.
+func conferirDoVolume(l Lugar, e Estado, versao Versao, chaves []ed25519.PublicKey, nome string) (*os.File, error) {
 	arqChecksums, arqAssinatura := l.arquivosDaVersao(versao)
 	checksums, err := os.ReadFile(arqChecksums)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	assinatura, err := os.ReadFile(arqAssinatura)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := VerificarAssinatura(chaves, versao, checksums, assinatura); err != nil {
-		return err
+		return nil, err
 	}
 	assinado, err := ResumoNoChecksums(checksums, nome)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	noDisco, err := resumoDoArquivo(l.Atual)
+	aberto, err := os.OpenFile(l.Atual, os.O_RDONLY|semSeguirLink, 0)
 	if err != nil {
-		return err
+		return nil, err
 	}
+	conferido := false
+	defer func() {
+		if !conferido {
+			_ = aberto.Close()
+		}
+	}()
+	if fi, err := aberto.Stat(); err != nil {
+		return nil, err
+	} else if !fi.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s não é um arquivo comum (%s)", l.Atual, fi.Mode().Type())
+	}
+	h := sha256.New()
+	if _, err := io.Copy(h, aberto); err != nil {
+		return nil, err
+	}
+	noDisco := hex.EncodeToString(h.Sum(nil))
 	if noDisco != assinado || noDisco != e.Sha256 {
-		return fmt.Errorf("o SHA-256 do arquivo (%s) não é o do checksums.txt assinado (%s)", noDisco, assinado)
+		return nil, fmt.Errorf("o SHA-256 do arquivo (%s) não é o do checksums.txt assinado (%s)", noDisco, assinado)
 	}
-	return nil
+	conferido = true
+	return aberto, nil
 }
 
 // AmbienteDoLancado é o ambiente do programa do volume: o do lançador, mais

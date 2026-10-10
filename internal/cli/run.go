@@ -201,19 +201,23 @@ func lancarDoVolume(configFile string) {
 		return
 	}
 	programa := atualizacao.ProgramaDoVolume(configFile)
-	escolhido, porque := atualizacao.EscolherDoVolume(programa, version.Version,
+	// O programa do volume vem aberto e conferido pelo descritor, e é pelo
+	// descritor que é executado: entre conferir e executar não há caminho em
+	// texto para alguém trocar.
+	aberto, porque := atualizacao.AbrirDoVolume(programa, version.Version,
 		atualizacao.ChavesConfiaveis(), atualizacao.NomeNoRelease())
-	if escolhido == "" {
+	if aberto == nil {
 		slog.Debug("lançador: sigo com o programa da imagem", "motivo", porque)
 		return
 	}
+	defer aberto.Close()
 	eu, err := os.Executable()
 	if err != nil {
 		slog.Warn("lançador: não sei o caminho do programa da imagem; sigo com ele", "err", err)
 		return
 	}
-	slog.Info("lançador: executando o programa baixado para o volume", "programa", escolhido, "imagem", version.Version)
-	err = atualizacao.Executar(escolhido, os.Args[1:], atualizacao.AmbienteDoLancado(os.Environ(), eu, version.Version))
+	slog.Info("lançador: executando o programa baixado para o volume", "programa", programa, "imagem", version.Version)
+	err = atualizacao.ExecutarAberto(aberto, programa, os.Args[1:], atualizacao.AmbienteDoLancado(os.Environ(), eu, version.Version))
 	// Só chega aqui se o programa do volume não executou (volume montado com
 	// noexec, arquivo de outra arquitetura): fica abandonado, e vale o da imagem.
 	slog.Error("lançador: o programa do volume não executou; sigo com o da imagem", "err", err)
