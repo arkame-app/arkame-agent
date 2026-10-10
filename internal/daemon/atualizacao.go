@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -132,6 +133,31 @@ func programaDaTroca(cfg *config.Config) string {
 		return atualizacao.ProgramaDoVolume(cfg.ConfigPath)
 	}
 	return service.ProgramaAtual()
+}
+
+// pastasDoAgente são as pastas onde a restauração nunca grava
+// (restore.ErrDestinoProtegido): a do programa que este processo executa, a do
+// programa que a atualização troca (no Docker, bin/ no volume) e as da
+// configuração, do token, da chave e do id do agente (/etc/arkame).
+func pastasDoAgente(cfg *config.Config) []string {
+	var pastas []string
+	visto := map[string]bool{}
+	for _, arquivo := range []string{
+		service.ProgramaAtual(), programaDaTroca(cfg),
+		cfg.ConfigPath, cfg.TokenPath, cfg.PrivateKeyPath, cfg.AgentIDPath,
+	} {
+		if arquivo == "" || !filepath.IsAbs(arquivo) {
+			continue
+		}
+		d := filepath.Dir(arquivo)
+		// A raiz como "pasta do agente" recusaria toda restauração.
+		if d == filepath.VolumeName(d)+string(filepath.Separator) || visto[d] {
+			continue
+		}
+		visto[d] = true
+		pastas = append(pastas, d)
+	}
+	return pastas
 }
 
 func novoAtualizador(cfg *config.Config, svc service.Detected, s3c *s3.Client, oc *ocupacao, reiniciar func()) *atualizador {

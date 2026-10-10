@@ -40,3 +40,10 @@ func arquivoNaPastaWindows(real, pasta, nome string) bool {
 	}
 	return mesmoCaminhoWindows(real, normalizarWindows(pasta)+`\`+nome)
 }
+
+// dentroDoCaminhoWindows: o caminho real é a pasta dada ou fica dentro dela
+// (sem diferenciar maiúsculas, com ou sem o prefixo longo).
+func dentroDoCaminhoWindows(real, pasta string) bool {
+	real, pasta = strings.ToLower(normalizarWindows(real)), strings.ToLower(normalizarWindows(pasta))
+	return pasta != "" && (real == pasta || strings.HasPrefix(real, pasta+`\`))
+}

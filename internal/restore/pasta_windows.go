@@ -88,6 +88,25 @@ func abrirPasta(_ string, destDir, subDir string, noLugar bool) (*pasta, error) 
 	return abrirHandleDaPasta(atual)
 }
 
+// dentroDe diz se a pasta aberta é uma das protegidas ou fica dentro de uma,
+// pelo caminho real dela (o do handle, com links e junções resolvidos)
+// comparado ao caminho real de cada protegida, sem diferenciar maiúsculas.
+func (p *pasta) dentroDe(protegidas []string) (string, bool) {
+	for _, c := range protegidas {
+		if c == "" {
+			continue
+		}
+		alvo := c
+		if r, err := filepath.EvalSymlinks(c); err == nil {
+			alvo = r
+		}
+		if dentroDoCaminhoWindows(p.real, alvo) {
+			return c, true
+		}
+	}
+	return "", false
+}
+
 // FILE_NAME_NORMALIZED | VOLUME_NAME_DOS do GetFinalPathNameByHandle (o
 // x/sys/windows não tem as constantes).
 const nomeNormalizadoDOS = 0

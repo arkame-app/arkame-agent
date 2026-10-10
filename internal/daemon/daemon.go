@@ -1063,7 +1063,7 @@ func processarFilaDeRestoreCom(ctx context.Context, c *api.Client, s3c *s3.Clien
 	}
 	defer oc.terminarRestauracao()
 
-	exec := restore.Options{S3: s3c, HostRoot: cfg.HostRoot}
+	exec := restore.Options{S3: s3c, HostRoot: cfg.HostRoot, Protegidas: pastasDoAgente(cfg)}
 	for _, item := range resp.Items {
 		if ctx.Err() != nil {
 			return
@@ -1162,6 +1162,12 @@ func processarFilaDeRestoreCom(ctx context.Context, c *api.Client, s3c *s3.Clien
 			// Caminho com link que não é do sistema: nada foi gravado.
 			if errors.Is(err, restore.ErrDestinoLink) {
 				update.ErrorCode = restore.CodigoDestinoLink
+			}
+			// A pasta do programa ou da configuração do agente: nada foi
+			// gravado, e a mensagem diz por quê.
+			if errors.Is(err, restore.ErrDestinoProtegido) {
+				update.ErrorCode = restore.CodigoDestinoProtegido
+				update.ErrorMessage = restore.MensagemDestinoProtegido + " (" + err.Error() + ")"
 			}
 			// Destino só de leitura (/etc no serviço nativo do Linux): a
 			// mensagem diz por quê e o que fazer.

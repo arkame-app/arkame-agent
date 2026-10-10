@@ -39,3 +39,20 @@ func TestMesmoCaminhoWindows(t *testing.T) {
 		t.Error("pasta desviada")
 	}
 }
+
+func TestDentroDoCaminhoWindows(t *testing.T) {
+	for _, c := range []struct {
+		real, pasta string
+		quer        bool
+	}{
+		{`\\?\C:\Program Files\Arkame`, `C:\Program Files\Arkame`, true},
+		{`\\?\C:\Program Files\Arkame\sub`, `c:\program files\arkame\`, true},
+		{`C:\Program Files\Arkame2`, `C:\Program Files\Arkame`, false},
+		{`C:\Program Files`, `C:\Program Files\Arkame`, false},
+		{`C:\Restaurados`, ``, false},
+	} {
+		if got := dentroDoCaminhoWindows(c.real, c.pasta); got != c.quer {
+			t.Errorf("dentroDoCaminhoWindows(%q, %q) = %v, queria %v", c.real, c.pasta, got, c.quer)
+		}
+	}
+}

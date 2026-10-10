@@ -649,3 +649,31 @@ func TestSessionStartLevaAsCapacidades(t *testing.T) {
 		}
 	}
 }
+
+// As pastas onde a restauração não grava: a do programa, a do programa que a
+// atualização troca e as da configuração e dos segredos — nunca a raiz.
+func TestPastasDoAgente(t *testing.T) {
+	cfg := &config.Config{
+		ConfigPath:     "/etc/arkame/agent.env",
+		TokenPath:      "/etc/arkame/agent.token",
+		PrivateKeyPath: "/var/lib/arkame/agent.key",
+		AgentIDPath:    "/agent.id", // na raiz: não entra
+	}
+	pastas := pastasDoAgente(cfg)
+	tem := func(p string) bool {
+		for _, x := range pastas {
+			if x == p {
+				return true
+			}
+		}
+		return false
+	}
+	for _, quer := range []string{"/etc/arkame", "/var/lib/arkame", filepath.Dir(service.ProgramaAtual())} {
+		if !tem(quer) {
+			t.Errorf("faltou %s em %v", quer, pastas)
+		}
+	}
+	if tem("/") {
+		t.Errorf("a raiz entrou como pasta do agente: %v", pastas)
+	}
+}

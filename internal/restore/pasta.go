@@ -3,6 +3,7 @@ package restore
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 )
@@ -36,6 +37,46 @@ const MensagemDestinoSomenteLeitura = "o destino é só de leitura para o agente
 // DestinoSomenteLeitura diz se a restauração falhou porque o destino é só de
 // leitura (EROFS).
 func DestinoSomenteLeitura(err error) bool { return errors.Is(err, syscall.EROFS) }
+
+// ErrDestinoProtegido: o destino da restauração é a pasta do programa do
+// agente, a da configuração dele, ou fica dentro de uma delas. O daemon o
+// relata ao painel com o código "protected_destination".
+//
+// A atualização automática só põe no lugar um programa cujo checksums.txt tem
+// a assinatura de release, e para trocar o programa o serviço do sistema
+// ganhou escrita na pasta dele (ReadWritePaths, internal/service/systemd.go).
+// A restauração grava como root onde o painel mandar: sem esta recusa, um
+// item restaurado como `arkame-agent` (ou `arkame-agent.novo`, ou o registro
+// da troca) na pasta do programa punha ali um programa que nenhuma assinatura
+// cobre — e um `agent.env` restaurado em /etc/arkame trocava o painel e os
+// comandos do agente. Quem compromete o painel não pode ganhar por aqui o que
+// a assinatura lhe nega.
+var ErrDestinoProtegido = errors.New("o destino é a pasta do programa ou da configuração do agente")
+
+// CodigoDestinoProtegido é o error_code do item recusado por ErrDestinoProtegido.
+const CodigoDestinoProtegido = "protected_destination"
+
+// MensagemDestinoProtegido explica a recusa ao operador.
+const MensagemDestinoProtegido = "o agente não restaura para dentro da pasta do próprio programa nem da própria " +
+	"configuração (a atualização automática depende de só o agente gravar ali): restaure em outra pasta e copie de lá"
+
+// dentroDeProtegida diz, só pelo texto do caminho, se alvo é uma das pastas
+// protegidas ou fica dentro de uma. É a recusa barata, antes de criar pasta; a
+// que vale contra link e caminho alternativo é a da pasta aberta (dentroDe).
+func dentroDeProtegida(alvo string, protegidas []string) (string, bool) {
+	alvo = filepath.Clean(alvo)
+	for _, p := range protegidas {
+		if p == "" {
+			continue
+		}
+		p = filepath.Clean(p)
+		rel, err := filepath.Rel(p, alvo)
+		if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return p, true
+		}
+	}
+	return "", false
+}
 
 // maxLinks limita a cadeia de links do sistema seguidos, como o kernel (ELOOP).
 const maxLinks = 40

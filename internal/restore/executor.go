@@ -65,6 +65,10 @@ var ErrPulado = errors.New("destino já existe; pulado pela estratégia skip")
 type Options struct {
 	S3       *s3.Client
 	HostRoot string // raiz (em container Docker = "/host"; standalone = "/")
+	// Protegidas são as pastas onde a restauração nunca grava: a do programa
+	// do agente e a da configuração dele (ver ErrDestinoProtegido). Caminhos
+	// como este processo os vê.
+	Protegidas []string
 }
 
 // Run baixa um item do bucket e escreve no destino. Se o destino já tem o
@@ -107,11 +111,22 @@ func Run(ctx context.Context, opts Options, item api.RestoreItem) error {
 	// HostRoot, não dentro do container.
 	noLugar := noLugarDeOrigem(caminho.Windows, caminho.NaChave(opts.HostRoot,
 		filepath.Join(destDir, filepath.FromSlash(item.DestFilename))), item.SourceKey)
+	// A pasta do programa do agente e a da configuração não são destino: pelo
+	// caminho pedido, antes de criar qualquer pasta, e de novo pela pasta
+	// aberta — a que o caminho alcançou de verdade, com os links do sistema
+	// resolvidos (no Docker, /host/etc/arkame é o /etc/arkame do container).
+	alvoPedido := filepath.Join(destDir, filepath.FromSlash(subDir))
+	if p, dentro := dentroDeProtegida(alvoPedido, opts.Protegidas); dentro {
+		return fmt.Errorf("%w: %s (%s)", ErrDestinoProtegido, alvoPedido, p)
+	}
 	dir, err := abrirPasta(opts.HostRoot, destDir, subDir, noLugar)
 	if err != nil {
 		return err
 	}
 	defer dir.Close()
+	if p, dentro := dir.dentroDe(opts.Protegidas); dentro {
+		return fmt.Errorf("%w: %s (%s)", ErrDestinoProtegido, alvoPedido, p)
+	}
 	aposAbrirPasta()
 
 	// Item refeito: a gravação deu certo, mas o PATCH final não chegou ao

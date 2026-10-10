@@ -218,6 +218,53 @@ func partes(p string) []string {
 
 func (p *pasta) Close() error { return unix.Close(p.fd) }
 
+// dentroDe diz se a pasta aberta é uma das protegidas ou fica dentro de uma,
+// pela identidade (dispositivo e inode) e não pelo nome: sobe de `..` em `..`
+// a partir do descritor, até a raiz. Um link do sistema no caminho, ou o mesmo
+// diretório montado em dois lugares (o volume da configuração no Docker, que é
+// /etc/arkame no container e /host/… no servidor), não a engana.
+func (p *pasta) dentroDe(protegidas []string) (string, bool) {
+	type id struct{ dev, ino uint64 }
+	alvos := map[id]string{}
+	for _, c := range protegidas {
+		var st unix.Stat_t
+		if c == "" || unix.Stat(c, &st) != nil {
+			continue
+		}
+		alvos[id{uint64(st.Dev), uint64(st.Ino)}] = c
+	}
+	if len(alvos) == 0 {
+		return "", false
+	}
+	fd, err := unix.Dup(p.fd)
+	if err != nil {
+		return "", false
+	}
+	defer func() { unix.Close(fd) }()
+	for nivel := 0; nivel < 4096; nivel++ {
+		var st unix.Stat_t
+		if unix.Fstat(fd, &st) != nil {
+			return "", false
+		}
+		aqui := id{uint64(st.Dev), uint64(st.Ino)}
+		if c, ok := alvos[aqui]; ok {
+			return c, true
+		}
+		mae, err := unix.Openat(fd, "..", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+		if err != nil {
+			return "", false
+		}
+		var stMae unix.Stat_t
+		if unix.Fstat(mae, &stMae) != nil || (id{uint64(stMae.Dev), uint64(stMae.Ino)}) == aqui {
+			unix.Close(mae)
+			return "", false // a raiz
+		}
+		unix.Close(fd)
+		fd = mae
+	}
+	return "", false
+}
+
 // criarTemp cria o temporário na pasta com O_EXCL|O_NOFOLLOW (0600, como o
 // os.CreateTemp). padrao tem um `*`, trocado por dígitos aleatórios.
 func (p *pasta) criarTemp(padrao string) (*os.File, string, error) {
