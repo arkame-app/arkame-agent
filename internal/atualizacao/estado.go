@@ -21,6 +21,10 @@ const (
 	// Docker: o programa do volume não provou que funciona (ou não é válido)
 	// e o lançador deixou de usá-lo; vale o da imagem.
 	SituacaoAbandonada = "abandonada"
+	// O programa novo não provou que funciona no prazo, mas não há anterior
+	// utilizável para voltar: ele segue no lugar (melhor que programa nenhum),
+	// e o primeiro heartbeat aceito ainda o confirma.
+	SituacaoSemVolta = "sem_volta"
 )
 
 // Estado é o registro da última troca, num arquivo ao lado do programa
@@ -30,10 +34,18 @@ const (
 type Estado struct {
 	Situacao string `json:"situacao"`
 	// Versao é a versão posta no lugar; VersaoAnterior, a que saiu.
-	Versao         string    `json:"versao"`
-	VersaoAnterior string    `json:"versao_anterior,omitempty"`
-	Sha256         string    `json:"sha256"`
+	Versao         string `json:"versao"`
+	VersaoAnterior string `json:"versao_anterior,omitempty"`
+	Sha256         string `json:"sha256"`
+	// Sha256Anterior é o do programa que saiu (o `.anterior`). A volta e a
+	// recuperação de uma troca interrompida só usam o `.anterior` que confere
+	// com ele. Vazio: registro de antes deste campo.
+	Sha256Anterior string    `json:"sha256_anterior,omitempty"`
 	AplicadaEm     time.Time `json:"aplicada_em"`
+	// MudouEm é de quando é a situação atual (a reversão, o abandono, a
+	// confirmação). Vai ao painel com o relato: sem o instante, uma reversão
+	// antiga era lida como o resultado da tentativa nova. Zero: vale AplicadaEm.
+	MudouEm time.Time `json:"mudou_em,omitzero"`
 	// Arranques conta as partidas do programa novo sem sucesso, por agente
 	// (a chave é o arquivo de configuração; no Docker, "lancador"). Zera
 	// quando a prova passa.
@@ -62,12 +74,24 @@ func (l Lugar) lerEstado() (Estado, bool) {
 // gravarEstado grava o registro por troca atômica, com fsync: ele decide, no
 // próximo arranque, se o programa no lugar fica.
 func (l Lugar) gravarEstado(e Estado) error {
+	if antes, ok := l.lerEstado(); !ok || antes.Situacao != e.Situacao || antes.Versao != e.Versao {
+		e.MudouEm = agora().UTC()
+	}
+	return l.restaurarEstado(e)
+}
+
+// restaurarEstado grava o registro como veio, sem mexer no MudouEm: é como a
+// troca que falhou devolve o registro que havia antes dela.
+func (l Lugar) restaurarEstado(e Estado) error {
 	b, err := json.MarshalIndent(e, "", "  ")
 	if err != nil {
 		return err
 	}
 	return gravarArquivo(l.Estado, append(b, '\n'))
 }
+
+// agora é o relógio; os testes o trocam.
+var agora = time.Now
 
 // gravarArquivo é o segredo.Gravar (troca atômica com fsync), legível por
 // todos: nada aqui é segredo. Variável para os testes simularem o disco cheio.

@@ -200,3 +200,11 @@ func (b *bancada) estado() Estado {
 	}
 	return e
 }
+
+// executarQueMarca é um auto-teste que só anota que foi chamado.
+func executarQueMarca(chamado *bool) func(context.Context, string, ...string) ([]byte, error) {
+	return func(context.Context, string, ...string) ([]byte, error) {
+		*chamado = true
+		return []byte(LinhaDaVersao + "0.5.0\n"), nil
+	}
+}

@@ -179,7 +179,8 @@ func TestProgramaNovoQueNaoExecutaNaoEntra(t *testing.T) {
 	b := novaBancada(t)
 	b.trocarPrograma([]byte("isto não é um programa\n"))
 	_, err := b.aplicar()
-	b.exigirFalha(err, FalhaAutoTeste)
+	// Código próprio: é desta máquina, e o painel não o conta contra a versão.
+	b.exigirFalha(err, FalhaAutoTesteBarrado)
 }
 
 // O programa novo passa no self-test mas diz ser de outra versão: recusa.
@@ -282,14 +283,13 @@ func TestEnderecoHttpDeForaNaoEUsado(t *testing.T) {
 	}
 }
 
-// Pedido sem SHA-256, com versão torta ou com nome de arquivo que sai da
-// pasta: recusa antes de qualquer download.
+// Pedido sem SHA-256 ou com versão torta: recusa antes de qualquer download.
+// (O nome de arquivo do pedido é só conferido: TestArquivoDoPedidoESoConferencia.)
 func TestPedidoInvalidoRecusa(t *testing.T) {
 	for nome, estragar := range map[string]func(*Pedido){
-		"sem sha":        func(p *Pedido) { p.Sha256 = "" },
-		"sha curto":      func(p *Pedido) { p.Sha256 = "abcd" },
-		"versão torta":   func(p *Pedido) { p.Versao = "nova" },
-		"arquivo com ..": func(p *Pedido) { p.Arquivo = "../../etc/passwd" },
+		"sem sha":      func(p *Pedido) { p.Sha256 = "" },
+		"sha curto":    func(p *Pedido) { p.Sha256 = "abcd" },
+		"versão torta": func(p *Pedido) { p.Versao = "nova" },
 	} {
 		b := novaBancada(t)
 		estragar(&b.pedido)

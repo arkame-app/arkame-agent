@@ -2,10 +2,13 @@ package atualizacao
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/url"
@@ -27,13 +30,39 @@ const (
 
 // ClientePadrao baixa com o proxy do ambiente (HTTPS_PROXY/NO_PROXY), como o
 // client do painel. Sem prazo total: quem limita é o contexto da troca.
+//
+// Cada redirecionamento passa pela mesma regra do endereço de partida
+// (conferirSalto): o release do GitHub responde com um 302 para o
+// armazenamento dele, e sem a conferência um endereço https podia mandar o
+// download para um http de fora — ou para um serviço da rede do cliente.
 func ClientePadrao() *http.Client {
-	return &http.Client{Transport: &http.Transport{
-		Proxy:                 http.ProxyFromEnvironment,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ResponseHeaderTimeout: 60 * time.Second,
-		IdleConnTimeout:       90 * time.Second,
-	}}
+	return &http.Client{
+		Transport: &http.Transport{
+			Proxy:                 http.ProxyFromEnvironment,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ResponseHeaderTimeout: 60 * time.Second,
+			IdleConnTimeout:       90 * time.Second,
+		},
+		CheckRedirect: conferirSalto,
+	}
+}
+
+// maximoDeSaltos é quantos redirecionamentos um download segue. O GitHub usa
+// um; o teto é folga para um espelho, não para um laço.
+const maximoDeSaltos = 5
+
+// conferirSalto é o CheckRedirect do ClientePadrao: o alvo de cada salto tem
+// de ser https (ou http da própria máquina), sem usuário e senha — a regra do
+// endereço de partida. A consulta é aceita aqui: o endereço assinado do
+// armazenamento do GitHub é uma.
+func conferirSalto(req *http.Request, via []*http.Request) error {
+	if len(via) >= maximoDeSaltos {
+		return fmt.Errorf("redirecionamentos demais (%d) baixando a atualização", len(via))
+	}
+	if !origemAceita(req.URL) {
+		return fmt.Errorf("redirecionamento recusado: %s://%s não é https", req.URL.Scheme, req.URL.Host)
+	}
+	return nil
 }
 
 // basesDaVersao devolve de onde baixar os arquivos de uma versão, na ordem: o
@@ -53,9 +82,22 @@ func basesDaVersao(baseDoPainel, reserva string, versao Versao) []string {
 	return bases
 }
 
+// enderecoAceito vale para a base (a do painel e a reserva). Além da origem,
+// recusa consulta e fragmento: o caminho /v<versão>/<arquivo> é colado no fim
+// da base, e numa base "https://x/y?z=" ele viraria valor do parâmetro — o
+// pedido iria a um endereço que ninguém escolheu.
 func enderecoAceito(endereco string) bool {
 	u, err := url.Parse(endereco)
-	if err != nil || u.Host == "" || u.User != nil {
+	if err != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.ContainsAny(endereco, "?#") {
+		return false
+	}
+	return origemAceita(u)
+}
+
+// origemAceita: https, ou http só para a própria máquina (ensaio e testes), e
+// sem usuário e senha no endereço.
+func origemAceita(u *url.URL) bool {
+	if u == nil || u.Host == "" || u.User != nil {
 		return false
 	}
 	switch u.Scheme {
@@ -72,21 +114,40 @@ func enderecoAceito(endereco string) bool {
 	return false
 }
 
-// buscar baixa um arquivo pequeno do release (checksums.txt e a assinatura),
-// da primeira base que responder.
-func buscar(ctx context.Context, cliente *http.Client, bases []string, nome string) ([]byte, error) {
-	var ultimo error
+// buscarAssinado baixa o checksums.txt e a assinatura dele da MESMA base e
+// confere a assinatura; a primeira base em que o par confere vale. Os dois são
+// uma unidade: buscados cada um "da primeira base que responder", uma base que
+// respondesse 200 com lixo (página de erro de um proxy, espelho desatualizado)
+// reprovava a troca sem a reserva, boa, ser tentada.
+//
+// O erro, quando nenhuma base serve, é de assinatura se alguma base entregou
+// um par que não confere — é o mais grave, e é o que o painel precisa ver.
+func buscarAssinado(ctx context.Context, cliente *http.Client, bases []string, chaves []ed25519.PublicKey, versao Versao) (checksums, assinatura []byte, err error) {
+	var naoConfere, naoBaixou error
 	for _, base := range bases {
-		b, err := buscarDe(ctx, cliente, base+"/"+nome)
-		if err == nil {
-			return b, nil
+		c, err := buscarDe(ctx, cliente, base+"/"+ArquivoDeChecksums)
+		if err != nil {
+			naoBaixou = fmt.Errorf("baixando o %s: %w", ArquivoDeChecksums, err)
+			continue
 		}
-		ultimo = err
+		a, err := buscarDe(ctx, cliente, base+"/"+ArquivoDaAssinatura)
+		if err != nil {
+			naoBaixou = fmt.Errorf("baixando o %s: %w", ArquivoDaAssinatura, err)
+			continue
+		}
+		if err := VerificarAssinatura(chaves, versao, c, a); err != nil {
+			naoConfere = err
+			continue
+		}
+		return c, a, nil
 	}
-	if ultimo == nil {
-		ultimo = fmt.Errorf("sem endereço de onde baixar %s", nome)
+	switch {
+	case naoConfere != nil:
+		return nil, nil, &Falha{Codigo: FalhaAssinatura, Err: naoConfere}
+	case naoBaixou != nil:
+		return nil, nil, falha(FalhaDownload, "%w", naoBaixou)
 	}
-	return nil, ultimo
+	return nil, nil, falha(FalhaDownload, "sem endereço de onde baixar o %s", ArquivoDeChecksums)
 }
 
 func buscarDe(ctx context.Context, cliente *http.Client, endereco string) ([]byte, error) {
@@ -123,25 +184,37 @@ func abrir(ctx context.Context, cliente *http.Client, endereco string) (*http.Re
 }
 
 // baixarPara grava o arquivo do release em destino e devolve o SHA-256 do que
-// foi gravado. Em qualquer falha — rede cortada no meio, disco cheio — o
-// destino sai do disco: um programa pela metade nunca fica para trás.
-func baixarPara(ctx context.Context, cliente *http.Client, bases []string, nome, destino string) (string, error) {
-	var ultimo error
+// foi gravado, que é o esperado. Em qualquer falha — rede cortada no meio,
+// disco cheio — o destino sai do disco: um programa pela metade nunca fica
+// para trás.
+//
+// A base que entrega um arquivo com outro resumo não encerra a busca: a
+// seguinte é tentada, como no checksums.txt. Quando nenhuma serve, o erro é o
+// do resumo (checksum_mismatch) se alguma entregou o arquivo errado.
+func baixarPara(ctx context.Context, cliente *http.Client, bases []string, nome, destino, esperado string) (string, error) {
+	var naoConfere, naoBaixou error
 	for _, base := range bases {
 		resumo, err := baixarDe(ctx, cliente, base+"/"+nome, destino)
-		if err == nil {
+		if err == nil && resumo == esperado {
 			return resumo, nil
 		}
 		_ = os.Remove(destino)
-		ultimo = err
+		if err == nil {
+			naoConfere = fmt.Errorf("o arquivo baixado de %s tem o SHA-256 %s, e o checksums.txt assinado diz %s", base, resumo, esperado)
+			continue
+		}
+		naoBaixou = err
 		if ctx.Err() != nil {
 			break
 		}
 	}
-	if ultimo == nil {
-		ultimo = fmt.Errorf("sem endereço de onde baixar %s", nome)
+	switch {
+	case naoConfere != nil:
+		return "", &Falha{Codigo: FalhaResumoDoArquivo, Err: naoConfere}
+	case naoBaixou != nil:
+		return "", falha(FalhaDownload, "%w", naoBaixou)
 	}
-	return "", ultimo
+	return "", falha(FalhaDownload, "sem endereço de onde baixar %s", nome)
 }
 
 func baixarDe(ctx context.Context, cliente *http.Client, endereco, destino string) (string, error) {
@@ -186,10 +259,30 @@ type arquivoNovo interface {
 	Close() error
 }
 
-// criarNovo abre o destino do download. Variável para os testes simularem o
-// disco cheio.
+// criarNovo abre o destino do download. O que estiver no caminho sai antes, e
+// a abertura é exclusiva e não segue link: com O_TRUNC, um `.novo` deixado ali
+// como link simbólico era seguido — o download sobrescrevia o alvo do link e,
+// na troca, o link ia para o lugar do programa. Variável para os testes
+// simularem o disco cheio.
 var criarNovo = func(caminho string) (arquivoNovo, error) {
-	return os.OpenFile(caminho, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o700)
+	if err := os.Remove(caminho); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("tirando o que estava em %s: %w", caminho, err)
+	}
+	return os.OpenFile(caminho, os.O_CREATE|os.O_EXCL|os.O_WRONLY|semSeguirLink, 0o700)
+}
+
+// arquivoComum recusa o que não é arquivo regular (link, pasta, dispositivo):
+// é o que se confere, sem seguir link, antes de dar permissão de execução a um
+// arquivo da pasta do programa, de executá-lo ou de pô-lo no lugar.
+func arquivoComum(caminho string) error {
+	fi, err := os.Lstat(caminho)
+	if err != nil {
+		return err
+	}
+	if !fi.Mode().IsRegular() {
+		return fmt.Errorf("%s não é um arquivo comum (%s)", caminho, fi.Mode().Type())
+	}
+	return nil
 }
 
 // resumoDoArquivo é o SHA-256 (hex) de um arquivo do disco.

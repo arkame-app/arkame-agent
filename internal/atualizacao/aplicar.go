@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
@@ -25,7 +26,9 @@ type Pedido struct {
 	Sha256 string
 	// BaseURL de onde baixar (<base>/v<versão>/<arquivo>). Vazio: só a reserva.
 	BaseURL string
-	// Arquivo é o nome no release; vazio, o deste sistema (NomeNoRelease).
+	// Arquivo é o nome no release segundo o painel. Só conferência: o arquivo
+	// baixado é sempre o deste sistema (NomeNoRelease), e um nome diferente
+	// recusa o pedido.
 	Arquivo string
 	// Forcar tenta de novo uma versão que esta máquina já pôs e reverteu.
 	Forcar bool
@@ -69,9 +72,11 @@ const (
 	FalhaDownload         = "download_failed"
 	FalhaAssinatura       = "signature_invalid"
 	FalhaResumoDoPainel   = "panel_sha_mismatch"
+	FalhaArquivoDoPedido  = "file_mismatch"
 	FalhaResumoDoArquivo  = "checksum_mismatch"
 	FalhaPermissoes       = "permissions"
 	FalhaAutoTeste        = "self_test_failed"
+	FalhaAutoTesteBarrado = "self_test_blocked"
 	FalhaVersaoDoPrograma = "version_mismatch"
 	FalhaTroca            = "swap_failed"
 )
@@ -176,6 +181,12 @@ func Aplicar(ctx context.Context, p Pedido, op Opcoes) (*Resultado, error) {
 	}
 	defer destravar()
 
+	// Uma troca anterior que parou entre os dois renames (ver Recuperar): o
+	// programa volta ao lugar, e o registro lido a seguir já conta com isso.
+	if feito := l.recuperar(); feito != "" {
+		slog.Warn("uma troca anterior tinha parado no meio; pus o programa de volta no lugar", "programa", l.Atual, "qual", feito)
+	}
+
 	// O que esta máquina já sabe desta versão.
 	if e, tem := l.lerEstado(); tem && mesmaVersao(e.Versao, p.Versao) {
 		switch e.Situacao {
@@ -184,7 +195,7 @@ func Aplicar(ctx context.Context, p Pedido, op Opcoes) (*Resultado, error) {
 				return nil, falha(FalhaJaRevertida,
 					"a versão %s já foi posta nesta máquina e voltou atrás (%s)", alvo, e.Motivo)
 			}
-		case SituacaoEmProva, SituacaoConfirmada:
+		case SituacaoEmProva, SituacaoConfirmada, SituacaoSemVolta:
 			if noLugar, _ := resumoDoArquivo(l.Atual); noLugar == e.Sha256 && noLugar == resumoDoPainel {
 				if e.Situacao == SituacaoEmProva {
 					return nil, &Adiada{Motivo: AdiadaVizinhoProva}
@@ -202,25 +213,20 @@ func Aplicar(ctx context.Context, p Pedido, op Opcoes) (*Resultado, error) {
 	if len(bases) == 0 {
 		return nil, falha(FalhaDownload, "sem endereço https de onde baixar a versão %s", alvo)
 	}
-	nome := p.Arquivo
-	if nome == "" {
-		nome = NomeNoRelease()
-	}
-	if strings.ContainsAny(nome, `/\`) || strings.HasPrefix(nome, ".") {
-		return nil, falha(FalhaPedidoInvalido, "nome de arquivo inválido no pedido: %q", nome)
+	// O arquivo é sempre o deste sistema, pelo nome que ESTE programa sabe. O
+	// nome que o painel manda só é conferido: aceito como veio, o painel
+	// escolhia qualquer linha do checksums.txt assinado — o programa de outro
+	// sistema, ou um pacote —, e a assinatura, que cobre o arquivo inteiro,
+	// conferia.
+	nome := NomeNoRelease()
+	if p.Arquivo != "" && p.Arquivo != nome {
+		return nil, falha(FalhaArquivoDoPedido, "o pedido traz o arquivo %q, e o programa deste sistema é %q", p.Arquivo, nome)
 	}
 
 	// 1. O checksums.txt assinado, para esta versão.
-	checksums, err := buscar(ctx, cliente, bases, ArquivoDeChecksums)
+	checksums, assinatura, err := buscarAssinado(ctx, cliente, bases, op.Chaves, alvo)
 	if err != nil {
-		return nil, falha(FalhaDownload, "baixando o %s: %w", ArquivoDeChecksums, err)
-	}
-	assinatura, err := buscar(ctx, cliente, bases, ArquivoDaAssinatura)
-	if err != nil {
-		return nil, falha(FalhaDownload, "baixando o %s: %w", ArquivoDaAssinatura, err)
-	}
-	if err := VerificarAssinatura(op.Chaves, alvo, checksums, assinatura); err != nil {
-		return nil, &Falha{Codigo: FalhaAssinatura, Err: err}
+		return nil, err
 	}
 	// 2. Os dois canais dizem o mesmo resumo.
 	resumoAssinado, err := ResumoNoChecksums(checksums, nome)
@@ -233,9 +239,9 @@ func Aplicar(ctx context.Context, p Pedido, op Opcoes) (*Resultado, error) {
 	}
 
 	// 3. O arquivo baixado é esse.
-	baixado, err := baixarPara(ctx, cliente, bases, nome, l.Novo)
+	baixado, err := baixarPara(ctx, cliente, bases, nome, l.Novo, resumoAssinado)
 	if err != nil {
-		return nil, falha(FalhaDownload, "%w", err)
+		return nil, err
 	}
 	feito := false
 	defer func() {
@@ -243,9 +249,10 @@ func Aplicar(ctx context.Context, p Pedido, op Opcoes) (*Resultado, error) {
 			_ = os.Remove(l.Novo)
 		}
 	}()
-	if baixado != resumoAssinado {
-		return nil, falha(FalhaResumoDoArquivo,
-			"o arquivo baixado tem o SHA-256 %s, e o checksums.txt assinado diz %s", baixado, resumoAssinado)
+	// Entre o download e aqui o caminho pode ter sido trocado por outra coisa:
+	// só um arquivo comum ganha permissão de execução e é executado.
+	if err := arquivoComum(l.Novo); err != nil {
+		return nil, falha(FalhaPermissoes, "%w", err)
 	}
 	if err := os.Chmod(l.Novo, 0o755); err != nil {
 		return nil, falha(FalhaPermissoes, "%w", err)
@@ -264,17 +271,20 @@ func Aplicar(ctx context.Context, p Pedido, op Opcoes) (*Resultado, error) {
 	// 5. A troca. O registro vai ao disco antes: se o processo morrer logo
 	// depois do rename, o programa novo já sobe em prova.
 	anterior, tinhaEstado := l.lerEstado()
+	// O resumo do programa que sai: a volta só usa o `.anterior` que confere.
+	resumoDoQueSai, _ := resumoDoArquivo(l.Atual)
 	novoEstado := Estado{
 		Situacao:       SituacaoEmProva,
 		Versao:         alvo.String(),
 		VersaoAnterior: atual.String(),
 		Sha256:         baixado,
-		AplicadaEm:     time.Now().UTC(),
+		Sha256Anterior: resumoDoQueSai,
+		AplicadaEm:     agora().UTC(),
 		PeloLancador:   op.PeloLancador,
 	}
 	desfazerEstado := func() {
 		if tinhaEstado {
-			_ = l.gravarEstado(anterior)
+			_ = l.restaurarEstado(anterior)
 		} else {
 			l.apagarEstado()
 		}
@@ -304,9 +314,10 @@ func Aplicar(ctx context.Context, p Pedido, op Opcoes) (*Resultado, error) {
 // A troca a confere: o programa novo tem de dizer que é da versão pedida.
 const LinhaDaVersao = "versao="
 
-// autoTestar executa o programa novo. Código de saída diferente de zero, ou
-// programa que nem executa (no Windows com o Smart App Control ligado, o .exe
-// sem assinatura de código é barrado), é falha: o programa atual fica.
+// autoTestar executa o programa novo. Código de saída diferente de zero
+// (self_test_failed), ou programa que nem executa (self_test_blocked: no
+// Windows com o Smart App Control ligado, o .exe sem assinatura de código é
+// barrado), é falha: o programa atual fica.
 func autoTestar(ctx context.Context, op Opcoes, novo string, alvo Versao) error {
 	executar := op.Executar
 	if executar == nil {
@@ -317,6 +328,13 @@ func autoTestar(ctx context.Context, op Opcoes, novo string, alvo Versao) error 
 	tctx, cancel := context.WithTimeout(ctx, prazoDoAutoTeste)
 	defer cancel()
 	saida, err := executar(tctx, novo, op.ArgsDoAutoTeste...)
+	var saiu *exec.ExitError
+	if err != nil && !errors.As(err, &saiu) && tctx.Err() == nil {
+		// Nem chegou a rodar: é desta máquina (Smart App Control, pasta
+		// montada com noexec, outra arquitetura), e não do programa novo. O
+		// código é outro para o painel não contar como falha da versão.
+		return falha(FalhaAutoTesteBarrado, "o programa novo não pôde ser executado nesta máquina: %v: %s", err, fimDaSaida(saida))
+	}
 	if err != nil {
 		return falha(FalhaAutoTeste, "o programa novo não passou no auto-teste: %v: %s", err, fimDaSaida(saida))
 	}
