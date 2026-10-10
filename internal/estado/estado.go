@@ -145,9 +145,11 @@ func abrirArquivo(caminho string, id Identidade) (b *Base, err error) {
 	defer debug.SetPanicOnFault(antes)
 
 	db, err = bolt.Open(caminho, 0o600, &bolt.Options{
-		Timeout:        2 * time.Second,
-		NoFreelistSync: true,
-		FreelistType:   bolt.FreelistMapType,
+		Timeout: 2 * time.Second,
+		// A lista de páginas livres vai gravada no arquivo: sem ela o bbolt
+		// a refaz na abertura percorrendo o arquivo inteiro — 250 MB lidos
+		// e mapeados a cada backup de 1 milhão de arquivos.
+		FreelistType: bolt.FreelistMapType,
 	})
 	if err != nil {
 		return nil, err
@@ -507,7 +509,12 @@ type Execucao struct {
 	adotadas   map[uint32]bool
 	seqInicial uint64
 	vistos     []atomic.Uint64
+	consultas  atomic.Uint64
 }
+
+// consultasPorAlivio é de quantas em quantas consultas as páginas mapeadas
+// do arquivo são devolvidas ao sistema (ver aliviar).
+const consultasPorAlivio = 20000
 
 // Comecar abre uma geração nova para a sessão. adotar são gerações de
 // tentativas anteriores deste mesmo processo, que valem como confirmadas
@@ -546,6 +553,9 @@ func (e *Execucao) Falhou() bool { return e.p.b.morta.Load() }
 
 // Buscar devolve a entrada da chave (relativa ao prefixo do plano).
 func (e *Execucao) Buscar(chave string) (ent Entrada, achou bool, err error) {
+	if e.consultas.Add(1)%consultasPorAlivio == 0 {
+		e.p.b.aliviar()
+	}
 	err = e.p.b.protegido(func() error {
 		return e.p.b.db.View(func(tx *bolt.Tx) error {
 			k := []byte(chave)
@@ -696,6 +706,7 @@ func (e *Execucao) Varrer(decidir func(chave string, ent Entrada, visto bool) (A
 				return err
 			}
 		}
+		e.p.b.aliviar()
 		if fim {
 			return nil
 		}
