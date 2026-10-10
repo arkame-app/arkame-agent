@@ -518,3 +518,37 @@ func TestSessaoParcialFechaEmDeltaSemRemoved(t *testing.T) {
 		t.Fatalf("%+v", s)
 	}
 }
+
+// Painel fora do ar do meio do backup até o fim das tentativas: o /complete
+// não é mandado com o índice pela metade. A sessão vai como falha, o estado
+// não é confirmado, e o backup seguinte manda o índice sem reenviar arquivo.
+func TestPainelForaDoArAteOFimFalhaSemConfirmar(t *testing.T) {
+	m := novaMesaDoDaemon(t)
+	m.painel.MaxEntradas = 20
+	m.semear(100)
+	var fora atomic.Bool
+	fora.Store(true)
+	m.painel.Responder = func(rota string, _ *http.Request, corpo []byte) (int, string) {
+		if rota == "files" && fora.Load() && !strings.HasPrefix(string(corpo), `{"seq":1,`) {
+			return 503, "fora do ar"
+		}
+		return 0, ""
+	}
+	if err := m.rodar(); err == nil {
+		t.Fatal("sem o índice inteiro o backup devolve erro")
+	}
+	rotas := m.painel.Rotas()
+	if rotas["complete"].Requisicoes != 0 || rotas["fail"].Requisicoes != 1 {
+		t.Fatalf("nem /complete com índice pela metade, e um /fail: %+v", rotas)
+	}
+	if s := m.painel.Ultima(); s.Status != "failed" || s.ErrorCode != "complete_failed" {
+		t.Fatalf("%+v", s)
+	}
+	fora.Store(false)
+	m.s3.Zerar()
+	s := m.rodarOK()
+	if s.Status != "complete" || s.Modo != "full" || s.Entradas != 100 || m.s3.N("PutObject") != 0 || m.s3.N("HeadObject") != 100 {
+		t.Fatalf("seguinte: %+v s3=%v", s, m.s3.Requisicoes())
+	}
+	m.conferir()
+}

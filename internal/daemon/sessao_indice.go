@@ -241,9 +241,17 @@ func (s *sessaoDeIndice) concluirEmLotes(ctx context.Context, c *api.Client, cfg
 	case errors.Is(err, errIndiceRecusado):
 		motivo = err.Error()
 	case err != nil:
-		// Como o /complete sem resposta: os lotes podem ter chegado em
-		// parte. A sessão fica como está no painel.
-		slog.Warn("o índice não chegou inteiro ao painel; a sessão fica como está", "session_id", sessionID, "err", err)
+		// Os lotes não chegaram todos (painel fora do ar até o fim das
+		// tentativas, ou sem disco para guardá-los) e o /complete nem foi
+		// mandado: a sessão não tem como fechar. Vai como falha — se o painel
+		// ainda não responde, ele a fecha quando o agente abrir a próxima. O
+		// estado local não é confirmado; o próximo backup confere os
+		// arquivos desta sessão no bucket e manda o índice, sem reenviá-los.
+		slog.Warn("o índice não chegou inteiro ao painel; sessão marcada como falha", "session_id", sessionID, "err", err)
+		marcarFalha(ctx, c, cfg, sessionID, corpoDaFalha{
+			ErrorCode:    "complete_failed",
+			ErrorMessage: fmt.Sprintf("os arquivos subiram, mas o índice não chegou inteiro ao painel; o próximo backup o reenvia sem reenviar os arquivos: %v", err),
+		})
 		return fmt.Errorf("session index: %w", err)
 	}
 	for rodada := 0; motivo == ""; rodada++ {
