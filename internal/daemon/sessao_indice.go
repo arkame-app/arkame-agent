@@ -16,6 +16,7 @@ import (
 	"github.com/arkame-app/agent/internal/config"
 	"github.com/arkame-app/agent/internal/estado"
 	"github.com/arkame-app/agent/internal/purge"
+	"github.com/arkame-app/agent/internal/segredo"
 	syncengine "github.com/arkame-app/agent/internal/sync"
 )
 
@@ -116,6 +117,51 @@ func arquivoDoUso(cfg *config.Config, dir string) string {
 	return base[:len(base)-len(filepath.Ext(base))] + ".uso.json"
 }
 
+// pastaPrivada e conferirDono são os do pacote segredo; os testes os trocam
+// para simular a pasta deixada pronta por outro usuário.
+var (
+	pastaPrivada = segredo.PastaPrivada
+	conferirDono = segredo.ConferirDono
+)
+
+// abrirEstadoEm abre (ou cria) o estado do backup em dir, que tem de ser uma
+// pasta só do administrador.
+//
+// O estado decide o que o backup lê e o que ele afirma ao painel: uma entrada
+// forjada faz um arquivo escolhido deixar de ser guardado, ou leva ao catálogo
+// uma versão que não é a dele. O CRC de cada entrada pega estrago, não
+// adulteração. A defesa é ninguém além do administrador conseguir gravar ali:
+// a pasta é criada fechada (no Windows, com a DACL protegida de
+// Administradores e SYSTEM — o modo 0700 lá não restringe nada), e uma pasta
+// ou um arquivo de estado que já existia em nome de outro usuário não é usado.
+// Erro aqui faz o backup tentar a pasta seguinte (a da configuração) e, sem
+// nenhuma, rodar sem estado.
+func abrirEstadoEm(cfg *config.Config, dir string, id estado.Identidade) (*estado.Base, error) {
+	if err := pastaPrivada(dir); err != nil {
+		return nil, err
+	}
+	arq := arquivoDoEstado(cfg, dir)
+	if err := conferirDono(arq); errors.Is(err, segredo.ErrDonoNaoConfiavel) {
+		// Numa pasta que já existia com permissão larga, o arquivo pode ter
+		// sido posto por outro usuário. É derivável: sai, e o backup confere tudo.
+		slog.Warn("arquivo de estado local de outro dono; descartado (este backup lê e confere todos os arquivos)", "arquivo", arq, "err", err)
+		if rerr := os.Remove(arq); rerr != nil {
+			return nil, fmt.Errorf("descartando o estado de outro dono: %w", rerr)
+		}
+	}
+	b, err := estado.Abrir(dir, id)
+	if err != nil {
+		return nil, err
+	}
+	// Na pasta criada pelo agente o arquivo já herda a proteção; numa que já
+	// existia, é ele que tem de ficar fechado.
+	if err := segredo.Proteger(b.Caminho()); err != nil {
+		_ = b.Fechar()
+		return nil, err
+	}
+	return b, nil
+}
+
 // abrirSessaoDeIndice prepara o estado local e o envio em lotes da sessão.
 // Só devolve erro quando o painel pediu lotes e não há onde guardá-los.
 func abrirSessaoDeIndice(ctx context.Context, c *api.Client, cfg *config.Config, plan api.Plan, sessionID string, oferta *api.IndexOffer, prefixRoot string) (*sessaoDeIndice, error) {
@@ -132,7 +178,7 @@ func abrirSessaoDeIndice(ctx context.Context, c *api.Client, cfg *config.Config,
 	if cfg.StorageID != "" && cfg.AgentID != "" && (s.emLotes || cfg.StateAlways) {
 		baixasDoEstado.mu.Lock()
 		for _, dir := range pastasDoEstado(cfg) {
-			b, err := estado.Abrir(dir, identidadeDoEstado(cfg, plan.StorageRef.Bucket))
+			b, err := abrirEstadoEm(cfg, dir, identidadeDoEstado(cfg, plan.StorageRef.Bucket))
 			if errors.Is(err, estado.ErrEmUso) {
 				// Outro processo está com o estado deste agente + armazenamento:
 				// este backup roda sem estado (lê e confere tudo). A segunda
@@ -622,6 +668,9 @@ func aplicarBaixasPendentes(cfg *config.Config, aberto *estado.Base) {
 		caminho := arquivoDoEstado(cfg, dir)
 		if aberto != nil && caminho == aberto.Caminho() {
 			continue
+		}
+		if errors.Is(conferirDono(caminho), segredo.ErrDonoNaoConfiavel) {
+			continue // não é nosso: o backup que passar por ele o descarta
 		}
 		arq, err := estado.AbrirExistente(caminho)
 		switch {

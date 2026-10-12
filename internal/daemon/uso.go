@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/arkame-app/agent/internal/config"
+	"github.com/arkame-app/agent/internal/segredo"
 	"github.com/arkame-app/agent/internal/storage"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
@@ -86,6 +87,9 @@ func novoMedidorDeUso(cfg *config.Config) *medidorDeUso {
 		if m.ultimo != nil {
 			continue
 		}
+		if conferirDono(arquivo) != nil {
+			continue // não existe, ou foi posto lá por outro usuário
+		}
 		if b, err := os.ReadFile(arquivo); err == nil {
 			var u usoMedido
 			if json.Unmarshal(b, &u) == nil && u.Bucket == cfg.StorageBucket && !u.Em.IsZero() {
@@ -117,13 +121,16 @@ func (m *medidorDeUso) gravar(u *usoMedido) {
 	}
 	m.pendente = false
 	for _, arquivo := range m.arquivos {
-		if os.MkdirAll(filepath.Dir(arquivo), 0o700) != nil {
+		// A pasta do estado, criada (ou conferida) como no backup: só do
+		// administrador, e nunca a de outro dono.
+		if pastaPrivada(filepath.Dir(arquivo)) != nil {
 			continue
 		}
 		tmp := arquivo + ".tmp"
-		if os.WriteFile(tmp, b, 0o600) == nil && os.Rename(tmp, arquivo) == nil {
+		if os.WriteFile(tmp, b, 0o600) == nil && segredo.Proteger(tmp) == nil && os.Rename(tmp, arquivo) == nil {
 			return
 		}
+		_ = os.Remove(tmp)
 	}
 }
 

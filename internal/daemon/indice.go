@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/arkame-app/agent/internal/api"
+	"github.com/arkame-app/agent/internal/segredo"
 )
 
 // Limites de um lote quando o painel não os diz (os do contrato).
@@ -92,8 +93,11 @@ func novoEnviadorDeLotes(ctx context.Context, c *api.Client, rota string, oferta
 		e.maxBytes = oferta.MaxBytes
 	}
 	e.acordar = sync.NewCond(&e.mu)
+	// dir é a pasta do estado que o backup já preparou (segredo.PastaPrivada).
+	// Ela não é criada aqui: recriada por um MkdirAll, no Windows nasceria com
+	// a permissão herdada, aberta a qualquer usuário.
 	if dir != "" {
-		if err := os.MkdirAll(dir, 0o700); err != nil {
+		if st, err := os.Stat(dir); err != nil || !st.IsDir() {
 			dir = ""
 		}
 	}
@@ -103,6 +107,15 @@ func novoEnviadorDeLotes(ctx context.Context, c *api.Client, rota string, oferta
 	}
 	if err != nil {
 		return nil, fmt.Errorf("criando o arquivo temporário do índice: %w", err)
+	}
+	// O arquivo leva o nome de todos os arquivos da sessão. Na pasta do estado
+	// ele já herda a proteção; na temporária do sistema (ou numa pasta do
+	// estado que já existia, com outra permissão), é protegido aqui.
+	if perr := segredo.Proteger(f.Name()); perr != nil {
+		nome := f.Name()
+		_ = f.Close()
+		_ = os.Remove(nome)
+		return nil, fmt.Errorf("protegendo o arquivo temporário do índice: %w", perr)
 	}
 	// Onde o sistema deixa, o arquivo já sai do diretório: um `kill -9` não
 	// deixa resto. No Windows ele sai no fechar.
