@@ -33,6 +33,9 @@ type sessaoDeIndice struct {
 	// rehashUnico: esta execução relê tudo por causa da flag --rehash-all, que
 	// vale para um backup de cada plano (ver rehashFeito).
 	rehashUnico bool
+	// semConfirmar: o estado não pôde ser alinhado ao que o painel vai ter
+	// desta sessão; ela não o confirma.
+	semConfirmar bool
 
 	env     *enviadorDeLotes
 	arquivo *estado.Base
@@ -175,7 +178,7 @@ func (s *sessaoDeIndice) confirmar(sessionID string, result *syncengine.Result) 
 	if s.rehashUnico {
 		rehashFeito.Store(s.planID, true)
 	}
-	if s.plano == nil || s.ex == nil || result == nil || result.EstadoFalhou || s.ex.Falhou() {
+	if s.plano == nil || s.ex == nil || result == nil || result.EstadoFalhou || s.ex.Falhou() || s.semConfirmar {
 		return
 	}
 	arquivos := int64(-1)
@@ -184,6 +187,40 @@ func (s *sessaoDeIndice) confirmar(sessionID string, result *syncengine.Result) 
 	}
 	if err := s.plano.Confirmar(sessionID, arquivos, s.ex.Ger); err != nil {
 		slog.Warn("não consegui confirmar a sessão no estado local; o próximo backup confere os arquivos de novo", "err", err)
+	}
+}
+
+// soOInventario tira do estado local o que esta execução não viu, quando a
+// sessão vai ao painel como inventário (modo `full`, ou o mapa inline) sem a
+// varredura ter sido completa — pasta ilegível, arquivo que falhou, serviço
+// parando no meio.
+//
+// No painel, depois de um inventário, os arquivos presentes são EXATAMENTE os
+// que vieram: o que não foi lido fica fora da sessão. Se a entrada dele
+// seguisse valendo aqui, o próximo backup, em delta, o daria por igual à base
+// e não o mandaria — e ele ficaria fora do catálogo, com o backup "completo",
+// até mudar de conteúdo. Sem a entrada, ele é lido, conferido no bucket (sem
+// reenvio) e volta ao índice. Com a varredura completa não há o que tirar: o
+// que não foi visto já virou lápide (fecharInventario).
+func (s *sessaoDeIndice) soOInventario(result *syncengine.Result) {
+	if s.ex == nil || result == nil || result.InventarioCompleto || result.EstadoFalhou || s.ex.Falhou() {
+		return
+	}
+	tirados := 0
+	err := s.ex.Varrer(func(_ string, ent estado.Entrada, visto bool) (estado.Acao, estado.Entrada) {
+		if visto {
+			return estado.Manter, ent
+		}
+		tirados++
+		return estado.Apagar, ent
+	})
+	if err != nil {
+		s.semConfirmar = true
+		slog.Warn("não consegui alinhar o estado local ao inventário desta sessão; ele não será confirmado (o próximo backup confere tudo)", "err", err)
+		return
+	}
+	if tirados > 0 {
+		slog.Info("estado local: entradas de arquivos que esta sessão não leu foram descartadas; o próximo backup os confere e os devolve ao índice", "entradas", tirados)
 	}
 }
 
@@ -366,6 +403,8 @@ func (s *sessaoDeIndice) concluirEmLotes(ctx context.Context, c *api.Client, cfg
 		return err
 	}
 	defer env.fechar()
+	// A sessão nova é um inventário: vale a mesma regra do modo `full`.
+	s.soOInventario(result)
 	var eerr error
 	verr := s.ex.Varrer(func(rel string, ent estado.Entrada, visto bool) (estado.Acao, estado.Entrada) {
 		if eerr == nil && visto && !ent.Removida {
