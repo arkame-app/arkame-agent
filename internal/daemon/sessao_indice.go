@@ -36,6 +36,11 @@ type sessaoDeIndice struct {
 	// semConfirmar: o estado não pôde ser alinhado ao que o painel vai ter
 	// desta sessão; ela não o confirma.
 	semConfirmar bool
+	// outraEpoca: a última sessão que o estado tem por confirmada não é a que
+	// o painel tem por última concluída. O estado é de outro momento (cópia
+	// antiga restaurada, VM clonada, painel que perdeu sessões) e não serve
+	// de atalho: esta execução lê e confere tudo.
+	outraEpoca bool
 
 	env     *enviadorDeLotes
 	arquivo *estado.Base
@@ -170,7 +175,17 @@ func (s *sessaoDeIndice) abrirPlano(planID, sessionID string, oferta *api.IndexO
 			return err
 		}
 	}
-	s.delta = s.emLotes && oferta.Delta && s.base != "" && plano.UltimaSessao() == s.base
+	// O atalho só vale na época do painel: a última sessão confirmada daqui
+	// tem de ser a última concluída de lá. Contra o painel sem lotes
+	// (ARKAME_STATE=always) não há base para comparar.
+	if s.emLotes && plano.UltimaSessao() != s.base {
+		s.outraEpoca = true
+		if !plano.Vazio() {
+			slog.Warn("o estado local não é da última sessão concluída no painel; este backup lê e confere todos os arquivos",
+				"plan_id", planID, "ultima_do_estado", plano.UltimaSessao(), "ultima_do_painel", s.base)
+		}
+	}
+	s.delta = s.emLotes && oferta.Delta && s.base != "" && !s.outraEpoca
 	ex, err := plano.Comecar(sessionID)
 	if err != nil {
 		return err
@@ -183,7 +198,7 @@ func (s *sessaoDeIndice) abrirPlano(planID, sessionID string, oferta *api.IndexO
 // entradas.
 func (s *sessaoDeIndice) configurar(o *syncengine.EngineOptions, cfg *config.Config) {
 	o.Trabalhadores = cfg.UploadConcurrency
-	o.RehashTotal = cfg.RehashAll
+	o.RehashTotal = cfg.RehashAll || s.outraEpoca
 	if _, feito := rehashFeito.Load(s.planID); cfg.RehashAllOnce && !feito {
 		o.RehashTotal, s.rehashUnico = true, true
 	}
