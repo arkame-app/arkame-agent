@@ -385,6 +385,13 @@ func (c *coletor) tratar(ctx context.Context, it itemDoWalk) tratado {
 	t := tratado{seq: it.seq, fi: fi}
 	chave := path.Join(o.PrefixRoot, fi.RelativePath)
 	rel := strings.TrimPrefix(chave, PrefixoDasChaves(o.PrefixRoot))
+	// Chave que o armazenamento e o painel não aceitam nunca é mandada: nem o
+	// objeto, nem a entrada do índice (que faria o painel recusar o lote
+	// inteiro). O arquivo conta como falha, com o motivo.
+	if err := erroDaChave(chave); err != nil {
+		t.err = err
+		return t
+	}
 
 	var ent estado.Entrada
 	tem, vale := false, false

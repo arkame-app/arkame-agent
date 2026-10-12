@@ -483,7 +483,12 @@ var (
 )
 
 // dataParaOPainel é a data do arquivo para o índice, presa aos anos que o
-// formato do painel aceita.
+// formato do painel aceita (0001–9999 em UTC: contrato, item 19). O arquivo
+// com data fora disso segue com backup — o conteúdo sobe e a entrada vai ao
+// índice, com a data da ponta da faixa: a data só serve para a tela e para o
+// painel decidir se a entrada "continua igual", e presa ela é sempre a mesma.
+// Recusar o arquivo deixaria sem backup, para sempre, o que tem o relógio
+// errado na origem.
 func dataParaOPainel(t time.Time) time.Time {
 	switch {
 	case t.Before(menorDataDoPainel):
@@ -491,5 +496,29 @@ func dataParaOPainel(t time.Time) time.Time {
 	case t.After(maiorDataDoPainel):
 		return maiorDataDoPainel
 	}
+	// O instante cabe, mas o texto leva o fuso em que a data veio (o do
+	// servidor): a menos de um dia das pontas o ano escrito pode sair 10000 —
+	// que o json.Marshal recusa — ou 0000. Aí vai em UTC, em que cabe.
+	if a := t.Year(); a < 1 || a > 9999 {
+		return t.UTC()
+	}
 	return t
+}
+
+// MaxBytesDaChave é o teto da chave de um objeto, em bytes UTF-8: o do S3 (e
+// dos compatíveis), e o que o painel aceita numa entrada do índice — acima
+// disso ele recusa o lote inteiro com `invalid_batch` (contrato, item 19).
+const MaxBytesDaChave = 1024
+
+// ErrChaveLonga: o caminho do arquivo dá uma chave que não cabe no
+// armazenamento. É falha daquele arquivo (a sessão fecha parcial, com ele de
+// exemplo), não do backup.
+var ErrChaveLonga = errors.New("o caminho é longo demais para o armazenamento: a chave do arquivo passa de 1.024 bytes (encurte o caminho ou tire o arquivo do plano)")
+
+// erroDaChave devolve ErrChaveLonga, com o tamanho, se a chave não cabe.
+func erroDaChave(chave string) error {
+	if len(chave) > MaxBytesDaChave {
+		return fmt.Errorf("%w; esta tem %d", ErrChaveLonga, len(chave))
+	}
+	return nil
 }
