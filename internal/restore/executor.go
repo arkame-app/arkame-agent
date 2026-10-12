@@ -61,6 +61,14 @@ func (e *ErrWarmingInProgress) Error() string {
 // arquivo que não foi escrito.
 var ErrPulado = errors.New("destino já existe; pulado pela estratégia skip")
 
+// ErroDeConteudo: o objeto baixado não é o que o índice registra (tamanho ou
+// sha256 diferentes). A versão que está no bucket não serve de backup desse
+// arquivo; quem recebe tira a entrada dela do estado local, para o próximo
+// backup ler o arquivo e enviá-lo de novo.
+type ErroDeConteudo struct{ msg string }
+
+func (e *ErroDeConteudo) Error() string { return e.msg }
+
 // Options configura o executor.
 type Options struct {
 	S3       *s3.Client
@@ -174,10 +182,10 @@ func Run(ctx context.Context, opts Options, item api.RestoreItem) error {
 	}
 
 	if item.SourceSize > 0 && written.bytes != item.SourceSize {
-		return fmt.Errorf("size mismatch: esperado=%d baixado=%d", item.SourceSize, written.bytes)
+		return &ErroDeConteudo{msg: fmt.Sprintf("size mismatch: esperado=%d baixado=%d", item.SourceSize, written.bytes)}
 	}
 	if item.SourceSha256 != "" && !strings.EqualFold(written.sha256, item.SourceSha256) {
-		return fmt.Errorf("sha256 mismatch: esperado=%s baixado=%s", item.SourceSha256, written.sha256)
+		return &ErroDeConteudo{msg: fmt.Sprintf("sha256 mismatch: esperado=%s baixado=%s", item.SourceSha256, written.sha256)}
 	}
 	aposBaixar()
 

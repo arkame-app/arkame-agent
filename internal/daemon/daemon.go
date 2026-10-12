@@ -26,6 +26,7 @@ import (
 	"github.com/arkame-app/agent/internal/api"
 	"github.com/arkame-app/agent/internal/atualizacao"
 	"github.com/arkame-app/agent/internal/config"
+	"github.com/arkame-app/agent/internal/estado"
 	"github.com/arkame-app/agent/internal/fsbrowse"
 	"github.com/arkame-app/agent/internal/hooks"
 	"github.com/arkame-app/agent/internal/purge"
@@ -1178,6 +1179,15 @@ func processarFilaDeRestoreCom(ctx context.Context, c *api.Client, s3c *s3.Clien
 			// Objeto sumiu do bucket → sinaliza ao painel pra reconciliar o índice.
 			if isObjectGone(err) {
 				update.ErrorCode = "not_found"
+			}
+			// A versão não está no bucket, ou o que está lá não é o que o
+			// índice registra: o estado local deixa de afirmá-la, e o próximo
+			// backup lê o arquivo e o confere (ou envia) de novo. Sem isso o
+			// atalho seguiria dando o arquivo por guardado até a reconferência
+			// rotativa (até 30 dias).
+			var diverge *restore.ErroDeConteudo
+			if isObjectGone(err) || errors.As(err, &diverge) {
+				darBaixaNoEstado(cfg, []estado.VersaoApagada{{Chave: item.SourceKey, Versao: item.SourceVersionID}})
 			}
 			// Caminho com link que não é do sistema: nada foi gravado.
 			if errors.Is(err, restore.ErrDestinoLink) {

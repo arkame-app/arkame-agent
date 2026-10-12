@@ -90,6 +90,7 @@ func abrirSessaoDeIndice(ctx context.Context, c *api.Client, cfg *config.Config,
 	// agente novo pode ir a campo antes do painel novo sem mudar nada.
 	// ARKAME_STATE=always força o estado também nesse caso.
 	if cfg.StorageID != "" && cfg.AgentID != "" && (s.emLotes || cfg.StateAlways) {
+		baixasDoEstado.mu.Lock()
 		for _, dir := range pastasDoEstado(cfg) {
 			b, err := estado.Abrir(dir, identidadeDoEstado(cfg, plan.StorageRef.Bucket))
 			if err != nil {
@@ -98,8 +99,13 @@ func abrirSessaoDeIndice(ctx context.Context, c *api.Client, cfg *config.Config,
 			}
 			s.arquivo, s.dir = b, dir
 			estadoLocalEmUso.Store(true)
+			baixasDoEstado.abertos++
+			// Versões que saíram do bucket enquanto o arquivo não pôde ser
+			// aberto: saem do estado antes de qualquer atalho.
+			aplicarBaixasPendentes(b)
 			break
 		}
+		baixasDoEstado.mu.Unlock()
 	}
 	if s.arquivo != nil {
 		limparRestosDoIndice(s.dir)
@@ -234,7 +240,15 @@ func (s *sessaoDeIndice) fechar() {
 		if s.arquivo.Corrompida() {
 			slog.Warn("estado local corrompido; descartado (o próximo backup lê e confere tudo)", "arquivo", s.arquivo.Caminho())
 		}
+		// As baixas que chegaram durante o backup (restauração que não achou
+		// a versão) entram agora: o próximo backup confere esses arquivos.
+		baixasDoEstado.mu.Lock()
+		if !s.arquivo.Corrompida() {
+			aplicarBaixasPendentes(s.arquivo)
+		}
+		baixasDoEstado.abertos--
 		_ = s.arquivo.Fechar()
+		baixasDoEstado.mu.Unlock()
 		s.arquivo = nil
 	}
 }
@@ -445,35 +459,77 @@ type corpoDaFalha struct {
 	ErrorMessage string `json:"error_message"`
 }
 
-// esquecerVersoesApagadas tira do estado local as entradas das versões que o
-// expurgo apagou do bucket. Quem chama segura a exclusaoDoBucket: nenhum
-// backup está com o estado aberto.
-func esquecerVersoesApagadas(cfg *config.Config, apagadas []purge.Version) {
-	if len(apagadas) == 0 || cfg.StorageID == "" || cfg.AgentID == "" {
+// baixasDoEstado são as versões que o estado local tem de deixar de afirmar
+// (apagadas pelo expurgo, ou que uma restauração não achou no bucket), e a
+// conta de quem está com o arquivo de estado aberto. O mutex também põe em
+// fila a abertura do arquivo: o bbolt trava o arquivo, e a baixa aberta ao
+// mesmo tempo que um backup faria um dos dois desistir dele.
+var baixasDoEstado struct {
+	mu        gosync.Mutex
+	pendentes []estado.VersaoApagada
+	abertos   int
+}
+
+// tetoDeBaixasPendentes limita a fila de baixas à espera do arquivo de
+// estado. O que passar disso fica para a reconferência rotativa.
+const tetoDeBaixasPendentes = 100_000
+
+// darBaixaNoEstado tira do estado local as entradas dessas versões, para o
+// próximo backup ler o arquivo e conferi-lo (ou enviá-lo) de novo. Com um
+// backup em curso — o arquivo de estado está aberto —, a baixa espera e é
+// aplicada quando ele fechar.
+func darBaixaNoEstado(cfg *config.Config, versoes []estado.VersaoApagada) {
+	if len(versoes) == 0 || cfg.StorageID == "" || cfg.AgentID == "" {
 		return
 	}
-	versoes := make([]estado.VersaoApagada, len(apagadas))
-	for i, v := range apagadas {
-		versoes[i] = estado.VersaoApagada{Chave: v.Key, Versao: v.VersionID}
+	b := &baixasDoEstado
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.pendentes)+len(versoes) <= tetoDeBaixasPendentes {
+		b.pendentes = append(b.pendentes, versoes...)
+	}
+	if b.abertos > 0 {
+		return
 	}
 	id := identidadeDoEstado(cfg, cfg.StorageBucket)
 	for _, dir := range pastasDoEstado(cfg) {
 		if _, err := os.Stat(estado.NomeDoArquivo(dir, id)); err != nil {
 			continue
 		}
-		b, err := estado.Abrir(dir, id)
+		arq, err := estado.Abrir(dir, id)
 		if err != nil {
-			slog.Warn("não consegui abrir o estado local para dar baixa nas versões expurgadas; a reconferência rotativa acerta", "err", err)
-			continue
+			slog.Warn("não consegui abrir o estado local para dar baixa em versões que saíram do bucket; fica para o próximo backup", "err", err)
+			return
 		}
-		n, err := b.Esquecer(versoes)
-		_ = b.Fechar()
-		if err != nil {
-			slog.Warn("baixa das versões expurgadas no estado local falhou", "err", err)
-			continue
-		}
-		if n > 0 {
-			slog.Info("estado local: entradas de versões expurgadas removidas", "entradas", n)
-		}
+		aplicarBaixasPendentes(arq)
+		_ = arq.Fechar()
 	}
+	// Sem arquivo de estado não há o que afirmar a menos.
+	b.pendentes = nil
+}
+
+// aplicarBaixasPendentes aplica a fila ao arquivo aberto. Quem chama segura
+// baixasDoEstado.mu.
+func aplicarBaixasPendentes(arq *estado.Base) {
+	b := &baixasDoEstado
+	if len(b.pendentes) == 0 {
+		return
+	}
+	n, err := arq.Esquecer(b.pendentes)
+	if err != nil {
+		slog.Warn("baixa de versões no estado local falhou; a reconferência rotativa acerta", "err", err)
+	} else if n > 0 {
+		slog.Info("estado local: entradas de versões que saíram do bucket removidas", "entradas", n)
+	}
+	b.pendentes = nil
+}
+
+// esquecerVersoesApagadas tira do estado local as entradas das versões que o
+// expurgo apagou do bucket.
+func esquecerVersoesApagadas(cfg *config.Config, apagadas []purge.Version) {
+	versoes := make([]estado.VersaoApagada, len(apagadas))
+	for i, v := range apagadas {
+		versoes[i] = estado.VersaoApagada{Chave: v.Key, Versao: v.VersionID}
+	}
+	darBaixaNoEstado(cfg, versoes)
 }
