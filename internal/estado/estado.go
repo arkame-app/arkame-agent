@@ -114,7 +114,7 @@ func Abrir(dir string, id Identidade) (*Base, error) {
 	if _, err := os.Stat(caminho); errors.Is(err, os.ErrNotExist) {
 		motivo = "ausente"
 	}
-	b, err := abrirArquivo(caminho, id)
+	b, err := abrirArquivo(caminho, &id)
 	if err == nil {
 		b.Motivo = motivo
 		return b, nil
@@ -129,7 +129,7 @@ func Abrir(dir string, id Identidade) (*Base, error) {
 	if rerr := os.Remove(caminho); rerr != nil && !errors.Is(rerr, os.ErrNotExist) {
 		return nil, fmt.Errorf("descartando o estado inválido: %w", rerr)
 	}
-	b, err = abrirArquivo(caminho, id)
+	b, err = abrirArquivo(caminho, &id)
 	if err != nil {
 		return nil, err
 	}
@@ -137,9 +137,28 @@ func Abrir(dir string, id Identidade) (*Base, error) {
 	return b, nil
 }
 
+// AbrirExistente abre um arquivo de estado que já existe, como está: não o
+// cria, não o descarta e não confere de quem ele é. É para quem só vai dar
+// baixa em versões (Esquecer) — a identidade do arquivo é assunto do backup,
+// que é quem o grava; uma baixa que a conferisse com outra fonte descartaria
+// o estado inteiro por engano.
+func AbrirExistente(caminho string) (*Base, error) {
+	if _, err := os.Stat(caminho); err != nil {
+		return nil, err
+	}
+	b, err := abrirArquivo(caminho, nil)
+	if errors.Is(err, bolt.ErrTimeout) {
+		return nil, fmt.Errorf("%w: %v", ErrEmUso, err)
+	}
+	return b, err
+}
+
 var errOutro = errors.New("estado de outro armazenamento")
 
-func abrirArquivo(caminho string, id Identidade) (b *Base, err error) {
+// abrirArquivo abre o arquivo e confere o cabeçalho. Com id, o arquivo tem
+// de ser dele (e o cabeçalho é gravado se o arquivo é novo); sem id, vale o
+// que estiver lá.
+func abrirArquivo(caminho string, id *Identidade) (b *Base, err error) {
 	var db *bolt.DB
 	defer func() {
 		if r := recover(); r != nil {
@@ -180,17 +199,19 @@ func abrirArquivo(caminho string, id Identidade) (b *Base, err error) {
 		if _, err := tx.CreateBucketIfNotExists(bucketPlanos); err != nil {
 			return err
 		}
-		quero := cabecalho{Formato: formato, Identidade: id}
 		bruto := meta.Get(chaveID)
 		if bruto == nil {
-			novo, _ := json.Marshal(quero)
+			if id == nil {
+				return fmt.Errorf("%w: sem cabeçalho", ErrCorrompido)
+			}
+			novo, _ := json.Marshal(cabecalho{Formato: formato, Identidade: *id})
 			return meta.Put(chaveID, novo)
 		}
 		var tem cabecalho
 		if json.Unmarshal(bruto, &tem) != nil || tem.Formato != formato {
 			return fmt.Errorf("%w: cabeçalho ilegível ou de outro formato", ErrCorrompido)
 		}
-		if tem.Identidade != id {
+		if id != nil && tem.Identidade != *id {
 			return errOutro
 		}
 		return nil

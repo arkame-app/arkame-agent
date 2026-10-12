@@ -42,6 +42,7 @@ type sessaoDeIndice struct {
 	// de atalho: esta execução lê e confere tudo.
 	outraEpoca bool
 
+	cfg     *config.Config
 	env     *enviadorDeLotes
 	arquivo *estado.Base
 	plano   *estado.Plano
@@ -88,23 +89,37 @@ func ArquivosDoEstado(cfg *config.Config) (arquivos, pastas []string) {
 		return nil, nil
 	}
 	for _, dir := range pastasDoEstado(cfg) {
-		base := estado.NomeDoArquivo(dir, identidadeDoEstado(cfg, cfg.StorageBucket))
-		uso := base[:len(base)-len(filepath.Ext(base))] + ".uso.json"
-		arquivos = append(arquivos, base, uso, uso+".tmp")
+		uso := arquivoDoUso(cfg, dir)
+		arquivos = append(arquivos, arquivoDoEstado(cfg, dir), uso, uso+".tmp")
 		pastas = append(pastas, dir)
 	}
 	return arquivos, pastas
 }
 
+// identidadeDoEstado é de quem é o estado que um backup abre: o agente, o
+// armazenamento instalado e o bucket em que o plano grava. Só o backup a usa
+// — é ele quem grava o arquivo e quem o descarta se for de outro lugar. O
+// nome do arquivo (arquivoDoEstado) leva só o agente e o armazenamento.
 func identidadeDoEstado(cfg *config.Config, bucket string) estado.Identidade {
 	return estado.Identidade{Agente: cfg.AgentID, Armazenamento: cfg.StorageID, Bucket: bucket,
 		Endpoint: strings.TrimRight(cfg.StorageEndpoint, "/")}
 }
 
+// arquivoDoEstado é o arquivo de estado deste agente + armazenamento em dir.
+func arquivoDoEstado(cfg *config.Config, dir string) string {
+	return estado.NomeDoArquivo(dir, estado.Identidade{Agente: cfg.AgentID, Armazenamento: cfg.StorageID})
+}
+
+// arquivoDoUso é onde fica, em dir, a última medição de ocupação do bucket.
+func arquivoDoUso(cfg *config.Config, dir string) string {
+	base := arquivoDoEstado(cfg, dir)
+	return base[:len(base)-len(filepath.Ext(base))] + ".uso.json"
+}
+
 // abrirSessaoDeIndice prepara o estado local e o envio em lotes da sessão.
 // Só devolve erro quando o painel pediu lotes e não há onde guardá-los.
 func abrirSessaoDeIndice(ctx context.Context, c *api.Client, cfg *config.Config, plan api.Plan, sessionID string, oferta *api.IndexOffer, prefixRoot string) (*sessaoDeIndice, error) {
-	s := &sessaoDeIndice{prefixo: syncengine.PrefixoDasChaves(prefixRoot), planID: plan.ID}
+	s := &sessaoDeIndice{prefixo: syncengine.PrefixoDasChaves(prefixRoot), planID: plan.ID, cfg: cfg}
 	if oferta != nil && oferta.Mode == "batches" {
 		s.emLotes = true
 		s.base = oferta.BaseSessionID
@@ -118,6 +133,15 @@ func abrirSessaoDeIndice(ctx context.Context, c *api.Client, cfg *config.Config,
 		baixasDoEstado.mu.Lock()
 		for _, dir := range pastasDoEstado(cfg) {
 			b, err := estado.Abrir(dir, identidadeDoEstado(cfg, plan.StorageRef.Bucket))
+			if errors.Is(err, estado.ErrEmUso) {
+				// Outro processo está com o estado deste agente + armazenamento:
+				// este backup roda sem estado (lê e confere tudo). A segunda
+				// pasta é para quando a primeira não aceita escrita — abrir um
+				// segundo estado aqui criaria duas versões do mesmo, cada uma
+				// envelhecendo por conta própria.
+				slog.Warn("estado local em uso por outro processo; este backup roda sem ele (lê e confere tudo)", "pasta", dir, "err", err)
+				break
+			}
 			if err != nil {
 				slog.Warn("não consegui abrir o estado local nesta pasta", "pasta", dir, "err", err)
 				continue
@@ -129,7 +153,7 @@ func abrirSessaoDeIndice(ctx context.Context, c *api.Client, cfg *config.Config,
 			baixasDoEstado.abertos++
 			// Versões que saíram do bucket enquanto o arquivo não pôde ser
 			// aberto: saem do estado antes de qualquer atalho.
-			aplicarBaixasPendentes(b)
+			aplicarBaixasPendentes(cfg, b)
 			break
 		}
 		baixasDoEstado.mu.Unlock()
@@ -310,7 +334,7 @@ func (s *sessaoDeIndice) fechar() {
 		// a versão) entram agora: o próximo backup confere esses arquivos.
 		baixasDoEstado.mu.Lock()
 		if !s.arquivo.Corrompida() {
-			aplicarBaixasPendentes(s.arquivo)
+			aplicarBaixasPendentes(s.cfg, s.arquivo)
 		}
 		baixasDoEstado.abertos--
 		_ = s.arquivo.Fechar()
@@ -563,37 +587,61 @@ func darBaixaNoEstado(cfg *config.Config, versoes []estado.VersaoApagada) {
 	if b.abertos > 0 {
 		return
 	}
-	id := identidadeDoEstado(cfg, cfg.StorageBucket)
-	for _, dir := range pastasDoEstado(cfg) {
-		if _, err := os.Stat(estado.NomeDoArquivo(dir, id)); err != nil {
-			continue
-		}
-		arq, err := estado.Abrir(dir, id)
-		if err != nil {
-			slog.Warn("não consegui abrir o estado local para dar baixa em versões que saíram do bucket; fica para o próximo backup", "err", err)
-			return
-		}
-		aplicarBaixasPendentes(arq)
-		_ = arq.Fechar()
-	}
-	// Sem arquivo de estado não há o que afirmar a menos.
-	b.pendentes = nil
+	aplicarBaixasPendentes(cfg, nil)
 }
 
-// aplicarBaixasPendentes aplica a fila ao arquivo aberto. Quem chama segura
-// baixasDoEstado.mu.
-func aplicarBaixasPendentes(arq *estado.Base) {
+// aplicarBaixasPendentes aplica a fila a TODOS os arquivos de estado deste
+// agente + armazenamento: o que o backup tem aberto (aberto, ou nil) e os que
+// existirem nas outras pastas do estado. Pode haver mais de um — a pasta
+// principal ficou sem escrita por um tempo e o estado foi para a da
+// configuração —, e uma baixa que só chegasse ao que está em uso deixaria o
+// outro afirmando a versão que saiu do bucket.
+//
+// Os outros são abertos como estão (estado.AbrirExistente): a baixa não cria
+// arquivo, não confere de quem ele é e não o descarta. A fila só é zerada
+// quando todos a receberam; arquivo em uso por outro processo a segura até a
+// próxima vez. Quem chama segura baixasDoEstado.mu.
+func aplicarBaixasPendentes(cfg *config.Config, aberto *estado.Base) {
 	b := &baixasDoEstado
 	if len(b.pendentes) == 0 {
 		return
 	}
-	n, err := arq.Esquecer(b.pendentes)
-	if err != nil {
-		slog.Warn("baixa de versões no estado local falhou; a reconferência rotativa acerta", "err", err)
-	} else if n > 0 {
-		slog.Info("estado local: entradas de versões que saíram do bucket invalidadas", "entradas", n)
+	ficou := false
+	aplicar := func(arq *estado.Base) {
+		n, err := arq.Esquecer(b.pendentes)
+		if err != nil {
+			slog.Warn("baixa de versões no estado local falhou; a reconferência rotativa acerta", "arquivo", arq.Caminho(), "err", err)
+		} else if n > 0 {
+			slog.Info("estado local: entradas de versões que saíram do bucket invalidadas", "arquivo", arq.Caminho(), "entradas", n)
+		}
 	}
-	b.pendentes = nil
+	if aberto != nil {
+		aplicar(aberto)
+	}
+	for _, dir := range pastasDoEstado(cfg) {
+		caminho := arquivoDoEstado(cfg, dir)
+		if aberto != nil && caminho == aberto.Caminho() {
+			continue
+		}
+		arq, err := estado.AbrirExistente(caminho)
+		switch {
+		case errors.Is(err, os.ErrNotExist):
+			continue
+		case errors.Is(err, estado.ErrEmUso):
+			slog.Warn("estado local em uso; a baixa de versões que saíram do bucket fica para a próxima vez", "arquivo", caminho)
+			ficou = true
+			continue
+		case err != nil:
+			// Ilegível: o backup que o abrir o descarta e confere tudo.
+			slog.Warn("não consegui abrir o estado local para dar baixa em versões que saíram do bucket", "arquivo", caminho, "err", err)
+			continue
+		}
+		aplicar(arq)
+		_ = arq.Fechar()
+	}
+	if !ficou {
+		b.pendentes = nil
+	}
 }
 
 // esquecerVersoesApagadas tira do estado local as entradas das versões que o

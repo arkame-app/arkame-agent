@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/arkame-app/agent/internal/config"
-	"github.com/arkame-app/agent/internal/estado"
 	"github.com/arkame-app/agent/internal/storage"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
@@ -82,8 +81,7 @@ func novoMedidorDeUso(cfg *config.Config) *medidorDeUso {
 	// estado local entra em uso (ver gravar). Se já existe, a última medição
 	// é lida de onde estiver.
 	for _, dir := range pastasDoEstado(cfg) {
-		base := estado.NomeDoArquivo(dir, identidadeDoEstado(cfg, cfg.StorageBucket))
-		arquivo := base[:len(base)-len(filepath.Ext(base))] + ".uso.json"
+		arquivo := arquivoDoUso(cfg, dir)
 		m.arquivos = append(m.arquivos, arquivo)
 		if m.ultimo != nil {
 			continue
