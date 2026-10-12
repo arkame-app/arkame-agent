@@ -797,10 +797,16 @@ type VersaoApagada struct {
 	Versao string
 }
 
-// Esquecer apaga do estado as entradas cuja versão registrada saiu do bucket:
-// sem isso, o atalho seguiria afirmando uma versão que não existe mais. O
-// arquivo, se ainda estiver na origem, volta a ser lido e enviado no próximo
-// backup. Devolve quantas entradas saíram.
+// Esquecer invalida as entradas cuja versão registrada saiu do bucket: sem
+// isso, o atalho seguiria afirmando uma versão que não existe mais. A entrada
+// deixa de afirmar versão (Versao vazia) e de servir de atalho; o arquivo, se
+// ainda estiver na origem, é lido e conferido (ou enviado) no próximo backup,
+// e vai ao índice de novo.
+//
+// A entrada não é apagada: ela é o que o estado sabe de o painel ter o
+// arquivo no catálogo. Apagada, um arquivo que saísse da origem antes do
+// backup seguinte nunca viraria `removed` — não haveria de onde tirar a
+// lápide. Devolve quantas entradas foram invalidadas.
 func (b *Base) Esquecer(versoes []VersaoApagada) (int, error) {
 	n := 0
 	err := b.protegido(func() error {
@@ -832,7 +838,11 @@ func (b *Base) Esquecer(versoes []VersaoApagada) (int, error) {
 					if ent.Versao != v.Versao || ent.Removida {
 						continue
 					}
-					if err := bk.Delete(k); err != nil {
+					ent.NaBase = ent.NaBase || m.confirmada(ent.Ger)
+					ent.Versao = ""
+					ent.Suspeita = true
+					ent.VerificarEm = 0
+					if err := bk.Put(k, codificar(k, ent)); err != nil {
 						return err
 					}
 					n++

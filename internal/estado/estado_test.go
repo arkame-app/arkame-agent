@@ -244,15 +244,21 @@ func TestVarrerEEsquecer(t *testing.T) {
 	}
 
 	n, err := b.Esquecer([]VersaoApagada{
-		{Chave: "data/ag1/f00001", Versao: "v1"},     // a versão registrada: sai
+		{Chave: "data/ag1/f00001", Versao: "v1"},     // a versão registrada: a entrada é invalidada
 		{Chave: "data/ag1/f00002", Versao: "antiga"}, // versão antiga: a entrada fica
 		{Chave: "outro/f00003", Versao: "v3"},        // fora do prefixo
 	})
 	if err != nil || n != 1 {
 		t.Fatalf("esquecidas = %d err = %v", n, err)
 	}
-	if _, achou, _ := ex.Buscar("f00001"); achou {
-		t.Fatal("entrada da versão expurgada tinha de sair")
+	// A entrada fica (é dela que sai o `removed` se o arquivo sumir da
+	// origem), mas não afirma mais a versão nem serve de atalho.
+	if ent, achou, _ := ex.Buscar("f00001"); !achou || ent.Versao != "" || !ent.Suspeita || ent.ID != 1 || !ent.NaBase {
+		t.Fatalf("entrada da versão expurgada tinha de ficar invalidada: achou=%v %+v", achou, ent)
+	}
+	// Repetir a baixa não muda nada.
+	if n, err := b.Esquecer([]VersaoApagada{{Chave: "data/ag1/f00001", Versao: "v1"}}); err != nil || n != 0 {
+		t.Fatalf("baixa repetida: %d, %v", n, err)
 	}
 	if _, achou, _ := ex.Buscar("f00002"); !achou {
 		t.Fatal("entrada de outra versão tinha de ficar")

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -112,6 +114,32 @@ func TestBaixaDuranteOBackupEsperaOEstadoFechar(t *testing.T) {
 	m.s3.Zerar()
 	if s := m.rodarOK(); m.s3.N("HeadObject") != 1 || s.Entradas != 1 {
 		t.Fatalf("a baixa não valeu no backup seguinte: s3=%v sessão=%+v", m.s3.Requisicoes(), s)
+	}
+	m.conferir()
+}
+
+// Baixa seguida de remoção na origem (achado M3a da revisão): a restauração
+// não acha a versão, a entrada recebe baixa, e o arquivo é apagado do servidor
+// antes do backup seguinte. A baixa apagava a entrada — e sem ela não havia de
+// onde tirar o `removed`: o arquivo ficava presente no catálogo para sempre.
+func TestBaixaSeguidaDeRemocaoNaOrigemViraRemoved(t *testing.T) {
+	m := novaMesaDoDaemon(t)
+	m.semear(20)
+	m.rodarOK()
+	rel := "p04/arquivo-00004.txt"
+	k := m.chave(rel)
+	v, _ := m.s3.Atual(k)
+	m.s3.ApagarVersao(k, v.ID)
+	darBaixaNoEstado(m.cfg, []estado.VersaoApagada{{Chave: k, Versao: v.ID}})
+	if err := os.Remove(filepath.Join(m.raiz, rel)); err != nil {
+		t.Fatal(err)
+	}
+	s := m.rodarOK()
+	if s.Modo != "delta" || s.Entradas != 1 || s.Presentes != 19 {
+		t.Fatalf("o arquivo que saiu da origem tem de sair do catálogo: %+v", s)
+	}
+	if st := s.Complete["stats"].(map[string]any); st["files_removed"] != float64(1) {
+		t.Fatalf("stats: %v", st)
 	}
 	m.conferir()
 }

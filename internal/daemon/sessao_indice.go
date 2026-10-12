@@ -591,7 +591,7 @@ func aplicarBaixasPendentes(arq *estado.Base) {
 	if err != nil {
 		slog.Warn("baixa de versões no estado local falhou; a reconferência rotativa acerta", "err", err)
 	} else if n > 0 {
-		slog.Info("estado local: entradas de versões que saíram do bucket removidas", "entradas", n)
+		slog.Info("estado local: entradas de versões que saíram do bucket invalidadas", "entradas", n)
 	}
 	b.pendentes = nil
 }
