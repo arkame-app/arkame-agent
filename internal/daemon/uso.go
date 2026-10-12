@@ -7,6 +7,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -47,7 +48,29 @@ type usoMedido struct {
 type medidorDeUso struct {
 	arquivos []string // onde a medição pode ficar guardada, em ordem de preferência
 	sempre   bool     // ARKAME_STATE=always
+
+	mu       sync.Mutex
 	ultimo   *usoMedido
+	pendente bool // a última medição ainda não foi para o disco
+}
+
+// medidorAtivo é o medidor do processo, para a medição feita antes de o
+// estado local entrar em uso ir para o disco quando ele entra (ver
+// guardarUsoPendente).
+var medidorAtivo atomic.Pointer[medidorDeUso]
+
+// guardarUsoPendente grava a medição de ocupação que estava só em memória.
+// Chamado quando um backup abre o estado local: a sondagem da partida roda
+// antes do primeiro backup, e sem isto um bucket grande seria listado inteiro
+// de novo a cada partida do agente.
+func guardarUsoPendente() {
+	if m := medidorAtivo.Load(); m != nil {
+		m.mu.Lock()
+		if m.pendente && m.ultimo != nil {
+			m.gravar(m.ultimo)
+		}
+		m.mu.Unlock()
+	}
 }
 
 func novoMedidorDeUso(cfg *config.Config) *medidorDeUso {
@@ -72,6 +95,7 @@ func novoMedidorDeUso(cfg *config.Config) *medidorDeUso {
 			}
 		}
 	}
+	medidorAtivo.Store(m)
 	return m
 }
 
@@ -85,6 +109,7 @@ var estadoLocalEmUso atomic.Bool
 // aceitar. Só com o estado local em uso; senão a medição vale em memória,
 // até o processo sair.
 func (m *medidorDeUso) gravar(u *usoMedido) {
+	m.pendente = true
 	if !m.sempre && !estadoLocalEmUso.Load() {
 		return
 	}
@@ -92,6 +117,7 @@ func (m *medidorDeUso) gravar(u *usoMedido) {
 	if err != nil {
 		return
 	}
+	m.pendente = false
 	for _, arquivo := range m.arquivos {
 		if os.MkdirAll(filepath.Dir(arquivo), 0o700) != nil {
 			continue
@@ -108,6 +134,8 @@ func (m *medidorDeUso) gravar(u *usoMedido) {
 // (a listagem falhou): os campos vão ausentes no relato.
 func (m *medidorDeUso) uso(ctx context.Context, s3c *s3.Client, bucket string) *storage.Uso {
 	agora := agoraDoUso()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if u := m.ultimo; u != nil && u.Bucket == bucket && u.Versoes > limiarDeVersoesDoUso && agora.Before(u.Proxima) && !agora.Before(u.Em) {
 		return &u.Uso
 	}

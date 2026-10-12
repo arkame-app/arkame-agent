@@ -129,6 +129,15 @@ func TestOcupacaoNaoGravaNadaSemEstadoLocalEmUso(t *testing.T) {
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
 		t.Fatalf("a pasta do estado foi criada sem o estado em uso (err=%v)", err)
 	}
+	// O estado entra em uso (um backup o abriu): a medição que estava em
+	// memória vai para o disco, e a partida seguinte não lista o bucket.
+	estadoLocalEmUso.Store(true)
+	guardarUsoPendente()
+	if restos, _ := os.ReadDir(dir); len(restos) != 1 {
+		t.Fatalf("a medição pendente devia ter sido gravada quando o estado entrou em uso: %d arquivo(s)", len(restos))
+	}
+	_ = os.RemoveAll(dir)
+	estadoLocalEmUso.Store(false)
 	// Com ARKAME_STATE=always, grava.
 	cfg.StateAlways = true
 	m = novoMedidorDeUso(cfg)

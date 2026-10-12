@@ -117,7 +117,9 @@ func abrirSessaoDeIndice(ctx context.Context, c *api.Client, cfg *config.Config,
 				continue
 			}
 			s.arquivo, s.dir = b, dir
-			estadoLocalEmUso.Store(true)
+			if !estadoLocalEmUso.Swap(true) {
+				guardarUsoPendente()
+			}
 			baixasDoEstado.abertos++
 			// Versões que saíram do bucket enquanto o arquivo não pôde ser
 			// aberto: saem do estado antes de qualquer atalho.
