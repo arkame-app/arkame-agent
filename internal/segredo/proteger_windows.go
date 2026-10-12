@@ -53,3 +53,48 @@ func aplicar(caminho, sddl string) error {
 	}
 	return nil
 }
+
+// donoConfiavel: Administradores, SYSTEM e o usuário deste processo (o
+// serviço roda como SYSTEM; um administrador num PowerShell elevado cria
+// arquivos em nome de Administradores ou do próprio usuário, conforme a
+// política da máquina).
+func donoConfiavel(caminho string) (confiavel bool, dono string, err error) {
+	abs, err := filepath.Abs(caminho)
+	if err != nil {
+		return false, "", err
+	}
+	sd, err := windows.GetNamedSecurityInfo(abs, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION)
+	if err != nil {
+		return false, "", err
+	}
+	sid, _, err := sd.Owner()
+	if err != nil {
+		return false, "", err
+	}
+	if sid == nil {
+		return false, "(sem dono)", nil
+	}
+	dono = sid.String()
+	for _, tipo := range []windows.WELL_KNOWN_SID_TYPE{windows.WinBuiltinAdministratorsSid, windows.WinLocalSystemSid} {
+		if bom, cerr := windows.CreateWellKnownSid(tipo); cerr == nil && sid.Equals(bom) {
+			return true, dono, nil
+		}
+	}
+	if eu, uerr := windows.GetCurrentProcessToken().GetTokenUser(); uerr == nil && sid.Equals(eu.User.Sid) {
+		return true, dono, nil
+	}
+	return false, dono, nil
+}
+
+// pastaDeVerdade recusa junção, link simbólico e qualquer outro reparse
+// point: o dono conferido seria o do destino, e quem controla a pasta de cima
+// apontaria o estado do agente para a pasta que quisesse.
+func pastaDeVerdade(p string, fi os.FileInfo) error {
+	if fi.Mode()&(os.ModeSymlink|os.ModeIrregular) != 0 {
+		return fmt.Errorf("%w: %s é uma junção ou um link", ErrDonoNaoConfiavel, p)
+	}
+	if !fi.IsDir() {
+		return fmt.Errorf("%s não é uma pasta", p)
+	}
+	return nil
+}

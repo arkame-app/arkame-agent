@@ -2,7 +2,12 @@
 
 package segredo
 
-import "os"
+import (
+	"fmt"
+	"os"
+	"strconv"
+	"syscall"
+)
 
 func protegerComModo(caminho string, modo os.FileMode) error {
 	return os.Chmod(caminho, modo)
@@ -10,3 +15,30 @@ func protegerComModo(caminho string, modo os.FileMode) error {
 
 // protegerPasta: o 0700 do MkdirAll já basta.
 func protegerPasta(string) error { return nil }
+
+// donoConfiavel: o root e o usuário deste processo.
+func donoConfiavel(caminho string) (confiavel bool, dono string, err error) {
+	fi, err := os.Stat(caminho)
+	if err != nil {
+		return false, "", err
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return false, "", fmt.Errorf("sem informação de dono")
+	}
+	uid := int(st.Uid)
+	return uid == 0 || uid == os.Geteuid(), "uid " + strconv.Itoa(uid), nil
+}
+
+// pastaDeVerdade: uma pasta, ou um link para uma (o administrador pode ter
+// posto o estado em outro disco por um link; o dono conferido é o do destino).
+func pastaDeVerdade(p string, _ os.FileInfo) error {
+	fi, err := os.Stat(p)
+	if err != nil {
+		return err
+	}
+	if !fi.IsDir() {
+		return fmt.Errorf("%s não é uma pasta", p)
+	}
+	return nil
+}

@@ -9,6 +9,7 @@
 package segredo
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -98,4 +99,97 @@ func CriarPasta(dir string) error {
 		return fmt.Errorf("criando %s: %w", dir, err)
 	}
 	return protegerPasta(dir)
+}
+
+// ErrDonoNaoConfiavel: a pasta (ou o arquivo) já existia e pertence a alguém
+// que não é o administrador, o sistema nem o usuário deste processo.
+var ErrDonoNaoConfiavel = errors.New("dono não confiável")
+
+// donoDeConfianca é o donoConfiavel do sistema; os testes o trocam.
+var donoDeConfianca = donoConfiavel
+
+// ConferirDono devolve ErrDonoNaoConfiavel se caminho pertence a alguém que
+// não é de confiança: fora o root (no Windows, Administradores e SYSTEM) e o
+// usuário deste processo. Quem cria uma pasta manda nela — pode trocar a
+// permissão quando quiser e pôr lá dentro o que o agente vai ler. Um serviço
+// que roda como root/SYSTEM não pode tratar como seu o que outro usuário
+// deixou pronto no caminho.
+func ConferirDono(caminho string) error {
+	confiavel, dono, err := donoDeConfianca(caminho)
+	if err != nil {
+		return fmt.Errorf("conferindo o dono de %s: %w", caminho, err)
+	}
+	if !confiavel {
+		return fmt.Errorf("%w: %s pertence a %s", ErrDonoNaoConfiavel, caminho, dono)
+	}
+	return nil
+}
+
+// PastaPrivada prepara dir para guardar o que só o administrador pode ler e
+// alterar (o estado local do backup: os nomes, tamanhos, datas e sha256 de
+// todos os arquivos do servidor, e o que decide se um arquivo é ou não lido).
+//
+//   - Se dir não existe, cria cada nível que faltar já protegido: 0700 fora do
+//     Windows; no Windows, a DACL protegida de Administradores e SYSTEM,
+//     herdada pelo que for gravado dentro. O modo do Mkdir não vale nada no
+//     Windows: sem a DACL, a pasta herdava a de %ProgramData%, em que qualquer
+//     usuário lê e cria arquivos. A pasta de cima (a primeira que já existe)
+//     também tem de ser de dono confiável.
+//   - Se dir já existe, tem de ser uma pasta de verdade (no Windows, não uma
+//     junção nem um link) e de dono confiável (ConferirDono); senão, erro, e
+//     quem chama usa outro lugar. A permissão de uma pasta que já existia não é
+//     tocada — pode ser uma pasta escolhida pelo administrador, com outros
+//     usos —; os arquivos gravados nela são protegidos um a um (Proteger).
+func PastaPrivada(dir string) error {
+	var faltam []string
+	for p := filepath.Clean(dir); ; p = filepath.Dir(p) {
+		fi, err := os.Lstat(p)
+		if err == nil {
+			if p == filepath.Clean(dir) {
+				return pastaQueJaExistia(p, fi)
+			}
+			// Criar dentro da pasta de outro usuário não adianta: quem é dono
+			// da pasta de cima renomeia a nossa e põe outra no lugar.
+			if err := ConferirDono(p); err != nil {
+				return err
+			}
+			break
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("criando %s: %w", dir, err)
+		}
+		faltam = append(faltam, p)
+		if filepath.Dir(p) == p {
+			break
+		}
+	}
+	for i := len(faltam) - 1; i >= 0; i-- {
+		p := faltam[i]
+		err := os.Mkdir(p, 0o700)
+		if errors.Is(err, os.ErrExist) {
+			// Alguém a criou entre a consulta e agora: não é nossa.
+			fi, lerr := os.Lstat(p)
+			if lerr != nil {
+				return fmt.Errorf("criando %s: %w", dir, lerr)
+			}
+			if perr := pastaQueJaExistia(p, fi); perr != nil {
+				return perr
+			}
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("criando %s: %w", dir, err)
+		}
+		if err := protegerPasta(p); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func pastaQueJaExistia(p string, fi os.FileInfo) error {
+	if err := pastaDeVerdade(p, fi); err != nil {
+		return err
+	}
+	return ConferirDono(p)
 }
