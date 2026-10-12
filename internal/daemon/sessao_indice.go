@@ -72,6 +72,25 @@ func pastasForaDoBackup(cfg *config.Config) []string {
 	return out
 }
 
+// ArquivosDoEstado são os arquivos que o estado local deste agente +
+// armazenamento pode ter deixado no disco (o estado dos arquivos, a última
+// medição de ocupação do bucket e os temporários deles), e as pastas onde
+// ficam. É o que o `uninstall` apaga: os nomes dos arquivos do servidor estão
+// lá dentro. Os arquivos levam o agente e o armazenamento no nome — os de
+// outro agente da mesma máquina, na mesma pasta, não entram.
+func ArquivosDoEstado(cfg *config.Config) (arquivos, pastas []string) {
+	if cfg.StorageID == "" || cfg.AgentID == "" {
+		return nil, nil
+	}
+	for _, dir := range pastasDoEstado(cfg) {
+		base := estado.NomeDoArquivo(dir, identidadeDoEstado(cfg, cfg.StorageBucket))
+		uso := base[:len(base)-len(filepath.Ext(base))] + ".uso.json"
+		arquivos = append(arquivos, base, uso, uso+".tmp")
+		pastas = append(pastas, dir)
+	}
+	return arquivos, pastas
+}
+
 func identidadeDoEstado(cfg *config.Config, bucket string) estado.Identidade {
 	return estado.Identidade{Agente: cfg.AgentID, Armazenamento: cfg.StorageID, Bucket: bucket}
 }

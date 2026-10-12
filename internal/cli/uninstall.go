@@ -10,6 +10,7 @@ import (
 
 	"github.com/arkame-app/agent/internal/aplicativos"
 	"github.com/arkame-app/agent/internal/config"
+	"github.com/arkame-app/agent/internal/daemon"
 	"github.com/arkame-app/agent/internal/service"
 	"github.com/arkame-app/agent/internal/setup"
 	"github.com/arkame-app/agent/internal/terminal"
@@ -83,6 +84,10 @@ func newUninstallCmd() *cobra.Command {
 			// matava o vizinho.
 			outros, completo := configsDosOutros(serviceName)
 			arquivos, mantidos := separarArquivos(configFile, existentes, outros, completo)
+			// O estado local do backup (nomes e datas dos arquivos do
+			// servidor), com a mesma cautela: o que outro agente usa fica.
+			estados, pastasDoEstado := daemon.ArquivosDoEstado(cfg)
+			estados, estadosMantidos := separarEstado(estados, outros, completo)
 
 			if !sim {
 				t, terr := terminal.Open()
@@ -119,6 +124,20 @@ func newUninstallCmd() *cobra.Command {
 			fmt.Fprintln(os.Stderr, "  ✓ Removidos:", strings.Join(arquivos, ", "))
 			if len(mantidos) > 0 {
 				fmt.Fprintln(os.Stderr, "  Ficam, porque outro agente desta máquina pode usá-los:", strings.Join(mantidos, ", "))
+			}
+			// O estado é derivável e não tem segredo: o que não sair não
+			// desfaz a desinstalação, mas é dito.
+			semVizinhos := completo && len(outros) == 0 && len(service.OutrosAgentes(serviceName)) == 0
+			if saiu, ficou := removerEstado(estados, pastasDoEstado, semVizinhos); len(saiu) > 0 || len(ficou) > 0 {
+				if len(saiu) > 0 {
+					fmt.Fprintln(os.Stderr, "  ✓ Estado local do backup removido:", strings.Join(saiu, ", "))
+				}
+				if len(ficou) > 0 {
+					fmt.Fprintln(os.Stderr, "  ! Não consegui remover o estado local (apague à mão; não tem segredo, mas tem os nomes dos arquivos):", strings.Join(ficou, ", "))
+				}
+			}
+			if len(estadosMantidos) > 0 {
+				fmt.Fprintln(os.Stderr, "  Fica o estado local, porque outro agente desta máquina pode usá-lo:", strings.Join(estadosMantidos, ", "))
 			}
 			aplicativos.RemoverEntrada(serviceName)
 
@@ -203,6 +222,61 @@ func separarArquivos(configFile string, candidatos []string, outros []*config.Co
 		}
 	}
 	return remover, manter
+}
+
+// separarEstado decide o que o uninstall apaga do estado local: os arquivos
+// deste agente + armazenamento que existem. Fica o que a configuração de outro
+// agente da máquina também usaria (mesmo agente, mesmo armazenamento, mesma
+// pasta); e, sem saber de algum outro agente (completo=false), fica tudo.
+func separarEstado(meus []string, outros []*config.Config, completo bool) (remover, manter []string) {
+	usados := map[string]bool{}
+	for _, o := range outros {
+		deles, _ := daemon.ArquivosDoEstado(o)
+		for _, p := range deles {
+			usados[chaveDeCaminho(p)] = true
+		}
+	}
+	for _, p := range meus {
+		if _, err := os.Lstat(p); err != nil {
+			continue
+		}
+		if !completo || usados[chaveDeCaminho(p)] {
+			manter = append(manter, p)
+			continue
+		}
+		remover = append(remover, p)
+	}
+	return remover, manter
+}
+
+// removerEstado apaga os arquivos do estado local e, se ficarem vazias, as
+// pastas dele (e a `arkame` acima, quando é só delas). semVizinhos: não há
+// outro agente na máquina — aí saem também os temporários de índice que uma
+// execução morta possa ter deixado (no Windows o arquivo aberto não sai do
+// diretório).
+func removerEstado(arquivos, pastas []string, semVizinhos bool) (saiu, ficou []string) {
+	for _, p := range arquivos {
+		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+			ficou = append(ficou, p)
+			continue
+		}
+		saiu = append(saiu, p)
+	}
+	for _, dir := range pastas {
+		if semVizinhos {
+			restos, _ := filepath.Glob(filepath.Join(dir, "indice-*.lotes"))
+			for _, r := range restos {
+				_ = os.Remove(r)
+			}
+		}
+		// os.Remove só tira pasta vazia.
+		if os.Remove(dir) == nil {
+			if acima := filepath.Dir(dir); strings.EqualFold(filepath.Base(acima), "arkame") {
+				_ = os.Remove(acima)
+			}
+		}
+	}
+	return saiu, ficou
 }
 
 func chaveDeCaminho(p string) string {

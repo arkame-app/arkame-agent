@@ -74,7 +74,18 @@ roda em modo completo (hash de tudo + `HeadObject`, o comportamento de sempre), 
 inventário inteiro e reconstrói o estado. Nenhum arquivo igual é reenviado: o
 `HeadObject` acha o mesmo sha256 e reaproveita a versão.
 
-**Expurgo.** Depois de `purge.Run`, as entradas cuja versão foi apagada saem do estado.
+**Expurgo e restauração.** Depois de `purge.Run`, as entradas cuja versão foi apagada saem
+do estado. O mesmo quando uma restauração não acha a versão no bucket (`not_found`) ou baixa
+um conteúdo que não confere com o índice (tamanho ou sha256): o backup seguinte lê o arquivo
+e o confere — ou envia — de novo. Com um backup em curso, a baixa espera ele fechar.
+
+**Inventário de sessão parcial.** Quando a sessão vai ao painel como inventário (`full`,
+ou inline) sem a varredura ter sido completa, as entradas que ela não viu saem do estado
+antes do `/complete`: no painel esses arquivos ficam fora da sessão, e o delta seguinte tem
+de mandá-los de novo.
+
+**Desinstalação.** `uninstall` apaga o estado deste agente + armazenamento (ele guarda os
+nomes dos arquivos do servidor); o de outro agente da mesma máquina fica.
 
 **Memória.** O bbolt lê por mapeamento de memória. No Linux as páginas mapeadas são
 devolvidas ao sistema a cada 20 mil consultas (`madvise`), para o arquivo de estado (~250 B

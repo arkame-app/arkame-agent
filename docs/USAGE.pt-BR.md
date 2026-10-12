@@ -240,8 +240,11 @@ sudo docker stop -t 150 arkame-agent 2>/dev/null; sudo docker rm arkame-agent 2>
 ```
 
 Tira o serviço, o arquivo de configuração com a chave, a identidade (token,
-chave privada, agent.id) e o programa; a pasta só sai se ficar vazia. Os backups
-continuam no bucket. No painel, arquive o servidor para ele deixar de ser cobrado.
+chave privada, agent.id), o estado local do backup deste agente + armazenamento
+(`ARKAME_STATE_DIR`: ele guarda os nomes dos arquivos do servidor) e o programa;
+cada pasta só sai se ficar vazia, e o estado de outro agente da máquina fica. No
+Docker o estado está no disco do servidor: `sudo rm -rf /var/lib/arkame/estado`.
+Os backups continuam no bucket. No painel, arquive o servidor para ele deixar de ser cobrado.
 Antes de tocar em qualquer coisa, confere que achou a configuração e que pode
 apagá-la. Com mais de um agente na máquina (`--service-name`), use o mesmo
 `--service-name` e `--config` da instalação; o programa só sai com o último, e
