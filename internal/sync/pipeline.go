@@ -53,8 +53,9 @@ type EngineOptions struct {
 	// VerificarDias é o ciclo da reconferência rotativa (releitura +
 	// HeadObject de cada arquivo que o atalho pularia). Zero: 30.
 	VerificarDias int
-	// VerificarTeto é quantas reconferências cabem numa execução. Zero:
-	// 3,5% dos arquivos da última sessão, no mínimo 1.000.
+	// VerificarTeto é quantas reconferências cabem numa execução. Zero: a
+	// parte do ciclo que passou desde a última execução confirmada (ver
+	// tetoDaReconferencia).
 	VerificarTeto int
 	// Amostra é quantas entradas do estado são conferidas no bucket antes de
 	// qualquer atalho (ver amostra.go). Zero: AmostraPadrao.
@@ -157,6 +158,33 @@ func (r *Result) Guardados() int64 {
 	return max(r.Stats.FilesTotal, int64(len(r.VersionMap)))
 }
 
+// pisoDaReconferencia é o mínimo de reconferências rotativas que cabem numa
+// execução, qualquer que seja o tamanho do plano.
+var pisoDaReconferencia int64 = 1000
+
+// tetoDaReconferencia é quantas reconferências rotativas cabem numa execução:
+// a fração do ciclo (dias) que passou desde a última execução confirmada, com
+// 10% de folga. Num plano diário é 1/30 dos arquivos; num semanal, 7/30 — o
+// que vence entre uma execução e outra cabe, e o ciclo completo fecha em
+// ~dias, qualquer que seja a frequência do plano.
+//
+// Antes era 3,5% fixos por execução: o plano semanal via vencer 23% e conferia
+// 3,5% — um ciclo de 29 semanas, não de 30 dias.
+//
+// Sem data da última execução (primeira vez, estado de antes de a data
+// existir) ou com o relógio andando para trás, vale um dia.
+func tetoDaReconferencia(arquivos int64, ultima, agora time.Time, dias int) int64 {
+	ciclo := time.Duration(dias) * 24 * time.Hour
+	decorrido := 24 * time.Hour
+	if !ultima.IsZero() {
+		if d := agora.Sub(ultima); d > 0 {
+			decorrido = min(d, ciclo)
+		}
+	}
+	teto := int64(float64(arquivos) * 1.1 * float64(decorrido) / float64(ciclo))
+	return max(pisoDaReconferencia, teto+1)
+}
+
 // blocoDoEstado é de quantas em quantas entradas o estado local é gravado.
 var blocoDoEstado = 2048
 
@@ -239,11 +267,13 @@ func Run(ctx context.Context, o EngineOptions) (*Result, error) {
 
 	c := &coletor{o: o, result: result0, cancelar: cancel}
 	if o.Estado != nil {
+		agora := o.Agora()
 		teto := int64(o.VerificarTeto)
 		if teto <= 0 {
-			teto = max(1000, o.Estado.Arquivos()*35/1000)
+			teto = tetoDaReconferencia(o.Estado.Arquivos(), o.Estado.UltimaConfirmadaEm(), agora, o.VerificarDias)
 		}
 		c.orcamento.Store(teto)
+		o.Estado.MarcarInicio(agora)
 	}
 
 	var pulados puladosDoWalk

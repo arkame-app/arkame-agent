@@ -209,9 +209,14 @@ func (s *sessaoDeIndice) confirmar(sessionID string, result *syncengine.Result) 
 	if s.plano == nil || s.ex == nil || result == nil || result.EstadoFalhou || s.ex.Falhou() || s.semConfirmar {
 		return
 	}
-	arquivos := int64(-1)
-	if result.InventarioCompleto {
-		arquivos = result.Stats.FilesTotal
+	// Quantos arquivos o plano tem é a base do teto da reconferência rotativa.
+	// Vale também a sessão parcial: num servidor em que toda sessão é parcial
+	// (um arquivo ilegível que nunca sai) a contagem ficava em zero para
+	// sempre, e o teto, no piso. Parcial só sobe a contagem — ela pode ter
+	// visto uma fração da árvore (serviço parando no meio).
+	arquivos := result.Stats.FilesTotal
+	if !result.InventarioCompleto {
+		arquivos = max(arquivos, s.plano.Arquivos())
 	}
 	if err := s.plano.Confirmar(sessionID, arquivos, s.ex.Ger); err != nil {
 		slog.Warn("não consegui confirmar a sessão no estado local; o próximo backup confere os arquivos de novo", "err", err)

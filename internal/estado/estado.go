@@ -411,6 +411,10 @@ type metaDoPlano struct {
 	// Arquivos é quantos arquivos a última execução confirmada viu — a base
 	// do teto da reconferência rotativa.
 	Arquivos int64 `json:"arquivos,omitempty"`
+	// ConfirmadaEm é quando começou a última execução confirmada (segundos
+	// desde 1970): o teto da reconferência rotativa é proporcional ao tempo
+	// passado desde ela.
+	ConfirmadaEm int64 `json:"confirmada_em,omitempty"`
 }
 
 func (m *metaDoPlano) confirmada(g uint32) bool {
@@ -448,6 +452,9 @@ type Plano struct {
 	meta metaDoPlano
 	// Reiniciado: o plano tinha entradas de outro prefixo, descartadas.
 	Reiniciado bool
+	// inicio é quando a execução aberta começou (ver MarcarInicio); vira
+	// ConfirmadaEm se ela for confirmada.
+	inicio int64
 }
 
 // Plano abre o estado do plano, criando-o vazio se não existe ou se o
@@ -523,6 +530,9 @@ func (p *Plano) Confirmar(sessao string, arquivos int64, gers ...uint32) error {
 			if arquivos >= 0 {
 				p.meta.Arquivos = arquivos
 			}
+			if p.inicio != 0 {
+				p.meta.ConfirmadaEm, p.inicio = p.inicio, 0
+			}
 			return p.gravarMeta(tx)
 		})
 	})
@@ -569,6 +579,19 @@ func (p *Plano) Comecar(sessao string, adotar ...uint32) (*Execucao, error) {
 
 // Arquivos é quantos arquivos a última sessão confirmada do plano viu.
 func (e *Execucao) Arquivos() int64 { return e.p.meta.Arquivos }
+
+// MarcarInicio registra quando esta execução começou; se ela for confirmada,
+// é a data que a seguinte recebe em UltimaConfirmadaEm.
+func (e *Execucao) MarcarInicio(t time.Time) { e.p.inicio = t.Unix() }
+
+// UltimaConfirmadaEm é quando começou a última execução confirmada do plano
+// (zero: nenhuma, ou estado gravado antes de a data existir).
+func (e *Execucao) UltimaConfirmadaEm() time.Time {
+	if e.p.meta.ConfirmadaEm <= 0 {
+		return time.Time{}
+	}
+	return time.Unix(e.p.meta.ConfirmadaEm, 0)
+}
 
 // Vale diz se a entrada é de uma geração confirmada (ou adotada).
 func (e *Execucao) Vale(ent Entrada) bool {
