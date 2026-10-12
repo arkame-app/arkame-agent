@@ -259,7 +259,9 @@ func (e *enviadorDeLotes) enviar(ctx context.Context) {
 		var resp api.IndexBatchResponse
 		err = e.c.POST(ctx, e.rota, json.RawMessage(corpo), &resp)
 		if err == nil {
-			tentativa = 0
+			// As tentativas são por lote (item 10 do contrato): o que este
+			// gastou não entra na conta do seguinte.
+			tentativa, noFim = 0, 0
 			e.mu.Lock()
 			e.enviados = seq
 			e.acordar.Broadcast()
