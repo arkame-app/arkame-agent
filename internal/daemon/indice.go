@@ -49,6 +49,13 @@ var errIndiceRecusado = errors.New("o painel recusou o índice da sessão")
 // /complete inline.
 var errIndiceGrandeDemais = errors.New("o índice não cabe no painel")
 
+// errLoteInvalido: o painel recusou um lote como torto (400 `invalid_batch`:
+// uma entrada que ele não aceita — chave acima de 1.024 bytes, data fora da
+// faixa, campo de outro tipo). É defeito do agente e não adianta repetir, nem
+// refazer o índice em outra sessão: a mesma entrada iria de novo (contrato,
+// item 19). O backup falha com o motivo.
+var errLoteInvalido = errors.New("o painel recusou um lote do índice como inválido")
+
 // recuoMaximoDoLote é o teto do recuo entre tentativas de um lote enquanto o
 // backup ainda roda.
 var recuoMaximoDoLote = 30 * time.Second
@@ -284,6 +291,9 @@ func (e *enviadorDeLotes) enviar(ctx context.Context) {
 		var he *api.HTTPError
 		if errors.As(err, &he) && recusaDefinitiva(err) {
 			switch {
+			case he.Status == 400 && strings.Contains(he.Body, "invalid_batch"):
+				e.falhar(fmt.Errorf("%w: lote %d: %v", errLoteInvalido, seq, err))
+				return
 			case he.Status == 413 && strings.Contains(he.Body, "index_too_large"):
 				// O teto é da sessão, não do lote: dividir não resolve.
 				e.falhar(fmt.Errorf("%w: lote %d: %v", errIndiceGrandeDemais, seq, err))

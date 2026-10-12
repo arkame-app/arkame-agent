@@ -428,6 +428,25 @@ func (p *PainelFalso) start(w http.ResponseWriter, agente string, corpo []byte) 
 	responder(w, 200, resp)
 }
 
+// maxBytesDoTexto é o teto, em bytes UTF-8, da chave e da versão de uma
+// entrada do índice no painel (o do S3).
+const maxBytesDoTexto = 1024
+
+// textoGuardavel diz se a chave ou a versão cabe no catálogo do painel: até
+// 1.024 bytes e sem caractere nulo (contrato, item 19). O painel de verdade
+// também recusa o substituto UTF-16 solto; aqui ele não chega a ser visto — o
+// encoding/json já o troca por U+FFFD ao ler o corpo.
+func textoGuardavel(t string) bool {
+	return len(t) <= maxBytesDoTexto && !strings.ContainsRune(t, 0)
+}
+
+// dataGuardavel diz se a data de modificação está nos anos 0001–9999, em UTC
+// — a faixa que o painel aceita (contrato, item 19).
+func dataGuardavel(t time.Time) bool {
+	a := t.UTC().Year()
+	return a >= 1 && a <= 9999
+}
+
 func (p *PainelFalso) files(w http.ResponseWriter, sid string, corpo []byte) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -464,14 +483,16 @@ func (p *PainelFalso) files(w http.ResponseWriter, sid string, corpo []byte) {
 		switch {
 		case e.Op != api.OpUpsert && e.Op != api.OpRemoved && e.Op != api.OpUnselected:
 			motivo = "op"
-		case e.Key == "" || strings.ContainsRune(e.Key, 0):
+		case e.Key == "" || !textoGuardavel(e.Key):
 			motivo = "key"
 		case e.Op != api.OpUpsert:
+		case !textoGuardavel(e.VersionID):
+			motivo = "version_id"
 		case e.Size == nil || *e.Size < 0:
 			motivo = "size"
 		case len(e.SHA256) != 64 || strings.Trim(strings.ToLower(e.SHA256), "0123456789abcdef") != "":
 			motivo = "sha256"
-		case e.ModifiedAt == nil:
+		case e.ModifiedAt == nil || !dataGuardavel(*e.ModifiedAt):
 			motivo = "modified_at"
 		case e.VersionID == "":
 			semVersao++
@@ -584,7 +605,23 @@ func (p *PainelFalso) complete(w http.ResponseWriter, sid string, corpo []byte) 
 		s.Modo = "inline"
 		semVersao := 0
 		ops := make([]api.IndexEntry, 0, len(req.VersionMap))
-		for _, e := range req.VersionMap {
+		for i, e := range req.VersionMap {
+			// Os tetos do caminho de lotes valem no mapa inline: entrada que o
+			// catálogo não guarda recusa o mapa inteiro, e a sessão segue aberta.
+			motivo := ""
+			switch {
+			case len(e.SHA256) != 64 || e.Key == "":
+			case !textoGuardavel(e.Key):
+				motivo = "key"
+			case !textoGuardavel(e.VersionID):
+				motivo = "version_id"
+			case !dataGuardavel(e.ModifiedAt):
+				motivo = "modified_at"
+			}
+			if motivo != "" {
+				responder(w, 400, map[string]any{"error": "invalid_version_map", "reason": motivo, "index": i})
+				return
+			}
 			if e.VersionID == "" {
 				semVersao++
 				continue

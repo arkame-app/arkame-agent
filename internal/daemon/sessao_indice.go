@@ -504,6 +504,17 @@ func (s *sessaoDeIndice) concluirEmLotes(ctx context.Context, c *api.Client, cfg
 	switch {
 	case errors.Is(err, errIndiceRecusado):
 		motivo = err.Error()
+	case errors.Is(err, errLoteInvalido):
+		// Recusa definitiva: o painel não aceita uma entrada do jeito que o
+		// agente a escreve. Mandar de novo — nesta sessão ou no inventário
+		// refeito em outra — levaria a mesma entrada. O backup falha com o
+		// motivo (o campo e a posição que o painel devolveu).
+		slog.Error("o painel recusou um lote do índice como inválido; é defeito do agente, e repetir não resolve", "session_id", sessionID, "err", err)
+		marcarFalha(ctx, c, cfg, sessionID, corpoDaFalha{
+			ErrorCode:    "complete_failed",
+			ErrorMessage: fmt.Sprintf("os arquivos subiram, mas o painel recusou o índice da sessão como inválido: %v", err),
+		})
+		return fmt.Errorf("session index: %w", err)
 	case errors.Is(err, errIndiceGrandeDemais):
 		// Recusa definitiva, como o 413 do /complete inline: o índice desta
 		// sessão não cabe no painel, e mandá-lo de novo (nesta ou em outra
