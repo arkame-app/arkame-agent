@@ -253,3 +253,7 @@ func regravarPlatform(context.Context, *config.Config, Options) (string, error) 
 
 // EDropIn: só o systemd tem drop-in (ver systemd.go).
 func EDropIn(string) bool { return false }
+
+// variavelDoServico: a definição do serviço que o agente grava neste sistema
+// não leva variáveis postas pelo administrador (ver VariavelDoServico).
+func variavelDoServico(string, Scope, string) string { return "" }

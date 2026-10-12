@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -656,6 +657,34 @@ func configDoServico(nome string, escopo Scope) (string, bool) {
 	}
 	c := configDaUnit(string(b))
 	return c, c != ""
+}
+
+// variavelDoServico lê a variável das linhas Environment= da unit e dos
+// drop-ins dela (<unit>.d/*.conf, em ordem de nome, como o systemd).
+func variavelDoServico(nome string, escopo Scope, chave string) string {
+	dir := dirUnitsDoSistema
+	if escopo == ScopeUser {
+		d, err := userUnitDir()
+		if err != nil {
+			return ""
+		}
+		dir = d
+	}
+	unit := filepath.Join(dir, nome+".service")
+	arquivos := []string{unit}
+	dropIns, _ := filepath.Glob(filepath.Join(unit+".d", "*.conf"))
+	sort.Strings(dropIns)
+	valor := ""
+	for _, a := range append(arquivos, dropIns...) {
+		b, err := os.ReadFile(a)
+		if err != nil {
+			continue
+		}
+		if v, tem := variavelDaUnit(string(b), chave); tem {
+			valor = v
+		}
+	}
+	return valor
 }
 
 // Parar: fora do Windows o programa pode ser trocado com o serviço de pé.

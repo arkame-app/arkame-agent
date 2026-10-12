@@ -291,6 +291,46 @@ func ConfigDoServico(name string, scope Scope) (string, bool) {
 	return "", false
 }
 
+// VariavelDoServico devolve o valor que a definição do serviço dá a uma
+// variável de ambiente FORA do arquivo de configuração — o que o administrador
+// pôs à mão na unit. Quem lê só o arquivo de configuração (o `uninstall`) não
+// a enxerga, e o serviço roda com ela. Vazio quando não há.
+//
+// Só o systemd é lido (Environment= da unit e dos drop-ins). No Windows e no
+// macOS devolve sempre vazio: lá a definição do serviço que o agente grava
+// não leva variáveis do administrador.
+func VariavelDoServico(name string, scope Scope, chave string) string {
+	if name == "" {
+		name = DefaultName
+	}
+	if !nameRe.MatchString(name) {
+		return ""
+	}
+	return variavelDoServico(name, EscopoEfetivo(scope), chave)
+}
+
+// variavelDaUnit acha chave nas linhas Environment= de uma unit do systemd
+// (ou de um drop-in). Vale a última atribuição; `Environment=` vazio apaga as
+// anteriores, como no systemd.
+func variavelDaUnit(conteudo, chave string) (valor string, tem bool) {
+	for _, l := range strings.Split(conteudo, "\n") {
+		v, ok := strings.CutPrefix(strings.TrimSpace(l), "Environment=")
+		if !ok {
+			continue
+		}
+		if strings.TrimSpace(v) == "" {
+			valor, tem = "", true
+			continue
+		}
+		for _, campo := range camposDaLinha(v) {
+			if k, x, ok := strings.Cut(campo, "="); ok && k == chave {
+				valor, tem = strings.ReplaceAll(x, "%%", "%"), true
+			}
+		}
+	}
+	return valor, tem
+}
+
 // configDaUnit lê o env-file de uma unit do systemd gerada pelo agente
 // (EnvironmentFile=, ou o --config do ExecStart). O %% da unit é um %.
 func configDaUnit(conteudo string) string {
