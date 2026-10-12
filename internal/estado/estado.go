@@ -49,11 +49,16 @@ var (
 	tabelaCRC    = crc32.MakeTable(crc32.Castagnoli)
 )
 
-// Identidade diz de quem é o arquivo de estado.
+// Identidade diz de quem é o arquivo de estado. Qualquer campo diferente e o
+// arquivo é de outro lugar: é descartado e o backup confere tudo.
 type Identidade struct {
 	Agente        string `json:"agente"`
 	Armazenamento string `json:"armazenamento"`
 	Bucket        string `json:"bucket"`
+	// Endpoint é o endereço do armazenamento ("" na AWS). O mesmo
+	// armazenamento do painel reapontado para outro provedor mantém o id e o
+	// nome do bucket, mas as versões registradas não existem lá.
+	Endpoint string `json:"endpoint,omitempty"`
 }
 
 type cabecalho struct {

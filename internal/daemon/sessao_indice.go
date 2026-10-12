@@ -92,7 +92,8 @@ func ArquivosDoEstado(cfg *config.Config) (arquivos, pastas []string) {
 }
 
 func identidadeDoEstado(cfg *config.Config, bucket string) estado.Identidade {
-	return estado.Identidade{Agente: cfg.AgentID, Armazenamento: cfg.StorageID, Bucket: bucket}
+	return estado.Identidade{Agente: cfg.AgentID, Armazenamento: cfg.StorageID, Bucket: bucket,
+		Endpoint: strings.TrimRight(cfg.StorageEndpoint, "/")}
 }
 
 // abrirSessaoDeIndice prepara o estado local e o envio em lotes da sessão.
