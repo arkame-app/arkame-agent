@@ -285,11 +285,30 @@ func walkSem(ctx context.Context, hostRoot string, sourcePaths []string, exclude
 // pastaIgnorada diz se p é uma das pastas que a varredura nunca abre.
 func pastaIgnorada(p string, ignorar []string) bool {
 	for _, ig := range ignorar {
-		if ig != "" && p == ig {
+		if ig != "" && mesmaPasta(caminho.Windows, p, ig) {
 			return true
 		}
 	}
 	return false
+}
+
+// mesmaPasta compara dois caminhos de pasta. No Windows o sistema de arquivos
+// não distingue maiúsculas e aceita as duas barras: `C:\ProgramData\Arkame`
+// e `c:/programdata/arkame/` são a mesma pasta, e comparar o texto exato
+// deixava a pasta do estado entrar no backup quando o plano e a configuração
+// a escreviam de formas diferentes.
+func mesmaPasta(windows bool, a, b string) bool {
+	if !windows {
+		return a == b
+	}
+	norm := func(p string) string {
+		p = strings.ReplaceAll(p, "/", `\`)
+		for len(p) > 3 && strings.HasSuffix(p, `\`) {
+			p = p[:len(p)-1]
+		}
+		return p
+	}
+	return strings.EqualFold(norm(a), norm(b))
 }
 
 // lerCtime é o ctimeDe do sistema; os testes o trocam para simular o Windows,
