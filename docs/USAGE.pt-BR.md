@@ -240,8 +240,9 @@ sudo docker stop -t 150 arkame-agent 2>/dev/null; sudo docker rm arkame-agent 2>
 ```
 
 Tira o serviço, o arquivo de configuração com a chave, a identidade (token,
-chave privada, agent.id), o estado local do backup deste agente + armazenamento
-(`ARKAME_STATE_DIR`: ele guarda os nomes dos arquivos do servidor) e o programa;
+chave privada, agent.id), o estado local do backup deste agente — o do
+armazenamento de hoje e o de armazenamentos anteriores (`ARKAME_STATE_DIR`: ele
+guarda os nomes dos arquivos do servidor) — e o programa;
 cada pasta só sai se ficar vazia, e o estado de outro agente da máquina fica. No
 Docker o estado está no disco do servidor: `sudo rm -rf /var/lib/arkame/estado`.
 Os backups continuam no bucket. No painel, arquive o servidor para ele deixar de ser cobrado.
@@ -324,7 +325,7 @@ Lidas do env-file ou das env vars do processo (CLI tem precedência).
 | `SIBLING_BUCKETS` | Buckets atendidos por outros processos deste agente no host (CSV): planos e restaurações desses buckets ficam para o irmão |
 | `POLL_INTERVAL_SEC` | Intervalo de consulta de planos e restaurações (padrão 60) |
 | `HEARTBEAT_INTERVAL_SEC` | Intervalo do heartbeat (padrão 60) |
-| `ARKAME_STATE_DIR` | Pasta do estado local do backup (o que o agente já sabe de cada arquivo, para não reler o que não mudou). Padrão: `<HOST_ROOT>/var/lib/arkame/estado` (Linux, root), `~/.local/state/arkame/estado` (Linux, usuário), `%ProgramData%\Arkame\estado` (Windows), `/Library/Application Support/Arkame/estado` (macOS). `off` desliga: todo backup lê e confere tudo. A pasta nunca entra no backup; apagá-la é seguro (o backup seguinte a reconstrói, sem reenviar arquivo igual). Ver `docs/ESCALA.md` |
+| `ARKAME_STATE_DIR` | Pasta do estado local do backup (o que o agente já sabe de cada arquivo, para não reler o que não mudou). Padrão: `<HOST_ROOT>/var/lib/arkame/estado` (Linux, root), `~/.local/state/arkame/estado` (Linux, usuário), `%ProgramData%\Arkame\estado` (Windows), `/Library/Application Support/Arkame/estado` (macOS). `off` desliga: todo backup lê e confere tudo. A pasta nunca entra no backup; apagá-la é seguro (o backup seguinte a reconstrói, sem reenviar arquivo igual). O agente a cria só para o administrador (no Windows, Administradores e SYSTEM) e não usa uma pasta que já existia em nome de outro usuário: nesse caso o estado vai para `estado/` ao lado do arquivo de configuração. Ver `docs/ESCALA.md` |
 | `ARKAME_STATE` | Quando o estado local vale. `auto` (padrão): só quando o painel oferece o índice em lotes — contra um painel de antes disso o agente lê e confere tudo, como a v0.4.31, e não cria arquivo nenhum na pasta do estado. `always`: também contra o painel antigo (o `/complete` segue inline, mas o arquivo que não mudou não é relido). `off`: nunca (o mesmo que `ARKAME_STATE_DIR=off`) |
 | `ARKAME_REHASH_ALL` | `1`: todo backup relê e confere no bucket todos os arquivos, ignorando o atalho do estado — **enquanto a variável estiver ligada**. Para uma vez só, use a flag `run --rehash-all`: ela vale para o primeiro backup de cada plano depois da partida do agente, e os seguintes voltam ao atalho |
 | `ARKAME_VERIFY_DAYS` | Ciclo, em dias, da reconferência rotativa — cada arquivo é relido e conferido no bucket uma vez por ciclo (padrão 30) |

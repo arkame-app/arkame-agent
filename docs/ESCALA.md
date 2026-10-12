@@ -13,7 +13,7 @@ arquivos, 2,1 GB com 947 mil, ~1 h para um backup sem mudança de 947 mil.
 
 | Peça | Antes | Agora |
 |---|---|---|
-| Arquivo que não mudou | lido inteiro + 1 `HeadObject` | nem lido nem consultado (estado local) |
+| Arquivo que não mudou | lido inteiro + 1 `HeadObject` | nem lido nem consultado (estado local); 32 versões sorteadas conferidas por execução |
 | Envio | 1 arquivo por vez | N trabalhadores (padrão `min(4, CPUs)`), no máximo 2 multiparts |
 | Limite de banda | um limitador por leitor | um por execução |
 | Índice | mapa inteiro na memória, 1 POST | lotes de até 5.000 entradas / 2 MiB durante o backup; delta |
@@ -27,6 +27,24 @@ plano. Guarda, por arquivo: tamanho, data de modificação (ns), ctime, sha256, 
 no bucket, o dia da próxima reconferência e a "geração" (sessão) que gravou a entrada.
 
 É um acelerador derivável. A restauração não depende dele; apagá-lo é seguro.
+
+O arquivo é de um agente + armazenamento + bucket + **endereço do armazenamento**
+(`STORAGE_ENDPOINT`). Qualquer um diferente e ele é descartado: o mesmo armazenamento do
+painel reapontado para outro provedor mantém o id e o nome do bucket, mas as versões
+registradas não existem lá.
+
+**A pasta é só do administrador.** O estado decide o que o backup lê e o que ele afirma ao
+painel, e guarda o nome de todos os arquivos do servidor. A pasta é criada fechada — 0700; no
+Windows, com a DACL protegida de Administradores e SYSTEM, herdada pelo que for gravado
+dentro (o 0700 lá não restringe nada, e `%ProgramData%` deixa qualquer usuário ler e criar
+arquivos). Pasta que **já existia em nome de outro usuário** (no Windows, também a que é
+uma junção ou um link) não é usada, nem a que teria de ser criada dentro da pasta de outro
+usuário: o estado vai para `<pasta da configuração>/estado` e, se essa também não servir, o
+backup roda sem estado. A permissão de uma pasta que já existia não é alterada; o `.db`, a
+medição de ocupação e o temporário do índice são protegidos um a um. Arquivo de estado de
+outro dono é descartado. A pasta da configuração também é o destino quando a principal não
+aceita escrita (`/host` só para leitura); com o estado **em uso por outro processo**, o
+backup roda sem estado em vez de abrir um segundo.
 
 **Quando entra em uso.** Só quando o painel oferece o índice em lotes (`index.mode =
 "batches"` no `/sessions/start`). Contra um painel de antes disso o agente é a v0.4.31: lê
@@ -45,9 +63,15 @@ não é consultado. Não servem de atalho:
   leitura — uma alteração logo depois pode cair na mesma data;
 - entrada que venceu na **reconferência rotativa**: cada arquivo é relido e conferido com
   `HeadObject` uma vez a cada 30 dias (`ARKAME_VERIFY_DAYS`), em dia espalhado por um hash
-  da chave, com teto por execução (3,5% dos arquivos da última sessão, no mínimo 1.000; o
-  que não coube fica para a execução seguinte). É o que pega conteúdo alterado com as
-  mesmas datas (contado em `changed_same_mtime`) e objeto que sumiu do bucket;
+  da chave, com teto por execução: a fração do ciclo que passou desde a última execução
+  confirmada, com 10% de folga — 1/30 dos arquivos num plano diário, 7/30 num semanal, o
+  ciclo inteiro depois de 30 dias parado —, no mínimo 1.000 (o que não coube fica para a
+  execução seguinte). A contagem de arquivos do plano é atualizada também em sessão
+  parcial. Data de reconferência além de hoje + o ciclo (o relógio do servidor esteve
+  adiantado) conta como vencida. É o que pega conteúdo alterado com as mesmas datas
+  (contado em `changed_same_mtime`) e objeto que sumiu do bucket;
+- entrada que recebeu **baixa** (ver "Expurgo e restauração");
+- nada, quando a **amostra** não confere ou o estado é de **outra época** (abaixo);
 - tudo, com `ARKAME_REHASH_ALL=1` (enquanto a variável estiver ligada) ou `run
   --rehash-all` (a flag vale para UM backup de cada plano depois da partida; os seguintes
   voltam ao atalho — num serviço a flag ficaria na linha de comando para sempre).
@@ -55,12 +79,37 @@ não é consultado. Não servem de atalho:
 No Windows o Go não dá o ctime: lá o atalho é tamanho + mtime, e "mudou sem mudar a data"
 depende só da reconferência rotativa.
 
+**Amostra no bucket.** O atalho afirma, sem consultar o bucket, que a versão registrada
+continua lá — e deixa de ser verdade quando alguém mexe no bucket por fora (versões
+apagadas, bucket recriado com o mesmo nome, regra de ciclo de vida). Por isso toda execução
+que vai usar o atalho começa conferindo 32 entradas sorteadas do estado: `HeadObject` com o
+`VersionId` registrado, que tem de devolver o mesmo sha256 e o mesmo tamanho. **Uma que
+falhe — versão que sumiu, outro conteúdo, bucket que não respondeu — e a execução inteira lê
+e confere tudo**, como a v0.4.31: o que sumiu sobe de novo, o que está lá não é reenviado. A
+amostra é fixa (não cresce com o plano) e sorteada de novo a cada execução. Bucket
+esvaziado, recriado ou trocado derruba todas as entradas e é pego com certeza; perda parcial
+é pega com a probabilidade da fração perdida (10% perdidos → 97% numa execução; 1% → 28% por
+execução, 96% em dez), e a reconferência rotativa cobre o resto. Não há objeto-sentinela:
+ele só pegaria os casos em que todas as entradas caem, que a amostra já pega, e exigiria
+gravar fora do prefixo dos dados (permissão a mais; regra de ciclo de vida que o apagasse
+viraria alarme falso para sempre).
+
+**Época.** O atalho só vale se a última sessão confirmada do estado é a que o painel
+devolve como `base_session_id`. Se não é — cópia antiga do arquivo restaurada (rollback de
+snapshot, VM clonada), painel que perdeu sessões ou religou os lotes —, a execução lê e
+confere tudo e manda o inventário inteiro. Contra o painel sem lotes
+(`ARKAME_STATE=always`) não há base para comparar, e vale só a amostra.
+
 **Duas fases.** A entrada nasce com a geração da sessão que a gravou. A geração só passa a
 valer com o `/complete` 200 daquela sessão. `kill -9`, queda de energia, painel que recusa:
 as entradas ficam no arquivo, mas a execução seguinte as trata como ausentes (lê, confere no
 bucket — sem reenviar o que já subiu — e leva ao índice de novo). Uma exceção, que evita
 reler tudo quando só a resposta se perdeu: se o painel devolve como `base_session_id` a
-sessão pendente, ela está confirmada.
+sessão pendente **e o agente a tinha marcado como pronta** antes de mandar o `/complete`,
+ela está confirmada. A marca só é gravada com o estado inteiro e alinhado ao índice: quando
+o agente decide não confirmar (o estado falhou no meio, o inventário de sessão parcial não
+pôde ser alinhado), a sessão nunca é adotada, e a execução seguinte cai na regra da época.
+O índice refeito numa sessão nova leva a marca com o id da sessão nova.
 
 **Removidos e fora da seleção.** Só depois de uma varredura completa e sem erro (nenhuma
 pasta ilegível, nenhum arquivo que falhou, nenhum pulado por estar só na nuvem). O que o
@@ -74,18 +123,26 @@ roda em modo completo (hash de tudo + `HeadObject`, o comportamento de sempre), 
 inventário inteiro e reconstrói o estado. Nenhum arquivo igual é reenviado: o
 `HeadObject` acha o mesmo sha256 e reaproveita a versão.
 
-**Expurgo e restauração.** Depois de `purge.Run`, as entradas cuja versão foi apagada saem
-do estado. O mesmo quando uma restauração não acha a versão no bucket (`not_found`) ou baixa
-um conteúdo que não confere com o índice (tamanho ou sha256): o backup seguinte lê o arquivo
-e o confere — ou envia — de novo. Com um backup em curso, a baixa espera ele fechar.
+**Expurgo e restauração.** Depois de `purge.Run`, as entradas cuja versão foi apagada
+recebem baixa. O mesmo quando uma restauração não acha a versão no bucket (`not_found`) ou
+baixa um conteúdo que não confere com o índice (tamanho ou sha256). A entrada não é apagada:
+deixa de afirmar versão e de servir de atalho. O backup seguinte lê o arquivo, o confere —
+ou envia — e o leva ao índice de novo; se o arquivo saiu da origem nesse meio-tempo, é da
+entrada que sai o `removed`. Com um backup em curso, a baixa espera ele fechar. Ela vai a
+todos os arquivos de estado do agente + armazenamento (o da pasta principal e o da pasta da
+configuração, se os dois existirem) e os abre como estão, sem conferir de quem são — a
+identidade do arquivo é assunto do backup.
 
 **Inventário de sessão parcial.** Quando a sessão vai ao painel como inventário (`full`,
 ou inline) sem a varredura ter sido completa, as entradas que ela não viu saem do estado
 antes do `/complete`: no painel esses arquivos ficam fora da sessão, e o delta seguinte tem
 de mandá-los de novo.
 
-**Desinstalação.** `uninstall` apaga o estado deste agente + armazenamento (ele guarda os
-nomes dos arquivos do servidor); o de outro agente da mesma máquina fica.
+**Desinstalação.** `uninstall` apaga o estado deste agente (ele guarda os nomes dos
+arquivos do servidor): o do armazenamento de hoje e o de armazenamentos anteriores, na pasta
+da configuração (`ARKAME_STATE_DIR`), na padrão do sistema, em `<pasta da
+configuração>/estado` e na `ARKAME_STATE_DIR` posta só na unit do systemd. O que a
+configuração de outro agente da máquina usa fica.
 
 **Memória.** O bbolt lê por mapeamento de memória. No Linux as páginas mapeadas são
 devolvidas ao sistema a cada 20 mil consultas (`madvise`), para o arquivo de estado (~250 B
@@ -103,6 +160,8 @@ v0.4.31 (conferido: 32.434.029 bytes nos dois, ver a medição).
 - Cada lote fechado vai para um arquivo temporário (gzip) na pasta do estado, e o envio lê
   de lá: a memória fica no lote em montagem; o painel fora do ar não para o backup; e um
   lote que o painel perdeu é reenviado idêntico (`409 seq_gap`, `409 index_mismatch`).
+  Os limites do lote que o painel anuncia valem entre 10 e 50.000 entradas e entre 64 KiB e
+  16 MiB; na finalização cada lote tem direito a mais 5 tentativas (a conta é por lote).
 - **Delta** quando o painel oferece e a última sessão confirmada do estado é a
   `base_session_id`. Arquivo inalterado não gera entrada; sem mudança são zero lotes.
 - Recusa que reenviar não resolve (`409 base_mismatch`, `seq_conflict`, `session_closed`):
@@ -135,7 +194,9 @@ sessão. "Antes" = `f52fb25` contra o painel sem lotes; "depois" = este código.
 Leituras:
 
 - **Sem mudança:** nenhuma requisição de arquivo ao bucket (as que sobram são o
-  `GetBucketVersioning` da sessão e a sondagem da partida). 20 µs por arquivo: 1 milhão
+  `GetBucketVersioning` da sessão e a sondagem da partida). **Desde 12/10** há também a
+  amostra: 32 `HeadObject` com `VersionId` por execução, qualquer que seja o tamanho do
+  plano (ver "Custo da amostra", abaixo). 20 µs por arquivo: 1 milhão
   ficaria em ~20–40 s com o cache de disco quente; com disco frio manda a varredura
   (`lstat` de cada arquivo), que é o que a bancada na VM tem de medir.
 - **Memória:** com lotes, o pico não acompanha o número de arquivos (45 MB na primeira com
@@ -166,6 +227,29 @@ O pico não acompanha o número de arquivos. Antes do commit `5a9581d` acompanha
 com 300 mil sem mudança, todos do arquivo de estado mapeado (o bbolt percorria o arquivo
 inteiro a cada abertura). 1 milhão não coube nesta máquina (o `/tmp` tem 1.048.576 inodes
 e a memória estava no limite): fica para a VM, com `ARKAME_TESTE_ESCALA=1000000`.
+
+## Custo da amostra (12/10/2026)
+
+A conferência da amostra no começo de cada execução custa **32 requisições ao bucket**
+(`HeadObject` com `VersionId`; uma por arquivo quando o plano tem menos de 32) e uma passada
+pelo estado local para sortear as entradas. Mesma máquina e mesmo teste em processo
+(`TestEscalaMuitosArquivosPequenos`, 300.000 arquivos), antes (`05c9506`) e depois:
+
+| Caso | Antes | Depois | Requisições ao bucket (depois) |
+|---|---|---|---|
+| sem mudança | 4,28 s · 36 MiB | 4,13 s · 38 MiB | `GetBucketVersioning` 1 + amostra **32** |
+| 0,1% alterado (300) | 4,22 s · 61 MiB | 4,57 s · 64 MiB | 300 `HeadObject` + 300 `PutObject` + amostra **32** |
+
+A diferença de tempo fica dentro do ruído de uma execução para outra. A passada pelo estado,
+medida à parte num arquivo de 1 milhão de entradas (346 MB, cache quente): **0,76 s** —
+1,3% dos ~58 s do backup sem mudança de 1 milhão medido na VM. Com o disco frio ela lê o
+arquivo de estado em sequência, que a varredura leria de qualquer forma (toda entrada é
+consultada). Contra um provedor de verdade somam-se 32 `HeadObject` em até 8 conexões:
+uma fração de segundo. Quando a amostra falha, o custo é o do modo completo (um
+`HeadObject` e uma leitura por arquivo), que é o que a v0.4.31 fazia em todo backup.
+
+No bucket falso a consulta da amostra é contada à parte (`HeadObjectVersion`), para a coluna
+`HeadObject` das tabelas seguir sendo "uma consulta por arquivo".
 
 ## Como medir
 
@@ -201,5 +285,14 @@ a da VM.
 - Contra o painel de verdade, com os limites de produção: `/files` sob carga, o `/complete`
   em lotes, `base_mismatch` e `seq_gap` reais.
 - Windows (sem ctime; pasta do estado em `%ProgramData%`; arquivo temporário que não pode
-  ser apagado aberto) e macOS (`madvise` não é usado; ctime vem de `Ctimespec`).
+  ser apagado aberto) e macOS (`madvise` não é usado; ctime vem de `Ctimespec`). **Nada do
+  que protege a pasta do estado foi executado em Windows**: a DACL da pasta criada, a
+  leitura do dono (SID), a recusa de junção e a comparação de caminhos sem caixa só
+  compilam (`GOOS=windows`) e têm teste em Linux com o dono simulado. Conferir numa máquina
+  de verdade: `icacls %ProgramData%\Arkame\estado` depois do primeiro backup (só
+  Administradores e SYSTEM), e o backup com `%ProgramData%\Arkame` criada antes por um
+  usuário comum (o estado tem de ir para a pasta da configuração).
+- A amostra contra provedores de verdade: `HeadObject` com `VersionId` na OCI, B2 e R2
+  (permissão `s3:GetObjectVersion`; a credencial que não a tiver faz todo backup rodar em
+  modo completo, com o aviso no log).
 - Provedores de verdade com 4 envios em paralelo (limites de requisição da OCI, B2, R2).
