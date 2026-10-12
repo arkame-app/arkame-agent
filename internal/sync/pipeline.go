@@ -408,7 +408,11 @@ func (c *coletor) tratar(ctx context.Context, it itemDoWalk) tratado {
 	if igual && !o.RehashTotal {
 		// Reconferência rotativa: no dia marcado, o arquivo é relido e o
 		// objeto conferido, enquanto couber no teto da execução.
-		devido := ent.VerificarEm <= hoje && c.orcamento.Add(-1) >= 0
+		// Data além do ciclo só existe se o relógio do servidor esteve
+		// adiantado quando a entrada foi gravada: está vencida. Sem isto ela
+		// ficava sem reconferência até o relógio "chegar lá".
+		vencida := ent.VerificarEm <= hoje || ent.VerificarEm > hoje+uint32(o.VerificarDias)
+		devido := vencida && c.orcamento.Add(-1) >= 0
 		if !devido {
 			t.atalho = true
 			t.visto = ent.ID
