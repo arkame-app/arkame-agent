@@ -96,12 +96,22 @@ type Config struct {
 	// conferir no bucket o que não mudou. Vazio: sem estado — todo backup lê
 	// e confere tudo. O Load dá o padrão do sistema (PastaDoEstado).
 	StateDir string
+	// StateAlways (ARKAME_STATE=always): o estado local vale também contra o
+	// painel que não oferece o índice em lotes. O padrão (`auto`) só o usa —
+	// e só cria o arquivo — quando o painel oferece `index` em lotes: contra
+	// o painel de antes o agente lê e confere tudo, como a v0.4.31.
+	// ARKAME_STATE=off desliga o estado (o mesmo que ARKAME_STATE_DIR=off).
+	StateAlways bool
 	// UploadConcurrency é quantos arquivos o backup trata ao mesmo tempo
 	// (UPLOAD_CONCURRENCY). Zero: min(4, CPUs).
 	UploadConcurrency int
-	// RehashAll (ARKAME_REHASH_ALL=1, ou `run --rehash-all`): todo backup
-	// relê e confere todos os arquivos, mesmo os que o estado diria iguais.
+	// RehashAll (ARKAME_REHASH_ALL=1): todo backup relê e confere todos os
+	// arquivos, mesmo os que o estado diria iguais — enquanto a variável
+	// estiver ligada.
 	RehashAll bool
+	// RehashAllOnce (`run --rehash-all`): o mesmo, só no primeiro backup de
+	// cada plano que este processo fechar; os seguintes voltam ao atalho.
+	RehashAllOnce bool
 	// VerifyDays é o ciclo, em dias, da reconferência rotativa
 	// (ARKAME_VERIFY_DAYS). Zero: 30.
 	VerifyDays int
@@ -112,7 +122,7 @@ type Overrides struct {
 	EnrollmentToken string
 	PanelURL        string
 	HostRoot        string
-	// RehashAll liga Config.RehashAll (a flag --rehash-all).
+	// RehashAll liga Config.RehashAllOnce (a flag --rehash-all).
 	RehashAll bool
 	// Pendentes são linhas do env-file ("CHAVE=valor") que o install ainda
 	// não gravou: valem como se estivessem no arquivo (o ambiente do processo
@@ -183,16 +193,19 @@ func Load(envFile string, o Overrides) (*Config, error) {
 		PollIntervalSec:      segundosOu(get("POLL_INTERVAL_SEC"), 60),
 		AutoUpdate:           get("ARKAME_AUTO_UPDATE"),
 		UploadConcurrency:    naoNegativo(get("UPLOAD_CONCURRENCY")),
-		RehashAll:            o.RehashAll || ligado(get("ARKAME_REHASH_ALL")),
+		RehashAll:            ligado(get("ARKAME_REHASH_ALL")),
+		RehashAllOnce:        o.RehashAll,
 		VerifyDays:           naoNegativo(get("ARKAME_VERIFY_DAYS")),
 	}
+	modoDoEstado := strings.ToLower(strings.TrimSpace(get("ARKAME_STATE")))
 	switch dir := get("ARKAME_STATE_DIR"); {
-	case strings.EqualFold(dir, "off"):
+	case strings.EqualFold(dir, "off"), modoDoEstado == "off":
 	case dir != "":
 		cfg.StateDir = dir
 	default:
 		cfg.StateDir = PastaDoEstado(cfg.HostRoot)
 	}
+	cfg.StateAlways = cfg.StateDir != "" && (modoDoEstado == "always" || modoDoEstado == "sempre")
 
 	// O AGENT_ID só entrava pelo env-file, e só o `install` com a pergunta da
 	// chave o escrevia lá. Com a chave já no arquivo, ou com

@@ -7,6 +7,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	"github.com/arkame-app/agent/internal/config"
@@ -44,25 +45,27 @@ type usoMedido struct {
 // medidorDeUso decide quando medir a ocupação do bucket e guarda a última
 // medição.
 type medidorDeUso struct {
-	arquivo string // "" = só em memória
-	ultimo  *usoMedido
+	arquivos []string // onde a medição pode ficar guardada, em ordem de preferência
+	sempre   bool     // ARKAME_STATE=always
+	ultimo   *usoMedido
 }
 
 func novoMedidorDeUso(cfg *config.Config) *medidorDeUso {
-	m := &medidorDeUso{}
+	m := &medidorDeUso{sempre: cfg.StateAlways}
 	if cfg.StorageID == "" || cfg.AgentID == "" {
 		return m
 	}
+	// A pasta do estado não é criada aqui: ela só passa a existir quando o
+	// estado local entra em uso (ver gravar). Se já existe, a última medição
+	// é lida de onde estiver.
 	for _, dir := range pastasDoEstado(cfg) {
-		if err := os.MkdirAll(dir, 0o700); err != nil {
+		base := estado.NomeDoArquivo(dir, identidadeDoEstado(cfg, cfg.StorageBucket))
+		arquivo := base[:len(base)-len(filepath.Ext(base))] + ".uso.json"
+		m.arquivos = append(m.arquivos, arquivo)
+		if m.ultimo != nil {
 			continue
 		}
-		base := estado.NomeDoArquivo(dir, identidadeDoEstado(cfg, cfg.StorageBucket))
-		m.arquivo = base[:len(base)-len(filepath.Ext(base))] + ".uso.json"
-		break
-	}
-	if m.arquivo != "" {
-		if b, err := os.ReadFile(m.arquivo); err == nil {
+		if b, err := os.ReadFile(arquivo); err == nil {
 			var u usoMedido
 			if json.Unmarshal(b, &u) == nil && u.Bucket == cfg.StorageBucket && !u.Em.IsZero() {
 				m.ultimo = &u
@@ -70,6 +73,34 @@ func novoMedidorDeUso(cfg *config.Config) *medidorDeUso {
 		}
 	}
 	return m
+}
+
+// estadoLocalEmUso: algum backup deste processo abriu o estado local (o
+// painel ofereceu o índice em lotes, ou ARKAME_STATE=always). Antes disso o
+// agente não grava nada na pasta do estado — contra o painel de antes ele não
+// deixa arquivo nenhum além dos da v0.4.31.
+var estadoLocalEmUso atomic.Bool
+
+// gravar guarda a última medição no disco, na primeira pasta do estado que
+// aceitar. Só com o estado local em uso; senão a medição vale em memória,
+// até o processo sair.
+func (m *medidorDeUso) gravar(u *usoMedido) {
+	if !m.sempre && !estadoLocalEmUso.Load() {
+		return
+	}
+	b, err := json.Marshal(u)
+	if err != nil {
+		return
+	}
+	for _, arquivo := range m.arquivos {
+		if os.MkdirAll(filepath.Dir(arquivo), 0o700) != nil {
+			continue
+		}
+		tmp := arquivo + ".tmp"
+		if os.WriteFile(tmp, b, 0o600) == nil && os.Rename(tmp, arquivo) == nil {
+			return
+		}
+	}
 }
 
 // uso devolve a ocupação a relatar: mede agora, ou devolve a última medição
@@ -94,13 +125,6 @@ func (m *medidorDeUso) uso(ctx context.Context, s3c *s3.Client, bucket string) *
 		}
 	}
 	m.ultimo = novo
-	if m.arquivo != "" {
-		if b, err := json.Marshal(novo); err == nil {
-			tmp := m.arquivo + ".tmp"
-			if os.WriteFile(tmp, b, 0o600) == nil {
-				_ = os.Rename(tmp, m.arquivo)
-			}
-		}
-	}
+	m.gravar(novo)
 	return &medido
 }

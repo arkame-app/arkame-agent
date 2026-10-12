@@ -28,6 +28,15 @@ no bucket, o dia da próxima reconferência e a "geração" (sessão) que gravou
 
 É um acelerador derivável. A restauração não depende dele; apagá-lo é seguro.
 
+**Quando entra em uso.** Só quando o painel oferece o índice em lotes (`index.mode =
+"batches"` no `/sessions/start`). Contra um painel de antes disso o agente é a v0.4.31: lê
+e confere tudo a cada backup e não cria nada na pasta do estado (nem a medição de ocupação
+do bucket fica no disco). Assim o agente novo pode ir a campo antes do painel novo sem
+mudar de comportamento. `ARKAME_STATE=always` força o estado também contra o painel antigo
+(era o comportamento até `8cfb9d1`, e é o que as linhas "depois / inline" da medição
+abaixo mostram); `ARKAME_STATE=off` o desliga de vez. O envio em paralelo e a medição de
+ocupação uma vez por dia em bucket grande não dependem do painel.
+
 **Atalho.** Tamanho + mtime + ctime iguais aos da entrada → o arquivo não é lido e o bucket
 não é consultado. Não servem de atalho:
 
@@ -39,7 +48,9 @@ não é consultado. Não servem de atalho:
   da chave, com teto por execução (3,5% dos arquivos da última sessão, no mínimo 1.000; o
   que não coube fica para a execução seguinte). É o que pega conteúdo alterado com as
   mesmas datas (contado em `changed_same_mtime`) e objeto que sumiu do bucket;
-- tudo, com `ARKAME_REHASH_ALL=1` / `run --rehash-all`.
+- tudo, com `ARKAME_REHASH_ALL=1` (enquanto a variável estiver ligada) ou `run
+  --rehash-all` (a flag vale para UM backup de cada plano depois da partida; os seguintes
+  voltam ao atalho — num serviço a flag ficaria na linha de comando para sempre).
 
 No Windows o Go não dá o ctime: lá o atalho é tamanho + mtime, e "mudou sem mudar a data"
 depende só da reconferência rotativa.

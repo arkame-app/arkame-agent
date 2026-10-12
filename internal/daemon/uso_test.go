@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -50,6 +52,10 @@ func TestOcupacaoDeBucketGrandeEMedidaUmaVezPorDia(t *testing.T) {
 	agora := relogioDoUso(t, 2000)
 	f, c := bucketCom(t, 2500) // 3 páginas de listagem
 	cfg := &config.Config{AgentID: "ag1", StorageID: "st1", StorageBucket: "b", StateDir: t.TempDir()}
+	// A medição só fica no disco com o estado local em uso (o painel oferece
+	// o índice em lotes).
+	antes := estadoLocalEmUso.Swap(true)
+	t.Cleanup(func() { estadoLocalEmUso.Store(antes) })
 	ctx := context.Background()
 
 	sondar := func(m *medidorDeUso) *storage.Uso {
@@ -104,5 +110,30 @@ func TestOcupacaoDeBucketPequenoSegueDeHoraEmHora(t *testing.T) {
 	}
 	if n := f.N("ListObjectVersions"); n != 5 {
 		t.Fatalf("listagens = %d, queria 5", n)
+	}
+}
+
+// Sem o estado local em uso (painel de antes do índice em lotes), a medição
+// vale em memória e nada é gravado na pasta do estado — nem a pasta é criada.
+func TestOcupacaoNaoGravaNadaSemEstadoLocalEmUso(t *testing.T) {
+	relogioDoUso(t, 2000)
+	antes := estadoLocalEmUso.Swap(false)
+	t.Cleanup(func() { estadoLocalEmUso.Store(antes) })
+	_, c := bucketCom(t, 2500)
+	dir := filepath.Join(t.TempDir(), "estado")
+	cfg := &config.Config{AgentID: "ag1", StorageID: "st1", StorageBucket: "b", StateDir: dir}
+	m := novoMedidorDeUso(cfg)
+	if u := m.uso(context.Background(), c, "b"); u == nil || u.Versoes != 2500 {
+		t.Fatalf("%+v", u)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("a pasta do estado foi criada sem o estado em uso (err=%v)", err)
+	}
+	// Com ARKAME_STATE=always, grava.
+	cfg.StateAlways = true
+	m = novoMedidorDeUso(cfg)
+	m.uso(context.Background(), c, "b")
+	if restos, _ := os.ReadDir(dir); len(restos) != 1 {
+		t.Fatalf("com o estado forçado a medição devia ficar guardada: %d arquivo(s)", len(restos))
 	}
 }

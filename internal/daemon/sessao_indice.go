@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	gosync "sync"
 	"time"
 
 	"github.com/arkame-app/agent/internal/api"
@@ -28,6 +29,10 @@ type sessaoDeIndice struct {
 	base    string // última sessão concluída, segundo o painel
 	prefixo string // prefixo normalizado das chaves do plano
 	dir     string // pasta do estado em uso
+	planID  string
+	// rehashUnico: esta execução relê tudo por causa da flag --rehash-all, que
+	// vale para um backup de cada plano (ver rehashFeito).
+	rehashUnico bool
 
 	env     *enviadorDeLotes
 	arquivo *estado.Base
@@ -71,12 +76,17 @@ func identidadeDoEstado(cfg *config.Config, bucket string) estado.Identidade {
 // abrirSessaoDeIndice prepara o estado local e o envio em lotes da sessão.
 // Só devolve erro quando o painel pediu lotes e não há onde guardá-los.
 func abrirSessaoDeIndice(ctx context.Context, c *api.Client, cfg *config.Config, plan api.Plan, sessionID string, oferta *api.IndexOffer, prefixRoot string) (*sessaoDeIndice, error) {
-	s := &sessaoDeIndice{prefixo: syncengine.PrefixoDasChaves(prefixRoot)}
+	s := &sessaoDeIndice{prefixo: syncengine.PrefixoDasChaves(prefixRoot), planID: plan.ID}
 	if oferta != nil && oferta.Mode == "batches" {
 		s.emLotes = true
 		s.base = oferta.BaseSessionID
 	}
-	if cfg.StorageID != "" && cfg.AgentID != "" {
+	// O estado local (e o atalho que ele dá) só entra em uso quando o painel
+	// oferece o índice em lotes. Contra o painel de antes o agente se comporta
+	// como a v0.4.31 — lê e confere tudo — e não cria o arquivo: assim o
+	// agente novo pode ir a campo antes do painel novo sem mudar nada.
+	// ARKAME_STATE=always força o estado também nesse caso.
+	if cfg.StorageID != "" && cfg.AgentID != "" && (s.emLotes || cfg.StateAlways) {
 		for _, dir := range pastasDoEstado(cfg) {
 			b, err := estado.Abrir(dir, identidadeDoEstado(cfg, plan.StorageRef.Bucket))
 			if err != nil {
@@ -84,6 +94,7 @@ func abrirSessaoDeIndice(ctx context.Context, c *api.Client, cfg *config.Config,
 				continue
 			}
 			s.arquivo, s.dir = b, dir
+			estadoLocalEmUso.Store(true)
 			break
 		}
 	}
@@ -138,6 +149,9 @@ func (s *sessaoDeIndice) abrirPlano(planID, sessionID string, oferta *api.IndexO
 func (s *sessaoDeIndice) configurar(o *syncengine.EngineOptions, cfg *config.Config) {
 	o.Trabalhadores = cfg.UploadConcurrency
 	o.RehashTotal = cfg.RehashAll
+	if _, feito := rehashFeito.Load(s.planID); cfg.RehashAllOnce && !feito {
+		o.RehashTotal, s.rehashUnico = true, true
+	}
 	o.VerificarDias = cfg.VerifyDays
 	o.Ignorar = pastasForaDoBackup(cfg)
 	if s.ex != nil {
@@ -149,8 +163,18 @@ func (s *sessaoDeIndice) configurar(o *syncengine.EngineOptions, cfg *config.Con
 	}
 }
 
+// rehashFeito guarda os planos cujo backup com a releitura total pedida pela
+// flag `run --rehash-all` já fechou neste processo: a flag vale para UMA
+// execução de cada plano. Dada num serviço, ela ficaria na linha de comando
+// para sempre, e todo backup releria tudo — para isso existe a variável
+// ARKAME_REHASH_ALL, que vale enquanto estiver ligada.
+var rehashFeito gosync.Map
+
 // confirmar registra no estado que o painel aceitou a sessão.
 func (s *sessaoDeIndice) confirmar(sessionID string, result *syncengine.Result) {
+	if s.rehashUnico {
+		rehashFeito.Store(s.planID, true)
+	}
 	if s.plano == nil || s.ex == nil || result == nil || result.EstadoFalhou || s.ex.Falhou() {
 		return
 	}

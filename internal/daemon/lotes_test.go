@@ -421,13 +421,95 @@ func TestPainelAntigoRecebeOCompleteInlineDeSempre(t *testing.T) {
 	conferirCorpo(corpos[0])
 	m.conferir()
 
-	// Segunda vez: mesmo corpo (fora o que subiu), e o estado local poupa a
-	// releitura — o painel antigo também ganha o atalho.
+	// Segunda vez: mesmo corpo (fora o que subiu). Contra o painel antigo o
+	// agente é a v0.4.31: relê e confere tudo no bucket, e não deixa estado
+	// local nenhum no disco.
 	m.s3.Zerar()
 	m.rodarOK()
 	conferirCorpo(corpos[1])
+	if m.s3.N("HeadObject") != 120 || m.s3.N("PutObject") != 0 {
+		t.Fatalf("painel antigo: queria 120 HeadObject e nenhum envio; s3: %v", m.s3.Requisicoes())
+	}
+	if restos, _ := os.ReadDir(m.cfg.StateDir); len(restos) != 0 {
+		t.Fatalf("painel antigo: a pasta do estado devia seguir vazia; tem %d arquivo(s) (%s…)", len(restos), restos[0].Name())
+	}
+	m.conferir()
+}
+
+// ARKAME_STATE=always: o estado local vale também contra o painel antigo — o
+// /complete segue inline, mas a segunda execução não relê nem consulta o
+// bucket.
+func TestPainelAntigoComEstadoForcado(t *testing.T) {
+	m := novaMesaDoDaemon(t)
+	m.painel.SemLotes = true
+	m.cfg.StateAlways = true
+	m.semear(60)
+	if s := m.rodarOK(); s.Modo != "inline" || s.Indexados != 60 {
+		t.Fatalf("%+v", s)
+	}
+	m.s3.Zerar()
+	if s := m.rodarOK(); s.Modo != "inline" || s.Indexados != 60 {
+		t.Fatalf("%+v", s)
+	}
+	semS3AlemDoVersionamento(t, m.s3)
+	if restos, _ := os.ReadDir(m.cfg.StateDir); len(restos) == 0 {
+		t.Fatal("com o estado forçado, o arquivo de estado devia existir")
+	}
+	m.conferir()
+}
+
+// O painel passa a oferecer lotes depois de o agente novo já estar em campo:
+// a primeira sessão em lotes parte sem estado (inventário completo, tudo
+// conferido no bucket, nada reenviado) e daí em diante vale o delta.
+func TestPainelPassaAOferecerLotes(t *testing.T) {
+	m := novaMesaDoDaemon(t)
+	m.painel.SemLotes = true
+	m.semear(40)
+	m.rodarOK()
+	m.painel.SemLotes = false
+	m.s3.Zerar()
+	if s := m.rodarOK(); s.Modo != "full" || s.Entradas != 40 {
+		t.Fatalf("primeira em lotes: %+v", s)
+	}
+	if m.s3.N("HeadObject") != 40 || m.s3.N("PutObject") != 0 {
+		t.Fatalf("s3: %v", m.s3.Requisicoes())
+	}
+	m.s3.Zerar()
+	if s := m.rodarOK(); s.Modo != "delta" || s.Lotes != 0 {
+		t.Fatalf("segunda em lotes: %+v", s)
+	}
 	semS3AlemDoVersionamento(t, m.s3)
 	m.conferir()
+}
+
+// `run --rehash-all` vale para UM backup de cada plano: o seguinte volta ao
+// atalho. ARKAME_REHASH_ALL=1 vale enquanto estiver ligada.
+func TestRehashAllPelaFlagValeUmaExecucao(t *testing.T) {
+	t.Cleanup(func() { rehashFeito.Delete("p1") })
+	m := novaMesaDoDaemon(t)
+	m.semear(30)
+	m.rodarOK()
+
+	m.cfg.RehashAllOnce = true
+	m.s3.Zerar()
+	if s := m.rodarOK(); s.Modo != "delta" || s.Lotes != 0 {
+		t.Fatalf("%+v", s)
+	}
+	if m.s3.N("HeadObject") != 30 {
+		t.Fatalf("com --rehash-all o primeiro backup confere tudo no bucket; s3: %v", m.s3.Requisicoes())
+	}
+	m.s3.Zerar()
+	m.rodarOK()
+	semS3AlemDoVersionamento(t, m.s3)
+
+	m.cfg.RehashAllOnce, m.cfg.RehashAll = false, true
+	for i := 0; i < 2; i++ {
+		m.s3.Zerar()
+		m.rodarOK()
+		if m.s3.N("HeadObject") != 30 {
+			t.Fatalf("ARKAME_REHASH_ALL=1 vale em todo backup; execução %d, s3: %v", i+1, m.s3.Requisicoes())
+		}
+	}
 }
 
 // O 413 index_too_large do painel de produção: uma tentativa só, a sessão é

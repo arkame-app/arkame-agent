@@ -35,8 +35,10 @@ func newRunCmd() *cobra.Command {
   - Executa backups conforme schedule + janelas + throttling. O arquivo que
     não mudou (mesmo tamanho e datas) não é relido: o agente guarda o estado
     de cada arquivo numa pasta local (ARKAME_STATE_DIR; "off" desliga) e
-    reconfere cada um, no disco e no bucket, uma vez a cada 30 dias. Sem a
-    pasta, ou com --rehash-all, lê e confere tudo
+    reconfere cada um, no disco e no bucket, uma vez a cada 30 dias. O estado
+    só vale com o painel que recebe o índice em lotes (ARKAME_STATE=always o
+    força; off desliga). Sem ele lê e confere tudo; --rehash-all faz o mesmo
+    em um backup de cada plano, e ARKAME_REHASH_ALL=1 em todos
   - Reporta heartbeat a cada HEARTBEAT_INTERVAL_SEC (padrão 60s) e grava o
     token novo que o painel mandar na resposta
   - Busca restaurações pendentes a cada POLL_INTERVAL_SEC
@@ -148,7 +150,7 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().StringVar(&hostRoot, "host-root", "", "raiz do filesystem a proteger (em container Docker: /host). Padrão: HOST_ROOT, senão /")
 	cmd.Flags().StringVar(&serviceName, "service-name", service.DefaultName, "nome do serviço (usado só quando iniciado pelo gerenciador de serviços do Windows)")
 
-	cmd.Flags().BoolVar(&rehashAll, "rehash-all", false, "relê e confere no bucket todos os arquivos em todo backup, ignorando o atalho do estado local (o mesmo que ARKAME_REHASH_ALL=1)")
+	cmd.Flags().BoolVar(&rehashAll, "rehash-all", false, "relê e confere no bucket todos os arquivos, ignorando o atalho do estado local, no primeiro backup de cada plano depois desta partida (em todo backup: ARKAME_REHASH_ALL=1)")
 
 	return cmd
 }
