@@ -222,18 +222,13 @@ func (p *portaoDoVersionamento) com(enviar func() (string, error)) (string, erro
 	return v, err
 }
 
-// uploadMultipart sobe um arquivo grande em partes (sequenciais) via multipart
-// manual. Cada UploadPart usa um corpo seekable (bytes.Reader, opcionalmente
-// throttled) + ContentLength explícito e SEM ChecksumAlgorithm, evitando o
+// uploadMultipartCom sobe um arquivo grande em partes (sequenciais) via
+// multipart manual, com o limitador de banda dado (o da execução). Cada
+// UploadPart usa um corpo seekable (bytes.Reader, opcionalmente throttled) +
+// ContentLength explícito e SEM ChecksumAlgorithm, evitando o
 // Content-Encoding aws-chunked que o s3/manager emite — não suportado por
 // provedores S3-compat como a OCI (501 NotImplemented). Em qualquer falha,
 // aborta o multipart pra não deixar partes órfãs no bucket.
-func uploadMultipart(ctx context.Context, s3c *s3.Client, bucket, key string, f *os.File, meta map[string]string, maxMbps int, hashEsperado string, tamanho int64) (string, error) {
-	return uploadMultipartCom(ctx, s3c, bucket, key, f, meta, novoLimitador(maxMbps), hashEsperado, tamanho)
-}
-
-// uploadMultipartCom é o uploadMultipart com o limitador de banda dado (o da
-// execução).
 func uploadMultipartCom(ctx context.Context, s3c *s3.Client, bucket, key string, f *os.File, meta map[string]string, lim *rate.Limiter, hashEsperado string, tamanho int64) (string, error) {
 	partSize := tamanhoDaParte(tamanho)
 

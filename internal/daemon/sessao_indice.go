@@ -577,10 +577,20 @@ func (s *sessaoDeIndice) concluirEmLotes(ctx context.Context, c *api.Client, cfg
 		}
 	}
 
-	// O painel recusou o índice desta sessão. Os arquivos estão no bucket e o
-	// estado local sabe quais: a sessão é fechada como falha e o índice vai
-	// inteiro numa sessão nova, sem reler arquivo nem repetir os comandos do
-	// plano.
+	return s.refazerIndice(ctx, cctx, c, cfg, sessionID, motivo, corpo, result, reabrir)
+}
+
+// refazerIndice trata a recusa do índice de uma sessão que reenviar não
+// resolve (item 7 do contrato). Os arquivos estão no bucket e o estado local
+// sabe quais: a sessão recusada é fechada como falha e o índice vai inteiro
+// numa sessão nova, tirado do estado — sem reler arquivo nem repetir os
+// comandos do plano. Uma vez só: se a sessão nova também for recusada, o
+// backup falha.
+//
+// ctx é o do backup (o /fail sai mesmo com o serviço parando); cctx, o da
+// finalização.
+func (s *sessaoDeIndice) refazerIndice(ctx, cctx context.Context, c *api.Client, cfg *config.Config, sessionID, motivo string, corpo *corpoDeConclusao, result *syncengine.Result, reabrir func(context.Context) (string, *api.IndexOffer, error)) error {
+	rota := func(sid string) string { return "/api/agents/" + cfg.AgentID + "/sessions/" + sid + "/complete" }
 	if s.ex == nil || result.EstadoFalhou || s.ex.Falhou() {
 		marcarFalha(ctx, c, cfg, sessionID, corpoDaFalha{
 			ErrorCode:    codigoIndiceRecusado,
@@ -609,7 +619,11 @@ func (s *sessaoDeIndice) concluirEmLotes(ctx context.Context, c *api.Client, cfg
 	defer env.fechar()
 	// A sessão nova é um inventário: vale a mesma regra do modo `full`.
 	s.soOInventario(result)
-	var eerr error
+	var (
+		eerr     error
+		lotes    int
+		entradas int64
+	)
 	verr := s.ex.Varrer(func(rel string, ent estado.Entrada, visto bool) (estado.Acao, estado.Entrada) {
 		if eerr == nil && visto && !ent.Removida {
 			eerr = env.Emitir(api.Upsert(syncengine.EntradaDoEstado(s.prefixo, rel, ent)))
