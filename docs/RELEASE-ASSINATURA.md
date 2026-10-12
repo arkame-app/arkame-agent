@@ -163,6 +163,20 @@ pública configurada em `AGENT_RELEASE_PUBLIC_KEYS` (as mesmas de
 `chaves.go`; duas, separadas por vírgula, durante uma rotação) e tira dali o
 SHA-256 de cada sistema — o segundo canal da conferência que o agente faz.
 
+**Onde fica a variável.** `AGENT_RELEASE_PUBLIC_KEYS` é variável de ambiente
+do Deployment `admin` no cluster. A chave é pública, então fica em texto no
+manifesto versionado `arkame-infra/k8s/admin.yaml` (bloco `env`), não no Secret.
+Para aplicar sem mexer na imagem em uso:
+
+```bash
+ssh arkame-k3s "sudo kubectl set env deploy/admin AGENT_RELEASE_PUBLIC_KEYS='<chave1>[,<chave2>]' \
+  && sudo kubectl rollout status deploy/admin --timeout=180s"
+```
+
+Mantenha o `admin.yaml` igual ao que foi aplicado. Não há tela para isso no
+backoffice: sem a variável, a tela Agente → Versões recusa publicar com o
+aviso de chave não configurada.
+
 **O painel só publica versão cujo `checksums.txt.ed25519` existe e confere.**
 Release sem a assinatura (rascunho, ou de antes da atualização automática)
 não é publicável: os agentes o recusariam de qualquer forma, e a onda pararia

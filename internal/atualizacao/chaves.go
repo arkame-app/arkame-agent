@@ -22,7 +22,7 @@ import (
 // release nenhum e não se atualiza sozinho; o build de release (-tags
 // release) nem compila com a atual vazia (chave_release.go).
 const (
-	chavePublicaAtual   = ""
+	chavePublicaAtual   = "qgdVPAJZ1RsM4UvdFalRpM0DYL7gH2l+qex17V4ZriI="
 	chavePublicaProxima = ""
 )
 
