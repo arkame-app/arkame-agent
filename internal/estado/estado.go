@@ -42,6 +42,9 @@ const formato = 1
 // para de usá-lo nesta execução e o descarta.
 var ErrCorrompido = errors.New("estado local corrompido")
 
+// ErrEmUso: outro processo está com o arquivo de estado aberto.
+var ErrEmUso = errors.New("estado em uso por outro processo")
+
 var (
 	bucketMeta   = []byte("meta")
 	bucketPlanos = []byte("planos")
@@ -117,7 +120,7 @@ func Abrir(dir string, id Identidade) (*Base, error) {
 		return b, nil
 	}
 	if errors.Is(err, bolt.ErrTimeout) {
-		return nil, fmt.Errorf("estado em uso por outro processo: %w", err)
+		return nil, fmt.Errorf("%w: %v", ErrEmUso, err)
 	}
 	motivo = "corrompido"
 	if errors.Is(err, errOutro) {
@@ -408,6 +411,11 @@ type metaDoPlano struct {
 	// foi confirmada.
 	Ger        uint32 `json:"ger"`
 	PendSessao string `json:"pend_sessao,omitempty"`
+	// PendPronta: o estado da geração aberta estava inteiro e alinhado ao
+	// índice quando o /complete de PendSessao foi mandado. Só com esta marca
+	// a sessão pendente pode ser dada por confirmada depois (resposta do
+	// /complete perdida): sem ela, o agente decidiu não confirmar.
+	PendPronta bool `json:"pend_pronta,omitempty"`
 	// Arquivos é quantos arquivos a última execução confirmada viu — a base
 	// do teto da reconferência rotativa.
 	Arquivos int64 `json:"arquivos,omitempty"`
@@ -509,6 +517,25 @@ func (p *Plano) Pendente() (ger uint32, sessao string) {
 	return p.meta.Ger, p.meta.PendSessao
 }
 
+// PendentePronta diz se a sessão pendente foi marcada como pronta para ser
+// confirmada (ver MarcarPronta).
+func (p *Plano) PendentePronta() bool { return p.meta.PendSessao != "" && p.meta.PendPronta }
+
+// MarcarPronta registra, antes do /complete de sessao, que o estado da
+// geração aberta está inteiro e alinhado ao índice que o painel vai ter: se a
+// resposta se perder e o painel devolver sessao como a última concluída, a
+// execução seguinte pode confirmá-la sem reler os arquivos. sessao pode não
+// ser a que abriu a geração — o índice refeito numa sessão nova leva a mesma
+// geração para o painel com outro id.
+func (p *Plano) MarcarPronta(sessao string) error {
+	return p.b.protegido(func() error {
+		return p.b.db.Update(func(tx *bolt.Tx) error {
+			p.meta.PendSessao, p.meta.PendPronta = sessao, true
+			return p.gravarMeta(tx)
+		})
+	})
+}
+
 // Arquivos é quantos arquivos a última execução confirmada viu.
 func (p *Plano) Arquivos() int64 { return p.meta.Arquivos }
 
@@ -526,7 +553,7 @@ func (p *Plano) Confirmar(sessao string, arquivos int64, gers ...uint32) error {
 				p.meta.confirmar(g)
 			}
 			p.meta.UltimaSessao = sessao
-			p.meta.PendSessao = ""
+			p.meta.PendSessao, p.meta.PendPronta = "", false
 			if arquivos >= 0 {
 				p.meta.Arquivos = arquivos
 			}
@@ -564,7 +591,7 @@ func (p *Plano) Comecar(sessao string, adotar ...uint32) (*Execucao, error) {
 	err := p.b.protegido(func() error {
 		return p.b.db.Update(func(tx *bolt.Tx) error {
 			p.meta.Ger++
-			p.meta.PendSessao = sessao
+			p.meta.PendSessao, p.meta.PendPronta = sessao, false
 			e.Ger = p.meta.Ger
 			e.seqInicial = tx.Bucket(p.ent).Sequence()
 			return p.gravarMeta(tx)

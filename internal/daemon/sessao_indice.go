@@ -160,8 +160,12 @@ func (s *sessaoDeIndice) abrirPlano(planID, sessionID string, oferta *api.IndexO
 		slog.Info("o prefixo das chaves do plano mudou; o estado local do plano recomeça", "plan_id", planID)
 	}
 	// O /complete de uma sessão pode ter chegado e só a resposta se perdido:
-	// se o painel a dá como a última concluída, ela está confirmada.
-	if g, pend := plano.Pendente(); s.base != "" && pend == s.base {
+	// se o painel a dá como a última concluída, ela está confirmada — desde
+	// que o agente a tenha marcado como pronta antes de mandar o /complete.
+	// Sem a marca ele tinha decidido não confirmar (estado que falhou no meio,
+	// ou que não pôde ser alinhado ao inventário): adotá-la daria por
+	// guardados arquivos que o painel não tem.
+	if g, pend := plano.Pendente(); s.base != "" && pend == s.base && plano.PendentePronta() {
 		if err := plano.Confirmar(s.base, -1, g); err != nil {
 			return err
 		}
@@ -201,12 +205,32 @@ func (s *sessaoDeIndice) configurar(o *syncengine.EngineOptions, cfg *config.Con
 // ARKAME_REHASH_ALL, que vale enquanto estiver ligada.
 var rehashFeito gosync.Map
 
+// podeConfirmar diz se o estado desta execução serve para ser confirmado: ele
+// existe, não falhou no meio e está alinhado ao índice que o painel tem.
+func (s *sessaoDeIndice) podeConfirmar(result *syncengine.Result) bool {
+	return s.plano != nil && s.ex != nil && result != nil && !result.EstadoFalhou && !s.ex.Falhou() && !s.semConfirmar
+}
+
+// marcarPronta registra no estado, antes do /complete de sessionID, que ele
+// pode ser confirmado por essa sessão — o que autoriza a execução seguinte a
+// dá-la por confirmada se só a resposta se perder. Quando o agente decide não
+// confirmar, a marca não é gravada, e a sessão nunca é adotada.
+func (s *sessaoDeIndice) marcarPronta(sessionID string, result *syncengine.Result) {
+	if !s.podeConfirmar(result) {
+		return
+	}
+	if err := s.plano.MarcarPronta(sessionID); err != nil {
+		s.semConfirmar = true
+		slog.Warn("não consegui marcar a sessão no estado local; ele não será confirmado (o próximo backup confere tudo)", "err", err)
+	}
+}
+
 // confirmar registra no estado que o painel aceitou a sessão.
 func (s *sessaoDeIndice) confirmar(sessionID string, result *syncengine.Result) {
 	if s.rehashUnico {
 		rehashFeito.Store(s.planID, true)
 	}
-	if s.plano == nil || s.ex == nil || result == nil || result.EstadoFalhou || s.ex.Falhou() || s.semConfirmar {
+	if !s.podeConfirmar(result) {
 		return
 	}
 	// Quantos arquivos o plano tem é a base do teto da reconferência rotativa.
@@ -369,6 +393,9 @@ func (s *sessaoDeIndice) concluirEmLotes(ctx context.Context, c *api.Client, cfg
 		})
 		return fmt.Errorf("session index: %w", err)
 	}
+	if motivo == "" {
+		s.marcarPronta(sessionID, result)
+	}
 	for rodada := 0; motivo == ""; rodada++ {
 		corpo.Index = &api.IndexSummary{Mode: modo, BaseSessionID: base, Batches: lotes, EntriesSent: entradas}
 		var resp respostaDoComplete
@@ -464,6 +491,9 @@ func (s *sessaoDeIndice) concluirEmLotes(ctx context.Context, c *api.Client, cfg
 		return fmt.Errorf("session index (refazendo): %w", verr)
 	}
 	corpo.Index = &api.IndexSummary{Mode: "full", Batches: lotes, EntriesSent: entradas}
+	// A geração desta execução vai ao painel pela sessão nova: é ela que a
+	// execução seguinte pode receber como base se a resposta se perder.
+	s.marcarPronta(nova, result)
 	var resp respostaDoComplete
 	if err := concluirSessao(cctx, c, rota(nova), corpo, &resp); err != nil {
 		if recusaDefinitiva(err) && !errors.Is(err, api.ErrGone) {
