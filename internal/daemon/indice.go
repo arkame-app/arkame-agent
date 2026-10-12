@@ -23,6 +23,15 @@ import (
 const (
 	maxEntradasPadrao = 5000
 	maxBytesPadrao    = 2 << 20
+	// O que o painel anuncia vale dentro destas faixas. Abaixo do piso, um
+	// valor errado (max_entries = 1) faria um POST por arquivo — milhões de
+	// requisições num backup; acima do teto, um lote que nenhum proxy deixa
+	// passar e que o agente teria de montar inteiro na memória. Se o painel
+	// de fato aceitar menos que o piso, ele responde 413 e o lote é dividido.
+	pisoDeEntradas = 10
+	tetoDeEntradas = 50_000
+	pisoDeBytes    = 64 << 10
+	tetoDeBytes    = 16 << 20
 	// folgaDoLote fica fora da conta do corpo: `{"seq":N,"entries":[` … `]}`.
 	folgaDoLote = 64
 )
@@ -87,10 +96,10 @@ type loteNoDisco struct {
 func novoEnviadorDeLotes(ctx context.Context, c *api.Client, rota string, oferta *api.IndexOffer, dir string) (*enviadorDeLotes, error) {
 	e := &enviadorDeLotes{c: c, rota: rota, maxEntradas: maxEntradasPadrao, maxBytes: maxBytesPadrao, parado: make(chan struct{}), aviso: make(chan struct{}, 1)}
 	if oferta != nil && oferta.MaxEntries > 0 {
-		e.maxEntradas = oferta.MaxEntries
+		e.maxEntradas = min(max(oferta.MaxEntries, pisoDeEntradas), tetoDeEntradas)
 	}
 	if oferta != nil && oferta.MaxBytes > 0 {
-		e.maxBytes = oferta.MaxBytes
+		e.maxBytes = min(max(oferta.MaxBytes, pisoDeBytes), tetoDeBytes)
 	}
 	e.acordar = sync.NewCond(&e.mu)
 	// dir é a pasta do estado que o backup já preparou (segredo.PastaPrivada).
