@@ -40,6 +40,8 @@ type mesa struct {
 	trabalhad   int
 	ultimaBase  *estado.Base
 	confirmadas []int
+	// sortear é o sorteio da amostra do estado (nil: o do sistema).
+	sortear func(int) int
 }
 
 func (m *mesa) ultimaConfirmada() int {
@@ -96,6 +98,7 @@ func (m *mesa) rodar() (*Result, []api.IndexEntry) {
 		Trabalhadores: m.trabalhad, RehashTotal: m.rehash, VerificarTeto: m.teto,
 		Ignorar: []string{m.dirEst},
 		Agora:   func() time.Time { return m.agora },
+		Sortear: m.sortear,
 	}
 	var emitidas []api.IndexEntry
 	o.Emitir = func(e api.IndexEntry) error { emitidas = append(emitidas, e); return nil }

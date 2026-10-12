@@ -56,6 +56,12 @@ type EngineOptions struct {
 	// VerificarTeto é quantas reconferências cabem numa execução. Zero:
 	// 3,5% dos arquivos da última sessão, no mínimo 1.000.
 	VerificarTeto int
+	// Amostra é quantas entradas do estado são conferidas no bucket antes de
+	// qualquer atalho (ver amostra.go). Zero: AmostraPadrao.
+	Amostra int
+	// Sortear devolve um inteiro em [0, n): o sorteio da amostra. nil: o do
+	// sistema; os testes o trocam.
+	Sortear func(n int) int
 	// Agora é o relógio; os testes o trocam.
 	Agora func() time.Time
 
@@ -129,6 +135,11 @@ type Result struct {
 	// Verificados, quantos o atalho pularia e a reconferência rotativa releu.
 	Atalhos     int64
 	Verificados int64
+	// Amostrados é quantas entradas do estado foram conferidas no bucket no
+	// começo da execução; AmostraFalhou, por que a amostra não conferiu (a
+	// execução inteira leu e conferiu tudo). Vazio: conferiu.
+	Amostrados    int
+	AmostraFalhou string
 	// InventarioCompleto: a varredura terminou sem erro, sem arquivo pulado e
 	// sem falha de envio — a condição para emitir remoções.
 	InventarioCompleto bool
@@ -216,7 +227,17 @@ func Run(ctx context.Context, o EngineOptions) (*Result, error) {
 		n = TrabalhadoresPadrao()
 	}
 
-	c := &coletor{o: o, result: &Result{}, cancelar: cancel}
+	// Antes de qualquer atalho: o bucket ainda é o que o estado descreve?
+	result0 := &Result{}
+	if o.Estado != nil && !o.RehashTotal {
+		result0.Amostrados, result0.AmostraFalhou = conferirAmostra(ctx, o)
+		if result0.AmostraFalhou != "" {
+			avisarAmostra(result0.Amostrados, result0.AmostraFalhou)
+			o.RehashTotal = true
+		}
+	}
+
+	c := &coletor{o: o, result: result0, cancelar: cancel}
 	if o.Estado != nil {
 		teto := int64(o.VerificarTeto)
 		if teto <= 0 {

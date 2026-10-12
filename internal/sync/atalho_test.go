@@ -29,8 +29,18 @@ func contar(es []api.IndexEntry, op string) int {
 	return n
 }
 
-// Backup sem mudança: nenhum arquivo é relido e o bucket não recebe
-// requisição nenhuma; o delta sai vazio.
+// alemDaAmostra devolve o que o bucket recebeu fora a conferência da amostra
+// do estado local (HeadObject com VersionId) — a única consulta que um backup
+// sem mudança faz. O tamanho dela é conferido em amostra_test.go.
+func alemDaAmostra(t *testing.T, f *bancada.S3Falso) map[string]int64 {
+	t.Helper()
+	r := f.Requisicoes()
+	delete(r, "HeadObjectVersion")
+	return r
+}
+
+// Backup sem mudança: nenhum arquivo é relido e o bucket só recebe a
+// conferência da amostra; o delta sai vazio.
 func TestSemMudancaNaoLeNemConsultaOBucket(t *testing.T) {
 	m := novaMesa(t)
 	m.semear(200)
@@ -42,7 +52,7 @@ func TestSemMudancaNaoLeNemConsultaOBucket(t *testing.T) {
 
 	m.s3.Zerar()
 	r, em = m.rodar()
-	if len(m.s3.Requisicoes()) != 0 {
+	if len(alemDaAmostra(t, m.s3)) != 0 {
 		t.Fatalf("sem mudança, o bucket não devia ser consultado: %v", m.s3.Requisicoes())
 	}
 	if r.Atalhos != 200 || r.Stats.FilesTotal != 200 || r.Stats.FilesUploaded != 0 || len(em) != 0 || !r.InventarioCompleto {
@@ -54,7 +64,7 @@ func TestSemMudancaNaoLeNemConsultaOBucket(t *testing.T) {
 	// ainda sem ler arquivo nem consultar o bucket.
 	m.delta = false
 	r, em = m.rodar()
-	if len(m.s3.Requisicoes()) != 0 || contar(em, api.OpUpsert) != 200 || r.Atalhos != 200 {
+	if len(alemDaAmostra(t, m.s3)) != 0 || contar(em, api.OpUpsert) != 200 || r.Atalhos != 200 {
 		t.Fatalf("full com estado: s3=%v emitidas=%d", m.s3.Requisicoes(), len(em))
 	}
 	m.conferir()
@@ -314,7 +324,7 @@ func TestEstadoPerdidoNaoReenvia(t *testing.T) {
 			// E o estado foi reconstruído: a seguinte volta ao atalho.
 			m.s3.Zerar()
 			r, _ = m.rodar()
-			if r.Atalhos != 400 || len(m.s3.Requisicoes()) != 0 {
+			if r.Atalhos != 400 || len(alemDaAmostra(t, m.s3)) != 0 {
 				t.Fatalf("estado não reconstruído: atalhos=%d s3=%v estadoFalhou=%v", r.Atalhos, m.s3.Requisicoes(), r.EstadoFalhou)
 			}
 		})
@@ -492,7 +502,7 @@ func TestInlineSaiNaOrdemDaVarredura(t *testing.T) {
 				t.Fatalf("sessão %d: entrada %d = %+v; queria %s na versão %+v", sessao, i, e, ordem[i], atual)
 			}
 		}
-		if sessao > 0 && len(m.s3.Requisicoes()) != 0 {
+		if sessao > 0 && len(alemDaAmostra(t, m.s3)) != 0 {
 			t.Fatalf("inline com estado não devia consultar o bucket: %v", m.s3.Requisicoes())
 		}
 		_ = plano.Confirmar("s", r.Stats.FilesTotal, ex.Ger)

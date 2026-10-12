@@ -41,9 +41,11 @@ type S3Falso struct {
 	// GuardarDados guarda o conteúdo enviado (para conferir e para o
 	// GetObject). Desligado, só o tamanho e o sha256 calculado ficam.
 	GuardarDados bool
-	// SemMemoria não guarda objeto nenhum: todo HeadObject responde 404 e
-	// todo envio devolve uma versão. Para medir a memória do agente sem a do
-	// bucket falso no mesmo processo.
+	// SemMemoria não guarda objeto nenhum: todo HeadObject sem versão
+	// responde 404 e todo envio devolve uma versão. Para medir a memória do
+	// agente sem a do bucket falso no mesmo processo. O id da versão leva o
+	// sha256 e o tamanho do que subiu, e o HeadObject COM versão responde por
+	// ele — a versão "existe" sem o bucket guardar nada.
 	SemMemoria bool
 	antes      atomic.Pointer[func(op string, r *http.Request)]
 	falhar     atomic.Pointer[func(op string, r *http.Request) bool]
@@ -231,7 +233,7 @@ func (f *S3Falso) gravar(chave string, v VersaoFalsa) string {
 	f.seq++
 	v.ID = fmt.Sprintf("v%08d", f.seq)
 	if f.SemMemoria {
-		return v.ID
+		return fmt.Sprintf("%s.%s.%d", v.ID, v.SHA256, v.Tamanho)
 	}
 	if _, tem := f.objetos[chave]; !tem {
 		f.ordenado = nil
@@ -255,6 +257,10 @@ func classificar(r *http.Request, chave string) string {
 		return "DeleteObjects"
 	case chave == "" && r.Method == http.MethodHead:
 		return "HeadBucket"
+	case r.Method == http.MethodHead && q.Get("versionId") != "":
+		// A conferência de uma versão registrada (a amostra do estado local),
+		// contada à parte do HeadObject por arquivo do backup.
+		return "HeadObjectVersion"
 	case r.Method == http.MethodHead:
 		return "HeadObject"
 	case r.Method == http.MethodGet:
@@ -342,7 +348,7 @@ func (f *S3Falso) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	case "ListObjectVersions":
 		f.listar(w, q)
-	case "HeadObject", "GetObject":
+	case "HeadObject", "HeadObjectVersion", "GetObject":
 		vs := f.objetos[chave]
 		var v *VersaoFalsa
 		if id := q.Get("versionId"); id != "" {
@@ -353,6 +359,12 @@ func (f *S3Falso) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		} else if len(vs) > 0 {
 			v = &vs[len(vs)-1]
+		}
+		if v == nil && f.SemMemoria && op == "HeadObjectVersion" {
+			if p := strings.Split(q.Get("versionId"), "."); len(p) == 3 {
+				t, _ := strconv.ParseInt(p[2], 10, 64)
+				v = &VersaoFalsa{ID: q.Get("versionId"), SHA256: p[1], Tamanho: t}
+			}
 		}
 		if v == nil {
 			if op == "GetObject" {

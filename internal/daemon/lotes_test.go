@@ -22,6 +22,7 @@ import (
 	"github.com/arkame-app/agent/internal/bancada"
 	"github.com/arkame-app/agent/internal/config"
 	"github.com/arkame-app/agent/internal/purge"
+	syncengine "github.com/arkame-app/agent/internal/sync"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
@@ -128,9 +129,15 @@ func (m *mesaDoDaemon) conferir() {
 	}
 }
 
+// Além da consulta do versionamento, o backup sem mudança só faz a
+// conferência da amostra do estado local: HeadObject com VersionId, em número
+// fixo (syncengine.AmostraPadrao), que não cresce com o plano.
 func semS3AlemDoVersionamento(t *testing.T, f *bancada.S3Falso) {
 	t.Helper()
 	for op, n := range f.Requisicoes() {
+		if op == "HeadObjectVersion" && n <= syncengine.AmostraPadrao {
+			continue
+		}
 		if op != "GetBucketVersioning" && n > 0 {
 			t.Fatalf("o bucket não devia ser consultado: %v", f.Requisicoes())
 		}
