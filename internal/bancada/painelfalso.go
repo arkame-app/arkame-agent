@@ -35,6 +35,11 @@ type PainelFalso struct {
 	// Teto do /complete inline (padrão: 150 mil arquivos, 48 MiB).
 	MaxInlineArquivos int
 	MaxInlineBytes    int
+	// MaxArquivosDaSessao é o teto de entradas de uma sessão em lotes (zero:
+	// sem teto). No painel de verdade é 150 mil enquanto a sessão ainda grava
+	// o catálogo antigo e 20 milhões depois do corte. Passou: 413
+	// `index_too_large` e a sessão fecha como falha na mesma resposta.
+	MaxArquivosDaSessao int
 	// SemCatalogo não guarda as entradas, só conta: para medir escala sem a
 	// memória do painel falso.
 	SemCatalogo bool
@@ -85,6 +90,11 @@ type SessaoFalsa struct {
 	Indexados    int
 	Presentes    int // arquivos presentes depois de a sessão fechar
 	RemocoesSemX int // removed/unselected de chave que não estava na base
+	// SemVersao: upserts sem version_id — aceitos e contados, não catalogados;
+	// a sessão fecha `partial` com `missing_version_id`.
+	SemVersao int
+	// RemovidosIgnorados: `removed` de sessão parcial, que o painel não aplica.
+	RemovidosIgnorados int
 }
 
 // EstatDaRota é o tráfego de uma rota.
@@ -421,45 +431,69 @@ func (p *PainelFalso) start(w http.ResponseWriter, agente string, corpo []byte) 
 func (p *PainelFalso) files(w http.ResponseWriter, sid string, corpo []byte) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	limite := map[string]any{"entries": p.MaxEntradas, "bytes": p.MaxBytes}
+	// O painel recusa pelo tamanho antes de ler o corpo e de olhar a sessão.
+	if len(corpo) > p.MaxBytes {
+		responder(w, 413, map[string]any{"error": "batch_too_large", "limit": limite})
+		return
+	}
+	var bruto struct {
+		Seq     json.RawMessage `json:"seq"`
+		Entries json.RawMessage `json:"entries"`
+	}
+	if json.Unmarshal(corpo, &bruto) != nil {
+		responder(w, 400, map[string]any{"error": "invalid_json"})
+		return
+	}
+	var lote api.IndexBatch
+	if json.Unmarshal(bruto.Seq, &lote.Seq) != nil || lote.Seq < 1 {
+		responder(w, 400, map[string]any{"error": "invalid_batch", "reason": "seq"})
+		return
+	}
+	if json.Unmarshal(bruto.Entries, &lote.Entries) != nil || lote.Entries == nil {
+		responder(w, 400, map[string]any{"error": "invalid_batch", "reason": "entries"})
+		return
+	}
+	if len(lote.Entries) > p.MaxEntradas {
+		responder(w, 413, map[string]any{"error": "batch_too_large", "limit": limite})
+		return
+	}
+	semVersao := 0
+	for i, e := range lote.Entries {
+		motivo := ""
+		switch {
+		case e.Op != api.OpUpsert && e.Op != api.OpRemoved && e.Op != api.OpUnselected:
+			motivo = "op"
+		case e.Key == "" || strings.ContainsRune(e.Key, 0):
+			motivo = "key"
+		case e.Op != api.OpUpsert:
+		case e.Size == nil || *e.Size < 0:
+			motivo = "size"
+		case len(e.SHA256) != 64 || strings.Trim(strings.ToLower(e.SHA256), "0123456789abcdef") != "":
+			motivo = "sha256"
+		case e.ModifiedAt == nil:
+			motivo = "modified_at"
+		case e.VersionID == "":
+			semVersao++
+		}
+		if motivo != "" {
+			// Lote torto é recusado inteiro, com a posição da entrada.
+			responder(w, 400, map[string]any{"error": "invalid_batch", "reason": motivo, "index": i})
+			return
+		}
+	}
 	s := p.sessoes[sid]
 	if s == nil {
 		responder(w, 404, map[string]any{"error": "session_not_found"})
-		return
-	}
-	if s.Oferta != "batches" {
-		responder(w, 404, map[string]any{"error": "not_found"})
 		return
 	}
 	if s.Status != "running" {
 		responder(w, 409, map[string]any{"error": "session_closed"})
 		return
 	}
-	if len(corpo) > p.MaxBytes {
-		responder(w, 413, map[string]any{"error": "batch_too_large", "max_bytes": p.MaxBytes})
+	if s.Oferta != "batches" {
+		responder(w, 400, map[string]any{"error": "batches_not_offered"})
 		return
-	}
-	var lote api.IndexBatch
-	if json.Unmarshal(corpo, &lote) != nil || lote.Seq < 1 {
-		responder(w, 400, map[string]any{"error": "invalid_batch"})
-		return
-	}
-	if len(lote.Entries) > p.MaxEntradas {
-		responder(w, 413, map[string]any{"error": "batch_too_large", "max_entries": p.MaxEntradas})
-		return
-	}
-	for _, e := range lote.Entries {
-		ok := e.Key != ""
-		switch e.Op {
-		case api.OpUpsert:
-			ok = ok && e.VersionID != "" && e.VersionID != "null" && len(e.SHA256) == 64 && e.Size != nil && e.ModifiedAt != nil
-		case api.OpRemoved, api.OpUnselected:
-		default:
-			ok = false
-		}
-		if !ok {
-			responder(w, 400, map[string]any{"error": "invalid_entry", "key": e.Key})
-			return
-		}
 	}
 	h := sha256.Sum256(corpo)
 	if lote.Seq <= s.Lotes {
@@ -474,10 +508,23 @@ func (p *PainelFalso) files(w http.ResponseWriter, sid string, corpo []byte) {
 		responder(w, 409, map[string]any{"error": "seq_gap", "expected": s.Lotes + 1})
 		return
 	}
+	if total := s.Entradas + int64(len(lote.Entries)); p.MaxArquivosDaSessao > 0 && total > int64(p.MaxArquivosDaSessao) {
+		// Como no /complete inline: a sessão fecha como falha, com o motivo,
+		// na mesma resposta que recusa.
+		s.Status, s.ErrorCode = "failed", "index_too_large"
+		s.ErrorMessage = fmt.Sprintf("index_too_large: %d arquivos; limite %d", total, p.MaxArquivosDaSessao)
+		s.ops = nil
+		responder(w, 413, map[string]any{
+			"error": "index_too_large", "message": s.ErrorMessage, "files": total,
+			"limit": map[string]any{"files": p.MaxArquivosDaSessao},
+		})
+		return
+	}
 	s.Lotes = lote.Seq
 	s.hashes[lote.Seq] = h
 	s.porLote = append(s.porLote, len(lote.Entries))
 	s.Entradas += int64(len(lote.Entries))
+	s.SemVersao += semVersao
 	if !p.SemCatalogo {
 		s.ops = append(s.ops, lote.Entries...)
 	}
@@ -493,10 +540,6 @@ func (p *PainelFalso) complete(w http.ResponseWriter, sid string, corpo []byte) 
 		responder(w, 404, map[string]any{"error": "session_not_found"})
 		return
 	}
-	if s.Status != "running" {
-		responder(w, 400, map[string]any{"error": "not_running", "message": "session já está em status " + s.Status})
-		return
-	}
 	par := s.Agente + "/" + s.Plano
 	var req struct {
 		Status           string            `json:"status"`
@@ -507,109 +550,166 @@ func (p *PainelFalso) complete(w http.ResponseWriter, sid string, corpo []byte) 
 		ErrorCode        string            `json:"error_code"`
 		ErrorMessage     string            `json:"error_message"`
 	}
-	if s.Oferta == "inline" {
-		// O painel antigo decide pelo tamanho antes de ler.
-		if len(corpo) > p.MaxInlineBytes {
-			p.recusarInline(w, s, 0, len(corpo))
-			return
-		}
+	// O painel decide pelo tamanho antes de ler: o teto do corpo vale para
+	// qualquer /complete (o de lotes é pequeno e nunca chega perto).
+	if len(corpo) > p.MaxInlineBytes {
+		p.recusarInline(w, s, 0, len(corpo))
+		return
 	}
-	if json.Unmarshal(corpo, &req) != nil || (req.Status != "complete" && req.Status != "partial") {
-		responder(w, 400, map[string]any{"error": "invalid_body"})
+	if json.Unmarshal(corpo, &req) != nil {
+		responder(w, 400, map[string]any{"error": "invalid_json"})
+		return
+	}
+	if len(req.VersionMap) > p.MaxInlineArquivos {
+		p.recusarInline(w, s, len(req.VersionMap), len(corpo))
+		return
+	}
+	if s.Status != "running" {
+		responder(w, 400, map[string]any{"error": "not_running", "message": "session já está em status " + s.Status})
+		return
+	}
+	if req.Status != "complete" && req.Status != "partial" {
+		responder(w, 400, map[string]any{"error": "invalid_status"})
 		return
 	}
 	var resto map[string]any
 	_ = json.Unmarshal(corpo, &resto)
-	_, temMapa := resto["version_map"]
 	delete(resto, "version_map")
-	inventario := req.Status == "complete" && req.CloudOnlySkipped == 0 && req.ReparseSkipped == 0
 
-	if s.Oferta == "inline" {
-		if len(req.VersionMap) > p.MaxInlineArquivos {
-			p.recusarInline(w, s, len(req.VersionMap), len(corpo))
-			return
-		}
+	status, codigo, mensagem := req.Status, req.ErrorCode, req.ErrorMessage
+	resposta := map[string]any{"ok": true}
+	if req.Index == nil {
+		// O mapa inline — também de uma sessão que recebeu a oferta de lotes:
+		// os lotes já mandados são descartados.
 		s.Modo = "inline"
+		semVersao := 0
 		ops := make([]api.IndexEntry, 0, len(req.VersionMap))
 		for _, e := range req.VersionMap {
-			if e.VersionID == "" || len(e.SHA256) != 64 {
+			if e.VersionID == "" {
+				semVersao++
+				continue
+			}
+			if len(e.SHA256) != 64 {
 				continue
 			}
 			ops = append(ops, api.Upsert(e))
 		}
-		s.Indexados = len(ops)
-		p.fundir(par, s, ops, true, inventario)
+		s.Indexados, s.SemVersao = len(ops), semVersao
+		s.Lotes, s.Entradas = 0, 0
+		p.fundir(par, s, ops, true, false)
+		resposta["files_dropped"] = len(req.VersionMap) - len(ops)
 	} else {
-		if req.Index == nil || temMapa {
-			responder(w, 400, map[string]any{"error": "index_required"})
+		if len(req.VersionMap) > 0 || (req.Index.Mode != "full" && req.Index.Mode != "delta") ||
+			req.Index.Batches < 0 || req.Index.EntriesSent < 0 {
+			responder(w, 400, map[string]any{"error": "invalid_index"})
+			return
+		}
+		if s.Oferta != "batches" {
+			responder(w, 400, map[string]any{"error": "batches_not_offered"})
+			return
+		}
+		ultima := any(nil)
+		if p.ultima[par] != "" {
+			ultima = p.ultima[par]
+		}
+		if req.Index.Mode == "delta" && !s.OfertaDelta {
+			responder(w, 409, map[string]any{"error": "base_mismatch", "base_session_id": ultima})
 			return
 		}
 		if req.Index.Batches != s.Lotes || req.Index.EntriesSent != s.Entradas {
 			responder(w, 409, map[string]any{"error": "index_mismatch", "batches": s.Lotes, "entries": s.Entradas})
 			return
 		}
-		switch req.Index.Mode {
-		case "full":
-		case "delta":
+		if req.Index.Mode == "delta" {
 			base := ""
 			if req.Index.BaseSessionID != nil {
 				base = *req.Index.BaseSessionID
 			}
-			if p.baseErrada > 0 || !s.OfertaDelta || base == "" || base != p.ultima[par] {
+			if p.baseErrada > 0 || base == "" || base != p.ultima[par] {
 				if p.baseErrada > 0 {
 					p.baseErrada--
 				}
-				responder(w, 409, map[string]any{"error": "base_mismatch"})
+				responder(w, 409, map[string]any{"error": "base_mismatch", "base_session_id": ultima})
 				return
 			}
-		default:
-			responder(w, 400, map[string]any{"error": "invalid_index_mode"})
-			return
 		}
 		s.Modo = req.Index.Mode
 		n := 0
 		for _, e := range s.ops {
-			if e.Op == api.OpUpsert {
+			if e.Op == api.OpUpsert && e.VersionID != "" {
 				n++
 			}
 		}
 		s.Indexados = n
-		p.fundir(par, s, s.ops, req.Index.Mode == "full", inventario)
+		p.fundir(par, s, s.ops, req.Index.Mode == "full", status == "partial" || s.SemVersao > 0)
+		resposta["files_dropped"] = s.SemVersao
+		resposta["index"] = map[string]any{"mode": req.Index.Mode, "removed_ignored": s.RemovidosIgnorados}
+	}
+	if s.SemVersao > 0 && status == "complete" {
+		// A mesma regra do mapa inline: entrada sem versão deixa a sessão parcial.
+		status, codigo = "partial", "missing_version_id"
+		mensagem = fmt.Sprintf("%d arquivo(s) sem version_id", s.SemVersao)
 	}
 	s.ops = nil
-	s.Status, s.ErrorCode, s.ErrorMessage = req.Status, req.ErrorCode, req.ErrorMessage
+	s.Status, s.ErrorCode, s.ErrorMessage = status, codigo, mensagem
 	s.Complete = resto
 	p.ultima[par] = s.ID
-	responder(w, 200, map[string]any{"ok": true, "files_indexed": s.Indexados})
+	resposta["status"] = status
+	resposta["files_indexed"] = s.Presentes
+	if s.Modo == "inline" || p.SemCatalogo {
+		resposta["files_indexed"] = s.Indexados
+	}
+	responder(w, 200, resposta)
 }
 
 // recusarInline é o 413 do painel de produção para o índice inline grande: a
 // sessão fecha como falha na mesma requisição.
 func (p *PainelFalso) recusarInline(w http.ResponseWriter, s *SessaoFalsa, arquivos, bytes int) {
-	s.Status, s.ErrorCode = "failed", "index_too_large"
-	s.ErrorMessage = fmt.Sprintf("index_too_large: %d arquivos; limite %d", arquivos, p.MaxInlineArquivos)
+	mensagem := fmt.Sprintf("index_too_large: %d arquivos; limite %d", arquivos, p.MaxInlineArquivos)
+	if s.Status == "running" {
+		s.Status, s.ErrorCode, s.ErrorMessage = "failed", "index_too_large", mensagem
+		s.ops = nil
+	}
 	responder(w, 413, map[string]any{
-		"error": "index_too_large", "message": s.ErrorMessage, "files": arquivos, "bytes": bytes,
+		"error": "index_too_large", "message": mensagem, "files": arquivos, "bytes": bytes,
 		"limit": map[string]any{"files": p.MaxInlineArquivos, "bytes": p.MaxInlineBytes},
 	})
 }
 
-// fundir aplica o índice da sessão ao catálogo de presença do agente + plano.
-// full: os upserts são o inventário (se a sessão é inventário completo, o que
-// não veio saiu; senão, o que não veio fica como estava). delta: as operações
-// são aplicadas sobre a base.
-func (p *PainelFalso) fundir(par string, s *SessaoFalsa, ops []api.IndexEntry, full, inventario bool) {
+// fundir aplica o índice da sessão ao catálogo de presença do agente + plano,
+// como o painel de verdade.
+//
+// full (e o mapa inline): os arquivos presentes passam a ser EXATAMENTE o
+// inventário que veio — também na sessão parcial. O arquivo que o agente não
+// conseguiu ler nesta sessão fica fora dela; `removed`/`unselected` só dizem o
+// motivo. delta: as operações são aplicadas sobre a base; o `removed` de uma
+// sessão parcial não é aplicado (o arquivo segue presente), o `unselected` é.
+// Upsert sem versão não cataloga: em delta, o arquivo sai da sessão.
+func (p *PainelFalso) fundir(par string, s *SessaoFalsa, ops []api.IndexEntry, full, parcial bool) {
 	if p.SemCatalogo {
 		return
 	}
+	// Chave repetida na sessão: vale a última entrada.
+	ultimaDaChave := make(map[string]int, len(ops))
+	for i, e := range ops {
+		ultimaDaChave[e.Key] = i
+	}
 	cat := p.catalogo[par]
-	if cat == nil || (full && inventario) {
+	if cat == nil || full {
 		cat = map[string]api.FileEntry{}
 	}
-	for _, e := range ops {
-		switch e.Op {
-		case api.OpUpsert:
+	for i, e := range ops {
+		if ultimaDaChave[e.Key] != i {
+			continue
+		}
+		switch {
+		case e.Op == api.OpUpsert && e.VersionID != "":
 			cat[e.Key] = api.FileEntry{Key: e.Key, VersionID: e.VersionID, Size: *e.Size, SHA256: e.SHA256, ModifiedAt: *e.ModifiedAt}
+		case e.Op == api.OpUpsert:
+			delete(cat, e.Key)
+		case full:
+		case e.Op == api.OpRemoved && parcial:
+			s.RemovidosIgnorados++
 		default:
 			if _, tem := cat[e.Key]; !tem {
 				s.RemocoesSemX++

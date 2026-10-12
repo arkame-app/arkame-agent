@@ -258,12 +258,25 @@ func (s *sessaoDeIndice) concluirEmLotes(ctx context.Context, c *api.Client, cfg
 	if s.delta && s.ex != nil {
 		modo = "delta"
 		base = &s.base
+	} else {
+		s.soOInventario(result)
 	}
 	lotes, entradas, err := s.env.finalizar(cctx)
 	motivo := ""
 	switch {
 	case errors.Is(err, errIndiceRecusado):
 		motivo = err.Error()
+	case errors.Is(err, errIndiceGrandeDemais):
+		// Recusa definitiva, como o 413 do /complete inline: o índice desta
+		// sessão não cabe no painel, e mandá-lo de novo (nesta ou em outra
+		// sessão) daria no mesmo. O painel já fechou a sessão como falha, com o
+		// motivo; o /fail só a alcança se ela ainda estiver aberta.
+		slog.Error("o painel recusou o índice da sessão: ele passa do que o painel aceita", "session_id", sessionID, "err", err)
+		marcarFalha(ctx, c, cfg, sessionID, corpoDaFalha{
+			ErrorCode:    "complete_failed",
+			ErrorMessage: fmt.Sprintf("os arquivos subiram, mas o painel recusou a conclusão: %v", err),
+		})
+		return fmt.Errorf("session index: %w", err)
 	case err != nil:
 		// Os lotes não chegaram todos (painel fora do ar até o fim das
 		// tentativas, ou sem disco para guardá-los) e o /complete nem foi

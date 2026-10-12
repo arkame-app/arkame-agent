@@ -32,6 +32,13 @@ const (
 // nova, a partir do estado local.
 var errIndiceRecusado = errors.New("o painel recusou o índice da sessão")
 
+// errIndiceGrandeDemais: o painel recusou de vez, por tamanho — a sessão
+// passou do teto de entradas (413 `index_too_large`, e o painel a fecha como
+// falha na mesma resposta), ou uma única entrada não cabe num lote. Refazer
+// em outra sessão daria no mesmo: o backup falha com o motivo, como no 413 do
+// /complete inline.
+var errIndiceGrandeDemais = errors.New("o índice não cabe no painel")
+
 // recuoMaximoDoLote é o teto do recuo entre tentativas de um lote enquanto o
 // backup ainda roda.
 var recuoMaximoDoLote = 30 * time.Second
@@ -253,14 +260,23 @@ func (e *enviadorDeLotes) enviar(ctx context.Context) {
 		var he *api.HTTPError
 		if errors.As(err, &he) && recusaDefinitiva(err) {
 			switch {
+			case he.Status == 413 && strings.Contains(he.Body, "index_too_large"):
+				// O teto é da sessão, não do lote: dividir não resolve.
+				e.falhar(fmt.Errorf("%w: lote %d: %v", errIndiceGrandeDemais, seq, err))
+				return
 			case he.Status == 413 && l.entradas > 1:
-				// O lote não coube no painel (limite menor que o anunciado):
-				// vira dois, e a contagem de lotes acompanha.
+				// `batch_too_large` — o lote não coube no painel (limite menor
+				// que o anunciado), ou um proxy no caminho o barrou pelo
+				// tamanho: vira dois, e a contagem de lotes acompanha.
 				if derr := e.dividir(seq-1, corpo); derr != nil {
 					e.falhar(derr)
 					return
 				}
 				continue
+			case he.Status == 413:
+				// Uma entrada só e ainda não cabe: não há o que dividir.
+				e.falhar(fmt.Errorf("%w: lote %d, de uma entrada só: %v", errIndiceGrandeDemais, seq, err))
+				return
 			case he.Status == 409 && strings.Contains(he.Body, "seq_gap"):
 				// O painel perdeu lotes já aceitos: manda de novo a partir do
 				// que ele espera.

@@ -634,3 +634,72 @@ func TestPainelForaDoArAteOFimFalhaSemConfirmar(t *testing.T) {
 	}
 	m.conferir()
 }
+
+// 413 `index_too_large` num lote: o teto é da sessão (150 mil enquanto o
+// painel ainda grava o catálogo antigo), e o painel a fecha como falha na
+// mesma resposta. É recusa definitiva, como no /complete inline: o agente não
+// divide o lote, não manda /complete e NÃO refaz o índice em outra sessão.
+func TestIndiceGrandeDemaisEmLotesERecusaDefinitiva(t *testing.T) {
+	m := novaMesaDoDaemon(t)
+	m.painel.MaxEntradas = 20
+	m.painel.MaxArquivosDaSessao = 50
+	m.semear(80)
+	err := m.rodar()
+	if err == nil || !strings.Contains(err.Error(), "index_too_large") || !strings.Contains(err.Error(), "413") {
+		t.Fatalf("erro = %v", err)
+	}
+	sessoes := m.painel.Sessoes()
+	if len(sessoes) != 1 {
+		t.Fatalf("recusa definitiva não abre outra sessão: %d sessões", len(sessoes))
+	}
+	if s := sessoes[0]; s.Status != "failed" || s.ErrorCode != "index_too_large" || s.Lotes != 2 {
+		t.Fatalf("%+v", s)
+	}
+	rotas := m.painel.Rotas()
+	if rotas["complete"].Requisicoes != 0 || rotas["files"].Status[413] != 1 || rotas["start"].Requisicoes != 1 {
+		t.Fatalf("um 413 só, sem /complete e sem outra sessão: %+v", rotas)
+	}
+	// Nada foi confirmado no estado: a execução seguinte confere no bucket o
+	// que já subiu (sem reenviar) e é recusada de novo.
+	enviados := m.s3.N("PutObject")
+	m.s3.Zerar()
+	if err := m.rodar(); err == nil || !strings.Contains(err.Error(), "index_too_large") {
+		t.Fatalf("segunda execução: %v", err)
+	}
+	if m.s3.N("PutObject") > 80-enviados {
+		t.Fatalf("arquivo reenviado depois da recusa: %v (a primeira enviou %d)", m.s3.Requisicoes(), enviados)
+	}
+}
+
+// 413 `batch_too_large`: o lote não coube (o painel, ou um proxy no caminho,
+// aceita menos do que foi anunciado). O agente divide o lote ao meio e segue;
+// a contagem do /complete acompanha os lotes que o painel de fato aceitou.
+func TestLoteGrandeDemaisEDividido(t *testing.T) {
+	m := novaMesaDoDaemon(t)
+	m.semear(64)
+	const cabe = 6000
+	recusados := 0
+	m.painel.Responder = func(rota string, _ *http.Request, corpo []byte) (int, string) {
+		if rota == "files" && len(corpo) > cabe {
+			recusados++
+			return 413, `{"error":"batch_too_large","limit":{"entries":5000,"bytes":6000}}`
+		}
+		return 0, ""
+	}
+	s := m.rodarOK()
+	if recusados == 0 {
+		t.Fatal("o teste não exercitou a divisão: nenhum lote passou do que cabe")
+	}
+	if s.Status != "complete" || s.Modo != "full" || s.Entradas != 64 || s.Lotes < 2 {
+		t.Fatalf("%+v", s)
+	}
+	for _, l := range m.painel.LotesRecebidos() {
+		if l.Bytes > cabe {
+			t.Fatalf("lote de %d bytes aceito acima do que cabe", l.Bytes)
+		}
+	}
+	if len(m.painel.Sessoes()) != 1 {
+		t.Fatalf("dividir o lote não abre outra sessão: %d", len(m.painel.Sessoes()))
+	}
+	m.conferir()
+}
