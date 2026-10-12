@@ -111,11 +111,46 @@ o agente decide não confirmar (o estado falhou no meio, o inventário de sessã
 pôde ser alinhado), a sessão nunca é adotada, e a execução seguinte cai na regra da época.
 O índice refeito numa sessão nova leva a marca com o id da sessão nova.
 
-**Removidos e fora da seleção.** Só depois de uma varredura completa e sem erro (nenhuma
-pasta ilegível, nenhum arquivo que falhou, nenhum pulado por estar só na nuvem). O que o
+**Removidos e fora da seleção.** Depois de uma varredura completa e sem erro (nenhuma
+pasta ilegível, nenhum arquivo que falhou, nenhum pulado por estar só na nuvem), o que o
 estado conhecia e não foi visto vira `removed` (ou `unselected`, se saiu das pastas ou caiu
 numa exclusão do plano). A entrada vira uma lápide e só some quando o painel confirmar a
 sessão que levou a remoção; senão, a remoção sai de novo.
+
+**Removidos em sessão parcial (prova positiva).** Num servidor que sempre tem um arquivo
+que não dá para ler ou enviar — medido: 46 de nome não-UTF-8 em 951 mil —, toda varredura é
+incompleta, e pela regra acima nada sairia do catálogo, nunca. Por isso o agente declara
+`index_removed_partial`; quando o painel responde `index.removed_partial: true` no
+`/sessions/start` (só junto com o delta), a sessão em delta de varredura incompleta emite
+`removed` para a entrada não vista que tem **prova positiva** de ter saído:
+
+1. o `lstat` do arquivo devolve "não existe" — existe, sem permissão, erro de disco ou um
+   arquivo no meio do caminho não provam nada; **e**
+2. a pasta-mãe foi aberta e listada sem erro nesta varredura. Se a pasta-mãe também não
+   existe mais (a pasta inteira foi apagada), vale a pasta listada mais próxima acima dela,
+   desde que o filho dela no caminho do arquivo não exista mais.
+
+Pasta que existe e não foi listada — sem permissão, erro de leitura, pasta do plano que não
+abriu — não prova nada do que está abaixo dela: é o caso que a regra existe para separar
+("não foi lido" de "saiu"). O arquivo sem prova segue sem entrada, e o painel o mantém
+presente com a versão da base. Chave sob mais de uma pasta do plano precisa da prova em
+todas. O que **não** muda em sessão parcial: `unselected` continua só na varredura completa;
+a sessão `full` e a interrompida pela parada do serviço não emitem remoção; contra o painel
+que não oferece `removed_partial`, nada é emitido, como antes.
+
+As pastas listadas ficam num conjunto de resumos de 64 bits (8 bytes por pasta, não o
+caminho), montado pelo walker só quando a prova pode ser usada. O custo a mais é um `lstat`
+por entrada não vista — as ilegíveis e as removidas, não o plano inteiro — e uma passada
+pelo estado, a mesma que a varredura completa já faz ao fechar.
+
+O que a prova não cobre, de propósito (guarda a mais, nunca a menos): no Windows, a pasta
+renomeada só na caixa (`Docs` → `docs`) — as entradas antigas respondem "existe" pelo nome
+novo e esperam a primeira varredura completa; o caminho que deixou de ser arquivo comum
+(virou pasta, soquete); e a pasta do plano que sumiu inteira (não há pasta listada acima
+dela). E o que ela afirma a mais: ponto de montagem vazio (o disco não montou e a pasta
+existe) lista sem erro, e os arquivos dele saem como `removed` — o mesmo que a varredura
+completa já fazia nesse caso; quando o disco volta, o backup seguinte os devolve ao índice
+sem reenviar nada.
 
 **Quando o estado não serve.** Arquivo ausente, cortado, adulterado (cada entrada tem CRC
 próprio), de outro formato, de outro armazenamento ou de outro prefixo de chave → o backup
@@ -168,6 +203,16 @@ v0.4.31 (conferido: 32.434.029 bytes nos dois, ver a medição).
   a sessão leva `/fail` (`index_rejected`) e o índice vai inteiro numa **sessão nova**,
   tirado do estado local (só os arquivos vistos e guardados nesta execução) — sem reler
   arquivo, sem reenviar, sem repetir os comandos antes/depois do plano. Uma vez só.
+- **Recusa definitiva**, sem sessão nova: `413 index_too_large` (o índice passa do teto do
+  painel) e `400 invalid_batch` (uma entrada que o painel não aceita — a sessão nova a
+  levaria de novo). A sessão leva `/fail` (`complete_failed`) e o backup falha com o que o
+  painel devolveu: no `invalid_batch`, o campo e a posição da entrada.
+- **O que o agente não manda**, para o painel não ter o que recusar: chave acima de
+  **1.024 bytes** (o teto do S3) — o arquivo é falha daquele arquivo, com o motivo, antes
+  de qualquer leitura, e a sessão fecha parcial; e data de modificação fora dos anos
+  **0001–9999** — o arquivo sobe e vai ao índice com a data presa à ponta da faixa (em UTC,
+  quando o fuso do servidor levaria o ano escrito a 0000 ou 10000). O arquivo de data
+  absurda segue com backup; só a data mostrada é a da ponta.
 
 ## Medição local (10/10/2026)
 
@@ -296,3 +341,9 @@ a da VM.
   (permissão `s3:GetObjectVersion`; a credencial que não a tiver faz todo backup rodar em
   modo completo, com o aviso no log).
 - Provedores de verdade com 4 envios em paralelo (limites de requisição da OCI, B2, R2).
+- **`removed` em sessão parcial, de ponta a ponta.** O agente foi testado contra o painel
+  falso, e o painel contra o agente falso dele; o par de verdade (agente novo × painel
+  novo, `index_removed_partial` ↔ `removed_partial`) ainda não rodou junto. Na árvore real
+  (os 46 nomes não-UTF-8): apagar arquivos e uma pasta, e conferir a contagem de `removed`,
+  o catálogo e o custo da passada (um `lstat` por entrada não vista). No Windows, a prova
+  só compila: conferir que pasta sem permissão de listagem não vira remoção.
