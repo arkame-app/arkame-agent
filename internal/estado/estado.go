@@ -84,6 +84,10 @@ func NomeDoArquivo(dir string, id Identidade) string {
 	return filepath.Join(dir, nomeSeguro(id.Agente)+"_"+nomeSeguro(id.Armazenamento)+".db")
 }
 
+// PrefixoDoAgente é o começo do nome de todo arquivo de estado de um agente,
+// qualquer que seja o armazenamento.
+func PrefixoDoAgente(agente string) string { return nomeSeguro(agente) + "_" }
+
 func nomeSeguro(s string) string {
 	var b strings.Builder
 	for _, r := range s {

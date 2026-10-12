@@ -86,7 +86,8 @@ func newUninstallCmd() *cobra.Command {
 			arquivos, mantidos := separarArquivos(configFile, existentes, outros, completo)
 			// O estado local do backup (nomes e datas dos arquivos do
 			// servidor), com a mesma cautela: o que outro agente usa fica.
-			estados, pastasDoEstado := daemon.ArquivosDoEstado(cfg)
+			estados, pastasDoEstado := estadosADesinstalar(cfg,
+				service.VariavelDoServico(serviceName, service.Scope(serviceScope), "ARKAME_STATE_DIR"))
 			estados, estadosMantidos := separarEstado(estados, outros, completo)
 
 			if !sim {
@@ -222,6 +223,40 @@ func separarArquivos(configFile string, candidatos []string, outros []*config.Co
 		}
 	}
 	return remover, manter
+}
+
+// estadosADesinstalar junta o que o estado local deste agente pode ter
+// deixado no disco: os arquivos do armazenamento da configuração de hoje e os
+// de armazenamentos anteriores do mesmo agente, na pasta da configuração, na
+// padrão do sistema e na que a definição do serviço disser (pastaDoServico:
+// ARKAME_STATE_DIR posta só no ambiente do serviço; "" quando não há).
+func estadosADesinstalar(cfg *config.Config, pastaDoServico string) (arquivos, pastas []string) {
+	if strings.EqualFold(strings.TrimSpace(pastaDoServico), "off") {
+		pastaDoServico = ""
+	}
+	arquivos, pastas = daemon.ArquivosDoEstado(cfg)
+	doAgente, pastasDoAgente := daemon.EstadosDoAgente(cfg, pastaDoServico)
+	tem := map[string]bool{}
+	for _, p := range arquivos {
+		tem[chaveDeCaminho(p)] = true
+	}
+	for _, p := range doAgente {
+		if !tem[chaveDeCaminho(p)] {
+			tem[chaveDeCaminho(p)] = true
+			arquivos = append(arquivos, p)
+		}
+	}
+	temPasta := map[string]bool{}
+	for _, p := range pastas {
+		temPasta[chaveDeCaminho(p)] = true
+	}
+	for _, p := range pastasDoAgente {
+		if !temPasta[chaveDeCaminho(p)] {
+			temPasta[chaveDeCaminho(p)] = true
+			pastas = append(pastas, p)
+		}
+	}
+	return arquivos, pastas
 }
 
 // separarEstado decide o que o uninstall apaga do estado local: os arquivos

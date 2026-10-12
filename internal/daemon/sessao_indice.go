@@ -97,6 +97,57 @@ func ArquivosDoEstado(cfg *config.Config) (arquivos, pastas []string) {
 	return arquivos, pastas
 }
 
+// EstadosDoAgente são os arquivos de estado local que ESTE AGENTE deixou no
+// disco, de qualquer armazenamento, e as pastas onde estão. É o que o
+// `uninstall` procura além dos de ArquivosDoEstado, que só conhece o
+// armazenamento da configuração de hoje:
+//
+//   - o estado de um armazenamento anterior (o agente trocou de bucket) fica
+//     no disco com outro nome, e ninguém mais o apagaria;
+//   - sem STORAGE_ID na configuração, ArquivosDoEstado não devolve nada;
+//   - a pasta pode não ser a da configuração: procura-se também na padrão do
+//     sistema, na da configuração do agente e nas que quem chama souber
+//     (outrasPastas: a ARKAME_STATE_DIR posta só na definição do serviço).
+//
+// Só entram arquivos que existem e cujo nome começa pelo id deste agente.
+func EstadosDoAgente(cfg *config.Config, outrasPastas ...string) (arquivos, pastas []string) {
+	if cfg.AgentID == "" {
+		return nil, nil
+	}
+	candidatas := append(pastasDoEstado(cfg), config.PastaDoEstado(cfg.HostRoot))
+	if cfg.ConfigPath != "" && filepath.IsAbs(cfg.ConfigPath) {
+		candidatas = append(candidatas, filepath.Join(filepath.Dir(cfg.ConfigPath), "estado"))
+	}
+	candidatas = append(candidatas, outrasPastas...)
+	prefixo := estado.PrefixoDoAgente(cfg.AgentID)
+	vistas := map[string]bool{}
+	for _, dir := range candidatas {
+		if dir == "" || !filepath.IsAbs(dir) || vistas[filepath.Clean(dir)] {
+			continue
+		}
+		vistas[filepath.Clean(dir)] = true
+		itens, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		achou := false
+		for _, it := range itens {
+			n := it.Name()
+			if it.IsDir() || !strings.HasPrefix(n, prefixo) {
+				continue
+			}
+			if strings.HasSuffix(n, ".db") || strings.HasSuffix(n, ".uso.json") || strings.HasSuffix(n, ".uso.json.tmp") {
+				arquivos = append(arquivos, filepath.Join(dir, n))
+				achou = true
+			}
+		}
+		if achou {
+			pastas = append(pastas, dir)
+		}
+	}
+	return arquivos, pastas
+}
+
 // identidadeDoEstado é de quem é o estado que um backup abre: o agente, o
 // armazenamento instalado e o bucket em que o plano grava. Só o backup a usa
 // — é ele quem grava o arquivo e quem o descarta se for de outro lugar. O
