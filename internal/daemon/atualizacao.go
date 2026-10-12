@@ -211,9 +211,10 @@ func (a *atualizador) capacidades() []string {
 }
 
 // capacidadesDoIndice são as que todo agente desta versão declara: o índice
-// em lotes e em delta. Não dependem da instalação.
+// em lotes e em delta, e o `removed` com prova positiva em sessão parcial.
+// Não dependem da instalação.
 func capacidadesDoIndice() []string {
-	return []string{api.CapacidadeIndiceEmLotes, api.CapacidadeIndiceDelta}
+	return []string{api.CapacidadeIndiceEmLotes, api.CapacidadeIndiceDelta, api.CapacidadeRemovidosEmParcial}
 }
 
 // relatoDoHeartbeat monta o `update` do heartbeat: a tentativa em curso (ou a

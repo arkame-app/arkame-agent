@@ -29,6 +29,9 @@ type PainelFalso struct {
 	SemLotes bool
 	// SemDelta: oferece lotes, mas sempre inventário completo.
 	SemDelta bool
+	// SemRemovidosEmParcial: o painel de antes do item 27 do contrato — não
+	// oferece `removed_partial`, e o `removed` de sessão parcial é ignorado.
+	SemRemovidosEmParcial bool
 	// MaxEntradas e MaxBytes por lote (padrão do contrato: 5.000 e 2 MiB).
 	MaxEntradas int
 	MaxBytes    int
@@ -77,7 +80,10 @@ type SessaoFalsa struct {
 	// Oferta feita no start: "inline" ou "batches", com ou sem delta.
 	Oferta      string
 	OfertaDelta bool
-	Base        string
+	// OfertaRemovidosEmParcial: a sessão recebeu `removed_partial: true` — o
+	// `removed` dela vale mesmo que feche parcial.
+	OfertaRemovidosEmParcial bool
+	Base                     string
 	// Modo com que fechou: "inline", "full" ou "delta".
 	Modo         string
 	Capacidades  []string
@@ -93,7 +99,8 @@ type SessaoFalsa struct {
 	// SemVersao: upserts sem version_id — aceitos e contados, não catalogados;
 	// a sessão fecha `partial` com `missing_version_id`.
 	SemVersao int
-	// RemovidosIgnorados: `removed` de sessão parcial, que o painel não aplica.
+	// RemovidosIgnorados: `removed` de sessão parcial sem a oferta
+	// `removed_partial`, que o painel não aplica.
 	RemovidosIgnorados int
 }
 
@@ -419,11 +426,21 @@ func (p *PainelFalso) start(w http.ResponseWriter, agente string, corpo []byte) 
 		if s.Base != "" {
 			base = s.Base
 		}
-		resp["index"] = map[string]any{
+		indice := map[string]any{
 			"mode": "batches", "delta": s.OfertaDelta,
 			"max_entries": p.MaxEntradas, "max_bytes": p.MaxBytes,
 			"base_session_id": base,
 		}
+		// Como o painel de verdade: `removed_partial` acompanha o delta, só
+		// para quem declarou a capacidade, e o campo não vem quando é falso.
+		// O de verdade só oferece delta com base; aqui `delta: true` vem
+		// também sem base (o agente manda `full` do mesmo jeito), e por isso
+		// a base é conferida à parte.
+		if s.OfertaDelta && s.Base != "" && !p.SemRemovidosEmParcial && slices.Contains(req.Capabilities, api.CapacidadeRemovidosEmParcial) {
+			s.OfertaRemovidosEmParcial = true
+			indice["removed_partial"] = true
+		}
+		resp["index"] = indice
 	}
 	responder(w, 200, resp)
 }
@@ -678,7 +695,10 @@ func (p *PainelFalso) complete(w http.ResponseWriter, sid string, corpo []byte) 
 			}
 		}
 		s.Indexados = n
-		p.fundir(par, s, s.ops, req.Index.Mode == "full", status == "partial" || s.SemVersao > 0)
+		// O `removed` de sessão parcial só vale em delta e para quem recebeu
+		// a oferta `removed_partial`.
+		parcial := status == "partial" || s.SemVersao > 0
+		p.fundir(par, s, s.ops, req.Index.Mode == "full", parcial && !(req.Index.Mode == "delta" && s.OfertaRemovidosEmParcial))
 		resposta["files_dropped"] = s.SemVersao
 		resposta["index"] = map[string]any{"mode": req.Index.Mode, "removed_ignored": s.RemovidosIgnorados}
 	}
@@ -719,10 +739,11 @@ func (p *PainelFalso) recusarInline(w http.ResponseWriter, s *SessaoFalsa, arqui
 // full (e o mapa inline): os arquivos presentes passam a ser EXATAMENTE o
 // inventário que veio — também na sessão parcial. O arquivo que o agente não
 // conseguiu ler nesta sessão fica fora dela; `removed`/`unselected` só dizem o
-// motivo. delta: as operações são aplicadas sobre a base; o `removed` de uma
-// sessão parcial não é aplicado (o arquivo segue presente), o `unselected` é.
+// motivo. delta: as operações são aplicadas sobre a base; com
+// ignorarRemovidos (sessão parcial que não recebeu a oferta `removed_partial`)
+// o `removed` não é aplicado (o arquivo segue presente), o `unselected` é.
 // Upsert sem versão não cataloga: em delta, o arquivo sai da sessão.
-func (p *PainelFalso) fundir(par string, s *SessaoFalsa, ops []api.IndexEntry, full, parcial bool) {
+func (p *PainelFalso) fundir(par string, s *SessaoFalsa, ops []api.IndexEntry, full, ignorarRemovidos bool) {
 	if p.SemCatalogo {
 		return
 	}
@@ -745,7 +766,7 @@ func (p *PainelFalso) fundir(par string, s *SessaoFalsa, ops []api.IndexEntry, f
 		case e.Op == api.OpUpsert:
 			delete(cat, e.Key)
 		case full:
-		case e.Op == api.OpRemoved && parcial:
+		case e.Op == api.OpRemoved && ignorarRemovidos:
 			s.RemovidosIgnorados++
 		default:
 			if _, tem := cat[e.Key]; !tem {

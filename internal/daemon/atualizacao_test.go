@@ -279,8 +279,9 @@ func TestHeartbeatDeclaraCapacidadesEEntregaOPedido(t *testing.T) {
 
 	enviado := corpo()
 	caps, ok := enviado["capabilities"].([]any)
-	if !ok || len(caps) != 3 || !slices.Contains(caps, any(atualizacao.Capacidade)) ||
-		!slices.Contains(caps, any(api.CapacidadeIndiceEmLotes)) || !slices.Contains(caps, any(api.CapacidadeIndiceDelta)) {
+	if !ok || len(caps) != 4 || !slices.Contains(caps, any(atualizacao.Capacidade)) ||
+		!slices.Contains(caps, any(api.CapacidadeIndiceEmLotes)) || !slices.Contains(caps, any(api.CapacidadeIndiceDelta)) ||
+		!slices.Contains(caps, any(api.CapacidadeRemovidosEmParcial)) {
 		t.Fatalf("capabilities = %#v", enviado["capabilities"])
 	}
 	relato, _ := enviado["update"].(map[string]any)
@@ -300,7 +301,7 @@ func TestHeartbeatDeclaraCapacidadesEEntregaOPedido(t *testing.T) {
 	// impedido, o campo leva só as capacidades do índice, que não dependem
 	// da instalação — sempre lista: ausente é agente antigo.
 	enviarHeartbeat(context.Background(), c, a.cfg, service.Detected{}, &estadoDoToken{})
-	if caps, ok := corpo()["capabilities"].([]any); !ok || len(caps) != 2 || slices.Contains(caps, any(atualizacao.Capacidade)) {
+	if caps, ok := corpo()["capabilities"].([]any); !ok || len(caps) != 3 || slices.Contains(caps, any(atualizacao.Capacidade)) {
 		t.Fatalf("sem atualizador: capabilities = %#v", corpo()["capabilities"])
 	}
 	if _, tem := corpo()["update"]; tem {

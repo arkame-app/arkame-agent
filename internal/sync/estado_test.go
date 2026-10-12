@@ -42,6 +42,8 @@ type mesa struct {
 	confirmadas []int
 	// sortear é o sorteio da amostra do estado (nil: o do sistema).
 	sortear func(int) int
+	// removParcial: o "painel" ofereceu `removed_partial` (item 27 do contrato).
+	removParcial bool
 }
 
 func (m *mesa) ultimaConfirmada() int {
@@ -126,6 +128,7 @@ func (m *mesa) rodar() (*Result, []api.IndexEntry) {
 		}
 		o.Estado = ex
 		o.Delta = delta
+		o.RemovidosEmParcial = delta && m.removParcial
 	}
 	r, err := Run(context.Background(), o)
 	if err != nil && r == nil {

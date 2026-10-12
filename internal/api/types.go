@@ -249,6 +249,10 @@ type FileEntry struct {
 const (
 	CapacidadeIndiceEmLotes = "index_batches"
 	CapacidadeIndiceDelta   = "index_delta"
+	// CapacidadeRemovidosEmParcial: o agente sabe emitir `removed` em sessão
+	// parcial só com prova positiva de que o arquivo saiu (contrato, item
+	// 27). O painel que a conhece responde com IndexOffer.RemovedPartial.
+	CapacidadeRemovidosEmParcial = "index_removed_partial"
 )
 
 // Operações de uma entrada do índice em lotes.
@@ -269,6 +273,11 @@ type IndexOffer struct {
 	// BaseSessionID é a última sessão concluída deste agente + plano, ou
 	// vazio. O delta é relativo a ela.
 	BaseSessionID string `json:"base_session_id"`
+	// RemovedPartial: o painel aplica o `removed` desta sessão mesmo que ela
+	// feche `partial`. Só vem para quem declarou
+	// CapacidadeRemovidosEmParcial e recebeu delta. Ausente (painel de antes):
+	// sessão parcial não emite `removed`.
+	RemovedPartial bool `json:"removed_partial"`
 }
 
 // IndexEntry é uma entrada de um lote do índice

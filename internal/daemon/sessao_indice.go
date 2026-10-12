@@ -27,10 +27,13 @@ import (
 type sessaoDeIndice struct {
 	emLotes bool
 	delta   bool
-	base    string // última sessão concluída, segundo o painel
-	prefixo string // prefixo normalizado das chaves do plano
-	dir     string // pasta do estado em uso
-	planID  string
+	// removidosEmParcial: o painel ofereceu `removed_partial` — a sessão em
+	// delta emite `removed` com prova positiva mesmo fechando parcial.
+	removidosEmParcial bool
+	base               string // última sessão concluída, segundo o painel
+	prefixo            string // prefixo normalizado das chaves do plano
+	dir                string // pasta do estado em uso
+	planID             string
 	// rehashUnico: esta execução relê tudo por causa da flag --rehash-all, que
 	// vale para um backup de cada plano (ver rehashFeito).
 	rehashUnico bool
@@ -307,6 +310,8 @@ func (s *sessaoDeIndice) abrirPlano(planID, sessionID string, oferta *api.IndexO
 		}
 	}
 	s.delta = s.emLotes && oferta.Delta && s.base != "" && !s.outraEpoca
+	// `removed` em sessão parcial só para o painel que disse que o aplica.
+	s.removidosEmParcial = s.delta && oferta.RemovedPartial
 	ex, err := plano.Comecar(sessionID)
 	if err != nil {
 		return err
@@ -331,6 +336,7 @@ func (s *sessaoDeIndice) configurar(o *syncengine.EngineOptions, cfg *config.Con
 	if s.env != nil {
 		o.Emitir = s.env.Emitir
 		o.Delta = s.delta && s.ex != nil
+		o.RemovidosEmParcial = o.Delta && s.removidosEmParcial
 	}
 }
 

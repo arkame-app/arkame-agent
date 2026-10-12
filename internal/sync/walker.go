@@ -83,13 +83,14 @@ func linkSemAlvo(err error) bool {
 // é gravado antes de o canal de erros fechar: só se lê depois de vê-lo fechado
 // (receber o erro não basta, ele vai antes da gravação).
 func walk(ctx context.Context, hostRoot string, sourcePaths []string, excludeGlobs []string, puladosOut *puladosDoWalk) (<-chan FileInfo, <-chan error) {
-	return walkSem(ctx, hostRoot, sourcePaths, excludeGlobs, puladosOut, nil)
+	return walkSem(ctx, hostRoot, sourcePaths, excludeGlobs, puladosOut, nil, nil)
 }
 
 // walkSem é o walk que nunca entra nas pastas de ignorar (caminhos reais,
 // absolutos): a pasta do estado local do agente, que muda durante o backup e
-// não é dado do cliente.
-func walkSem(ctx context.Context, hostRoot string, sourcePaths []string, excludeGlobs []string, puladosOut *puladosDoWalk, ignorar []string) (<-chan FileInfo, <-chan error) {
+// não é dado do cliente. Com listadas, anota as pastas que abriu e listou sem
+// erro (remocao_provada.go); só se lê depois de o canal de erros fechar.
+func walkSem(ctx context.Context, hostRoot string, sourcePaths []string, excludeGlobs []string, puladosOut *puladosDoWalk, ignorar []string, listadas *pastasListadas) (<-chan FileInfo, <-chan error) {
 	out := make(chan FileInfo, 128)
 	errs := make(chan error, 1)
 
@@ -145,9 +146,15 @@ func walkSem(ctx context.Context, hostRoot string, sourcePaths []string, exclude
 			chave := func(p string) string {
 				return caminho.NaChave(hostRoot, escolhido+strings.TrimPrefix(p, root))
 			}
+			listadas.fonte(chave(root), root)
 
 			err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 				if err != nil {
+					// Com erro, o WalkDir só chama por uma pasta: ou ela não abriu,
+					// ou a listagem dela falhou (e pode ter vindo pela metade) —
+					// nesse caso ele já tinha chamado antes, sem erro. De um jeito
+					// ou de outro, ela não foi listada.
+					listadas.falhou(chave(path))
 					// A própria pasta do plano não abre (não existe, sem
 					// permissão, caminho inválido): é falha do backup, e não um
 					// backup vazio "concluído" — era o que acontecia com
@@ -189,6 +196,7 @@ func walkSem(ctx context.Context, hostRoot string, sourcePaths []string, exclude
 					if pastaIgnorada(path, ignorar) {
 						return filepath.SkipDir
 					}
+					listadas.entrou(chave(path))
 					return nil
 				}
 				leitura := path

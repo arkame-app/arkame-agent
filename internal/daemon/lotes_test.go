@@ -590,12 +590,15 @@ func TestExpurgoDaBaixaNoEstado(t *testing.T) {
 	m.conferir()
 }
 
-// Sessão parcial fecha em delta, sem `removed`.
+// Sessão parcial fecha em delta, sem `removed` — contra o painel que não
+// oferece `removed_partial` (o de antes do item 27 do contrato). Com a oferta,
+// ver remocao_em_parcial_test.go.
 func TestSessaoParcialFechaEmDeltaSemRemoved(t *testing.T) {
 	if os.Geteuid() == 0 || runtime.GOOS == "windows" {
 		t.Skip("precisa de um arquivo ilegível")
 	}
 	m := novaMesaDoDaemon(t)
+	m.painel.SemRemovidosEmParcial = true
 	m.semear(30)
 	m.rodarOK()
 	_ = os.Remove(filepath.Join(m.raiz, "p01/arquivo-00001.txt"))

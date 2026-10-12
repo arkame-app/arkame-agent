@@ -44,6 +44,12 @@ type EngineOptions struct {
 	// inalterado não gera entrada, e o que saiu da origem ou da seleção sai
 	// como `removed`/`unselected`. Só vale com Estado e Emitir.
 	Delta bool
+	// RemovidosEmParcial: o painel aplica `removed` também em sessão parcial
+	// (`index.removed_partial` no /sessions/start). Com ele, a sessão em
+	// delta cuja varredura não foi completa emite `removed` do que tem prova
+	// positiva de ter saído (remocao_provada.go). Sem ele — painel de antes —
+	// a sessão parcial não emite remoção nenhuma, como sempre.
+	RemovidosEmParcial bool
 	// Emitir recebe cada entrada do índice, na ordem em que fica pronta.
 	// nil: as entradas se acumulam em Result.VersionMap (o /complete inline).
 	Emitir func(api.IndexEntry) error
@@ -277,7 +283,12 @@ func Run(ctx context.Context, o EngineOptions) (*Result, error) {
 	}
 
 	var pulados puladosDoWalk
-	fileCh, errCh := walkSem(ctx, o.HostRoot, o.SourcePaths, o.ExcludeGlobs, &pulados, o.Ignorar)
+	// As pastas listadas só são anotadas quando podem servir de prova.
+	var listadas *pastasListadas
+	if o.Delta && o.RemovidosEmParcial {
+		listadas = novasPastasListadas()
+	}
+	fileCh, errCh := walkSem(ctx, o.HostRoot, o.SourcePaths, o.ExcludeGlobs, &pulados, o.Ignorar, listadas)
 
 	numerados := make(chan itemDoWalk, 128)
 	go func() {
@@ -341,6 +352,10 @@ func Run(ctx context.Context, o EngineOptions) (*Result, error) {
 		pulados.SoNaNuvem == 0 && pulados.Reparse == 0
 	if result.InventarioCompleto {
 		if err := c.fecharInventario(); err != nil {
+			return result, err
+		}
+	} else if listadas != nil {
+		if err := c.removerOProvado(listadas); err != nil {
 			return result, err
 		}
 	}
@@ -644,6 +659,66 @@ func (c *coletor) fecharInventario() error {
 			// (o que foi emitido está certo), só sem as remoções.
 			c.result.InventarioCompleto = false
 		}
+	}
+	return nil
+}
+
+// removerOProvado roda no lugar de fecharInventario quando a varredura NÃO foi
+// completa (pasta ilegível, arquivo que falhou, arquivo só na nuvem) e o
+// painel aceita `removed` em sessão parcial: do que o estado conhecia e não
+// foi visto, sai como `removed` só o que tem prova positiva de ter saído da
+// origem (pastasListadas.saiu). O resto fica como está — sem entrada no
+// índice, o painel o mantém presente com a versão da base.
+//
+// Sem isto, num servidor em que toda sessão fecha parcial (um arquivo que
+// nunca dá para ler), nada saía do catálogo.
+//
+// Fica de fora, de propósito: o que saiu da seleção do plano (`unselected`
+// segue só na varredura completa) e a entrada que nunca chegou a uma sessão
+// confirmada (o painel não a tem).
+func (c *coletor) removerOProvado(listadas *pastasListadas) error {
+	ex := c.estado()
+	if ex == nil || !c.o.Delta {
+		return nil
+	}
+	sel := novaSelecao(c.o.HostRoot, c.o.SourcePaths, c.o.ExcludeGlobs)
+	prefixo := PrefixoDasChaves(c.o.PrefixRoot)
+	var falha error
+	err := ex.Varrer(func(rel string, ent estado.Entrada, visto bool) (estado.Acao, estado.Entrada) {
+		if falha != nil {
+			return estado.Manter, ent
+		}
+		vale := ex.Vale(ent)
+		switch {
+		case visto && !ent.Removida:
+			return estado.Manter, ent
+		case ent.Removida && vale:
+			return estado.Apagar, ent // remoção já confirmada pelo painel
+		case !vale && !ent.NaBase:
+			return estado.Manter, ent // o painel não a tem: nada a remover
+		case ent.Removida && ent.ForaDaSelecao, !sel.contem(rel):
+			return estado.Manter, ent
+		case !listadas.saiu(rel):
+			return estado.Manter, ent // não foi lido: não é prova de que saiu
+		}
+		ent.Removida = true
+		ent.NaBase = true
+		ent.ForaDaSelecao = false
+		c.result.FilesRemoved++
+		if err := c.o.Emitir(api.IndexEntry{Op: api.OpRemoved, Key: prefixo + rel}); err != nil {
+			falha = errors.Join(ErrIndice, err)
+			return estado.Manter, ent
+		}
+		return estado.Regravar, ent
+	})
+	if falha != nil {
+		return falha
+	}
+	if err != nil {
+		// Sem a varredura do estado não se sabe o que saiu: a sessão segue
+		// válida (o que foi emitido está certo), e ele não é confirmado.
+		c.estadoFalhou("varredura das remoções", err)
+		c.result.EstadoFalhou = true
 	}
 	return nil
 }
