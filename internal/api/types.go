@@ -494,3 +494,62 @@ type PurgeResultResponse struct {
 	Failed             int   `json:"failed"`
 	Rejected           int   `json:"rejected"`
 }
+
+// --- Teste de restauração por amostra (contrato, itens 34 a 38) ---
+
+// CapacidadeVerificarRestauracao: o agente sabe restaurar uma amostra que o
+// painel escolhe, conferir e relatar. Só quem a declara recebe plano.
+const CapacidadeVerificarRestauracao = "verify_restore"
+
+// VerifyItem é uma versão que o painel escolheu para a amostra.
+type VerifyItem struct {
+	Key       string `json:"key"`
+	VersionID string `json:"version_id"`
+	Size      int64  `json:"size"`
+	SHA256    string `json:"sha256"` // hex, 64
+}
+
+// VerifyPlanResponse é a resposta de GET /api/agents/{id}/verify-plan.
+// RunID vazio ou Items vazio = nada a fazer.
+type VerifyPlanResponse struct {
+	RunID           string       `json:"run_id"`
+	StorageID       string       `json:"storage_id"`
+	Bucket          string       `json:"bucket"`
+	PrefixRoot      string       `json:"prefix_root"`
+	MaxBytes        int64        `json:"max_bytes"`
+	DeadlineSeconds int64        `json:"deadline_seconds"`
+	Items           []VerifyItem `json:"items"`
+}
+
+// VerifyResultItem é o que aconteceu com um item da amostra. Status: "ok",
+// "failed" ou "skipped"; Error é o código (not_found, hash_mismatch, cold…).
+// SHA256 é o do arquivo relido do disco, e só vai em "ok".
+type VerifyResultItem struct {
+	Key       string `json:"key"`
+	VersionID string `json:"version_id"`
+	Status    string `json:"status"`
+	Error     string `json:"error,omitempty"`
+	Detail    string `json:"detail,omitempty"`
+	Bytes     int64  `json:"bytes"`
+	Ms        int64  `json:"ms"`
+	SHA256    string `json:"sha256,omitempty"`
+}
+
+// VerifyResult é o corpo de POST /api/agents/{id}/verify-result.
+type VerifyResult struct {
+	RunID      string             `json:"run_id"`
+	StartedAt  time.Time          `json:"started_at"`
+	FinishedAt time.Time          `json:"finished_at"`
+	Items      []VerifyResultItem `json:"items"`
+}
+
+// VerifyResultResponse é o que o painel registrou da rodada.
+type VerifyResultResponse struct {
+	Status            string `json:"status"`
+	OK                int    `json:"ok"`
+	Failed            int    `json:"failed"`
+	Skipped           int    `json:"skipped"`
+	Rejected          int    `json:"rejected"`
+	MarkedUnavailable int    `json:"marked_unavailable"`
+	Duplicate         bool   `json:"duplicate,omitempty"`
+}
