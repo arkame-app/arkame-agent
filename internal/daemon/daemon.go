@@ -1369,12 +1369,22 @@ func rodadaDeExpurgo(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *co
 	return trava.limpeza(func() { expurgar(ctx, c, s3c, cfg) })
 }
 
+// prazoDoPlanoDeExpurgo é quanto o agente espera a resposta do purge-plan. O
+// painel calcula o plano na hora, sobre o catálogo inteiro do armazenamento:
+// ~13 s por milhão de versões catalogadas (medido em 12/10/2026: 12 s com 1
+// milhão, 67 s com 5 milhões). Com o prazo padrão de 30 s do client, acima de
+// ~2 milhões o agente desistia no meio do cálculo, calado; o painel terminava
+// e gravava a rodada, que só chegava na pergunta seguinte, uma hora depois —
+// e nem aí, se um backup começasse nesse intervalo (a rodada emitida antes de
+// uma sessão expira e é recalculada, de novo em mais de 30 s).
+var prazoDoPlanoDeExpurgo = 5 * time.Minute
+
 // expurgar pergunta ao painel se há versões a apagar e apaga. Quem chama
 // segura a exclusaoDoBucket.
 func expurgar(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config.Config) {
 	var plano api.PurgePlanResponse
 	path := "/api/agents/" + cfg.AgentID + "/purge-plan?storage_id=" + url.QueryEscape(cfg.StorageID)
-	if err := c.GET(ctx, path, &plano); err != nil {
+	if err := c.ComPrazo(prazoDoPlanoDeExpurgo).GET(ctx, path, &plano); err != nil {
 		slog.Debug("poll purge-plan falhou", "err", err)
 		return
 	}

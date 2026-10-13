@@ -11,6 +11,7 @@ import (
 	"strings"
 	gosync "sync"
 	"testing"
+	"time"
 
 	"github.com/arkame-app/agent/internal/api"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -120,5 +121,50 @@ func TestServicoParandoAindaRelataOExpurgo(t *testing.T) {
 	}
 	if relato.Deleted[0].Key != "arkame/data/a/00000" || relato.Deleted[999].Key != "arkame/data/a/00999" {
 		t.Fatalf("o relato não traz as versões do primeiro lote: %q … %q", relato.Deleted[0].Key, relato.Deleted[999].Key)
+	}
+}
+
+// O painel leva mais que o prazo padrão do client (30 s) para calcular o
+// plano de um catálogo grande — 67 s com 5 milhões de versões na bancada. O
+// agente espera: antes, desistia aos 30 s sem dizer nada, e a limpeza daquele
+// armazenamento atrasava uma hora a cada rodada (ou não saía, com backup de
+// hora em hora).
+func TestPlanoDeExpurgoLentoAindaERecebido(t *testing.T) {
+	antes := prazoDoPlanoDeExpurgo
+	prazoDoPlanoDeExpurgo = 5 * time.Second
+	t.Cleanup(func() { prazoDoPlanoDeExpurgo = antes })
+
+	painel := &painelFalso{}
+	srv := httptest.NewServer(painel)
+	t.Cleanup(srv.Close)
+	// O prazo padrão do client, encurtado: o plano demora mais que ele.
+	c, _ := api.New(api.Options{BaseURL: srv.URL, Bearer: "t", Timeout: 50 * time.Millisecond})
+	plano := api.PurgePlanResponse{RunID: "r1", Bucket: "b"}
+	plano.Versions = []api.PurgePlanVersion{{Key: "arkame/data/a/00001", VersionID: "v1", Reason: "hard_delete"}}
+	corpoDoPlano, _ := json.Marshal(plano)
+	painel.resposta = func(path string, _ int) (int, string) {
+		if strings.HasSuffix(path, "/purge-plan") {
+			time.Sleep(300 * time.Millisecond)
+			return http.StatusOK, string(corpoDoPlano)
+		}
+		return 0, ""
+	}
+	var deletes int
+	bucket := bucketQueApagaTudo(t, &deletes)
+	s3c := s3.New(s3.Options{
+		Region:       "us-east-1",
+		BaseEndpoint: aws.String(bucket.URL),
+		UsePathStyle: true,
+		Credentials:  credentials.NewStaticCredentialsProvider("ak", "sk", ""),
+		Retryer:      aws.NopRetryer{},
+	})
+
+	expurgar(context.Background(), c, s3c, cfgDaExclusao())
+
+	if deletes != 1 {
+		t.Fatalf("o plano que demorou mais que o prazo padrão não foi executado: %d DeleteObjects", deletes)
+	}
+	if n := painel.recebeu("/purge-result"); n != 1 {
+		t.Fatalf("o relato do expurgo não chegou ao painel; chamadas: %v", painel.chamadas)
 	}
 }
