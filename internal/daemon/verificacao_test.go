@@ -496,3 +496,30 @@ func TestPastasDeVerificacaoDoAgente(t *testing.T) {
 		t.Fatalf("pastas deste agente: %v", nomes)
 	}
 }
+
+// O intervalo configurado só encurta a espera — e nunca a de um dia do painel
+// que não tem a rota: é ela que mantém o agente quieto diante de um painel antigo.
+func TestEsperaDaVerificacaoConfigurada(t *testing.T) {
+	padrao := &config.Config{}
+	curto := &config.Config{RestoreTestIntervalSec: 5}
+	longo := &config.Config{RestoreTestIntervalSec: 7200}
+	casos := []struct {
+		nome   string
+		cfg    *config.Config
+		espera time.Duration
+		quer   time.Duration
+	}{
+		{"sem configuração, a primeira pergunta", padrao, primeiraVerificacao, primeiraVerificacao},
+		{"sem configuração, o intervalo", padrao, intervaloDaVerificacao, intervaloDaVerificacao},
+		{"configurado, a primeira pergunta", curto, primeiraVerificacao, 5 * time.Second},
+		{"configurado, o intervalo", curto, intervaloDaVerificacao, 5 * time.Second},
+		{"configurado maior que o padrão não alonga", longo, intervaloDaVerificacao, intervaloDaVerificacao},
+		{"painel sem a rota: um dia, com ou sem configuração", curto, esperaSemRotaDeVerificacao, esperaSemRotaDeVerificacao},
+		{"sem config nenhuma", nil, intervaloDaVerificacao, intervaloDaVerificacao},
+	}
+	for _, c := range casos {
+		if got := esperaDaVerificacao(c.cfg, c.espera); got != c.quer {
+			t.Errorf("%s: espera %v, quero %v", c.nome, got, c.quer)
+		}
+	}
+}

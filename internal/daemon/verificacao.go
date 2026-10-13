@@ -168,7 +168,7 @@ func verifyLoop(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config.
 	if !podeVerificar(cfg) {
 		return
 	}
-	espera := primeiraVerificacao
+	espera := esperaDaVerificacao(cfg, primeiraVerificacao)
 	for {
 		timer := time.NewTimer(espera)
 		select {
@@ -179,7 +179,7 @@ func verifyLoop(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config.
 		}
 		rodou, proxima := rodadaDeVerificacao(ctx, c, s3c, cfg, trava)
 		if rodou {
-			espera = proxima
+			espera = esperaDaVerificacao(cfg, proxima)
 			continue
 		}
 		// Adiada. Avisa uma vez, não a cada minuto de espera.
@@ -189,6 +189,20 @@ func verifyLoop(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config.
 		}
 		espera = reprovaDaVerificacao
 	}
+}
+
+// esperaDaVerificacao aplica o intervalo configurado
+// (ARKAME_RESTORE_TEST_INTERVAL_SEC) à espera padrão: ele só encurta — a
+// primeira pergunta e o intervalo de hora em hora. A espera de um dia do painel
+// sem a rota (404) não é encurtada: é o que mantém o agente quieto.
+func esperaDaVerificacao(cfg *config.Config, padrao time.Duration) time.Duration {
+	if cfg == nil || cfg.RestoreTestIntervalSec <= 0 || padrao == esperaSemRotaDeVerificacao {
+		return padrao
+	}
+	if d := time.Duration(cfg.RestoreTestIntervalSec) * time.Second; d < padrao {
+		return d
+	}
+	return padrao
 }
 
 // rodadaDeVerificacao faz uma passada com o bucket fechado para backup e

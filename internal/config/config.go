@@ -87,6 +87,12 @@ type Config struct {
 	// Misc
 	HeartbeatIntervalSec int
 	PollIntervalSec      int
+	// RestoreTestIntervalSec é o intervalo, em segundos, entre as perguntas do
+	// teste de restauração por amostra ao painel (ARKAME_RESTORE_TEST_INTERVAL_SEC).
+	// Zero: o padrão (de hora em hora, a primeira 5 minutos depois do arranque).
+	// Existe para o laço de ponta a ponta e para diagnóstico; quem decide se há
+	// rodada, e quando, continua sendo o painel.
+	RestoreTestIntervalSec int
 	// AutoUpdate é o valor de ARKAME_AUTO_UPDATE (ambiente ou env-file):
 	// "off" desliga a atualização automática do programa. Vazio: ligada.
 	AutoUpdate string
@@ -174,28 +180,29 @@ func Load(envFile string, o Overrides) (*Config, error) {
 	}
 
 	cfg := &Config{
-		ConfigPath:           envFile,
-		AgentID:              get("AGENT_ID"),
-		PanelURL:             firstNonEmpty(o.PanelURL, get("PANEL_URL"), "https://save.arkame.app"),
-		EnrollmentToken:      firstNonEmpty(o.EnrollmentToken, get("ENROLLMENT_TOKEN")),
-		TokenPath:            firstNonEmpty(get("TOKEN_PATH"), DefaultTokenPath),
-		PrivateKeyPath:       firstNonEmpty(get("PRIVATE_KEY_PATH"), DefaultPrivateKeyPath),
-		AgentIDPath:          firstNonEmpty(get("AGENT_ID_PATH"), DefaultAgentIDPath),
-		HostRoot:             firstNonEmpty(o.HostRoot, get("HOST_ROOT"), "/"),
-		StorageAccessKey:     get("STORAGE_ACCESS_KEY"),
-		StorageSecretKey:     get("STORAGE_SECRET_KEY"),
-		StorageEndpoint:      get("STORAGE_ENDPOINT"),
-		StorageRegion:        firstNonEmpty(get("STORAGE_REGION"), DefaultRegion),
-		StorageBucket:        get("STORAGE_BUCKET"),
-		StorageID:            get("STORAGE_ID"),
-		SiblingBuckets:       splitCSV(get("SIBLING_BUCKETS")),
-		HeartbeatIntervalSec: segundosOu(get("HEARTBEAT_INTERVAL_SEC"), 60),
-		PollIntervalSec:      segundosOu(get("POLL_INTERVAL_SEC"), 60),
-		AutoUpdate:           get("ARKAME_AUTO_UPDATE"),
-		UploadConcurrency:    naoNegativo(get("UPLOAD_CONCURRENCY")),
-		RehashAll:            ligado(get("ARKAME_REHASH_ALL")),
-		RehashAllOnce:        o.RehashAll,
-		VerifyDays:           naoNegativo(get("ARKAME_VERIFY_DAYS")),
+		ConfigPath:             envFile,
+		AgentID:                get("AGENT_ID"),
+		PanelURL:               firstNonEmpty(o.PanelURL, get("PANEL_URL"), "https://save.arkame.app"),
+		EnrollmentToken:        firstNonEmpty(o.EnrollmentToken, get("ENROLLMENT_TOKEN")),
+		TokenPath:              firstNonEmpty(get("TOKEN_PATH"), DefaultTokenPath),
+		PrivateKeyPath:         firstNonEmpty(get("PRIVATE_KEY_PATH"), DefaultPrivateKeyPath),
+		AgentIDPath:            firstNonEmpty(get("AGENT_ID_PATH"), DefaultAgentIDPath),
+		HostRoot:               firstNonEmpty(o.HostRoot, get("HOST_ROOT"), "/"),
+		StorageAccessKey:       get("STORAGE_ACCESS_KEY"),
+		StorageSecretKey:       get("STORAGE_SECRET_KEY"),
+		StorageEndpoint:        get("STORAGE_ENDPOINT"),
+		StorageRegion:          firstNonEmpty(get("STORAGE_REGION"), DefaultRegion),
+		StorageBucket:          get("STORAGE_BUCKET"),
+		StorageID:              get("STORAGE_ID"),
+		SiblingBuckets:         splitCSV(get("SIBLING_BUCKETS")),
+		HeartbeatIntervalSec:   segundosOu(get("HEARTBEAT_INTERVAL_SEC"), 60),
+		PollIntervalSec:        segundosOu(get("POLL_INTERVAL_SEC"), 60),
+		AutoUpdate:             get("ARKAME_AUTO_UPDATE"),
+		UploadConcurrency:      naoNegativo(get("UPLOAD_CONCURRENCY")),
+		RehashAll:              ligado(get("ARKAME_REHASH_ALL")),
+		RehashAllOnce:          o.RehashAll,
+		VerifyDays:             naoNegativo(get("ARKAME_VERIFY_DAYS")),
+		RestoreTestIntervalSec: naoNegativo(get("ARKAME_RESTORE_TEST_INTERVAL_SEC")),
 	}
 	modoDoEstado := strings.ToLower(strings.TrimSpace(get("ARKAME_STATE")))
 	switch dir := get("ARKAME_STATE_DIR"); {
