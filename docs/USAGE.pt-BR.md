@@ -181,6 +181,14 @@ do bucket, grava, relê, confere tamanho e SHA-256 e apaga. É a prova de que o 
   livre é pulado.
 - Não roda junto com backup nem com a limpeza de retenção, e dá a vez ao backup que chegar.
 - Objeto em classe fria (Glacier, Deep Archive) é pulado: o agente não pede reidratação.
+- Só reprova o teste a resposta definitiva do bucket: o objeto não existe mais, a chave do
+  servidor não tem permissão de leitura, ou o conteúdo baixado não é o do backup. Provedor fora
+  do ar, erro 5xx, limite de requisições, prazo e falha de rede são do momento: o arquivo é
+  pulado (`transient`) e entra numa rodada seguinte. Defeito do disco do próprio servidor
+  (a pasta não aceita escrita, o arquivo relido não é o que foi baixado) também só pula o
+  arquivo (`local_error`).
+- Um link simbólico (ou pasta de outro usuário) no caminho de `verificacao/` é recusado: o
+  agente não grava nem apaga nada através dele.
 - O download da amostra é tráfego de saída do seu bucket, por conta do seu provedor.
 - Sem estado local (`ARKAME_STATE_DIR=off`) o agente não faz o teste.
 

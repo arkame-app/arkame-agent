@@ -10,7 +10,7 @@ Contrato: itens 34–38 de `~/claude-plans/arkame-relevancia-2026-10-05/contrato
 - **Capacidade `verify_restore`** no heartbeat e no `/sessions/start`, quando há armazenamento
   configurado e pasta de estado (`podeVerificar`, `daemon/verificacao.go`).
 - **Laço novo `verifyLoop`** (8º do daemon): primeira pergunta 5 min depois do arranque, depois de
-  hora em hora; `GET …/verify-plan` (prazo de 5 min) e `POST …/verify-result`. Pega a trava do
+  hora em hora; `GET …/verify-plan` (prazo de 5 min, sem a trava do bucket) e `POST …/verify-result`. Para executar, pega a trava do
   bucket sem esperar (`exclusaoDoBucket.verificacao`, atividade `verify`): ocupada → nem pergunta
   e tenta em 1 min. O backup que chega no meio não espera a amostra: a rodada encerra no item em
   curso e o resto vai como `skipped: busy`. Painel sem a rota (404): pergunta de novo em 24 h, uma
@@ -29,6 +29,23 @@ Contrato: itens 34–38 de `~/claude-plans/arkame-relevancia-2026-10-05/contrato
 - **Estado local:** versão reprovada por `not_found`, `hash_mismatch` ou `size_mismatch` sai do
   estado — o backup seguinte lê o arquivo e o envia de novo.
 - Serviço parando no meio: sem relato (o painel reentrega a rodada).
+- **Depois da revisão independente (13/10):**
+  - Erro que não é resposta definitiva do bucket (5xx, 408, 429, prazo, rede, DNS) vira
+    `skipped: transient` — não reprova a rodada nem gera e-mail. `failed` só para 404
+    (`not_found`), 403 (`access_denied`), outro 4xx definitivo (`download_error`) e divergência
+    do que veio do bucket (`hash_mismatch`, `size_mismatch`).
+  - `restore.Run` devolveu ok e a releitura do disco diverge: `skipped: local_error` (disco
+    local), nunca `hash_mismatch` — esse marcaria uma versão boa como indisponível.
+  - A pergunta ao painel (`GET verify-plan`) não segura mais a trava do bucket. Se o bucket é
+    ocupado entre a resposta e a execução, o plano fica pendente em memória e é tentado a cada
+    minuto, por até 6 h, sem nova pergunta (`planoPendente`); vencido, é descartado.
+  - O cancelamento do contexto (serviço parando, prazo da rodada) corta o download em curso.
+  - A pasta da rodada é conferida nível a nível com `Lstat` também na abertura, antes e depois
+    de criada (`nivelConfiavel`): link ou pasta de outro dono em qualquer nível → nada é apagado
+    nem gravado ali, e os itens vão como `local_error`.
+  - `detail` sai em até 200 bytes, sem NUL nem controle. Relato acima de 900 KiB vai sem
+    `detail`; 413 (ou outro 4xx do corpo) → um reenvio sem `detail`; 404, 409 e 410 (rodada que
+    o painel não aceita mais) → uma linha de log, sem reenvio.
 - `ARKAME_RESTORE_TEST_INTERVAL_SEC` encurta o intervalo da pergunta (padrão: de hora em hora, a
   primeira 5 min depois do arranque); não encurta a espera de 24 h do painel sem a rota. É para o
   laço de ponta a ponta do painel e para diagnóstico.
