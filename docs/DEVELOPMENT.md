@@ -6,7 +6,7 @@
 
 ## Status
 
-**Status:** funcional. Enrollment (Ed25519 + bearer JWT), daemon com 7 loops (heartbeat com renovação do token, atualização do próprio programa, probe, planos/backup, restauração, explorador de pastas, expurgo de retenção), sync engine (walker + hash + dedup HeadObject + multipart upload), restore com escrita atômica + verify, e warming de cold storage estão implementados. Build limpo (`go vet ./...`). Resta hardening (mTLS, snapshots, observabilidade) — ver "O que falta".
+**Status:** funcional. Enrollment (Ed25519 + bearer JWT), daemon com 8 loops (heartbeat com renovação do token, atualização do próprio programa, probe, planos/backup, restauração, explorador de pastas, expurgo de retenção, teste de restauração por amostra), sync engine (walker + hash + dedup HeadObject + multipart upload), restore com escrita atômica + verify, e warming de cold storage estão implementados. Build limpo (`go vet ./...`). Resta hardening (mTLS, snapshots, observabilidade) — ver "O que falta".
 
 ## Arquitetura
 
@@ -49,9 +49,10 @@ arkame-agent/
 │   ├── hooks/                  # comandos de antes/depois do backup (ex.: pg_dump)
 │   ├── restore/                # executor de restauração (escrita atômica, sha256, cold storage)
 │   ├── purge/                  # expurgo de versões autorizado pelo painel (retenção)
+│   ├── verificacao/            # teste de restauração por amostra: restaura, confere e apaga
 │   ├── fsbrowse/               # listagem de pastas para o explorador do painel
 │   ├── scheduler/              # janelas de tempo + decisão de "should run agora"
-│   ├── daemon/                 # loops do serviço (heartbeat, probe, planos, restauração, pastas, expurgo)
+│   ├── daemon/                 # loops do serviço (heartbeat, probe, planos, restauração, pastas, expurgo, verificação)
 │   ├── service/                # install como systemd/launchd/Windows Service
 │   ├── aplicativos/            # entrada em "Aplicativos instalados" do Windows e remoção do programa
 │   └── logarquivo/             # log em arquivo com rodízio (serviço do Windows)

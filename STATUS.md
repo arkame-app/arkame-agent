@@ -4,6 +4,36 @@
 
 > Trabalho ativo principal está no painel (`~/hugo-projects/arkame/`). Para o status global do produto, ver `~/hugo-projects/arkame/STATUS.md`.
 
+## 🧪 Teste de restauração por amostra (2026-10-13, sprint S8 — branch `feat/s8-restauracao-comprovada`, não lançado)
+
+Contrato: itens 34–38 de `~/claude-plans/arkame-relevancia-2026-10-05/contrato-indice-em-lotes.md`.
+- **Capacidade `verify_restore`** no heartbeat e no `/sessions/start`, quando há armazenamento
+  configurado e pasta de estado (`podeVerificar`, `daemon/verificacao.go`).
+- **Laço novo `verifyLoop`** (8º do daemon): primeira pergunta 5 min depois do arranque, depois de
+  hora em hora; `GET …/verify-plan` (prazo de 5 min) e `POST …/verify-result`. Pega a trava do
+  bucket sem esperar (`exclusaoDoBucket.verificacao`, atividade `verify`): ocupada → nem pergunta
+  e tenta em 1 min. O backup que chega no meio não espera a amostra: a rodada encerra no item em
+  curso e o resto vai como `skipped: busy`. Painel sem a rota (404): pergunta de novo em 24 h, uma
+  linha de log por processo.
+- **`internal/verificacao`**: para cada item, `HeadObject` com versão (404 → `not_found`; Glacier,
+  Deep Archive ou `ArchiveStatus` → `skipped: cold`; tamanho diferente → `size_mismatch` sem
+  baixar), 5% do espaço livre por item (`no_space`), teto de bytes (`over_budget`), e então o
+  executor real (`restore.Run`, com `SemReidratar`: nenhum `RestoreObject` sai). O arquivo gravado é
+  relido do disco, conferido (tamanho + SHA-256, que vai no relato) e apagado. O nome no disco é
+  `item-NNNN`, nunca a chave; `run_id` que não é UUID é recusado. Tetos do agente: 1.000 itens,
+  16 GiB, prazo entre 60 s e 6 h.
+- **Pasta:** `<pasta do estado>/verificacao/<agente>_<armazenamento>/<run_id>/`, criada com
+  `segredo.PastaPrivada`; fora do backup (dentro da pasta do estado, e pelo nome em
+  `pastasForaDoBackup`); apagada no fim da rodada e, a deste agente + armazenamento, no arranque.
+  O `uninstall` apaga as deste agente.
+- **Estado local:** versão reprovada por `not_found`, `hash_mismatch` ou `size_mismatch` sai do
+  estado — o backup seguinte lê o arquivo e o envia de novo.
+- Serviço parando no meio: sem relato (o painel reentrega a rodada).
+- Provas: `go test ./internal/verificacao ./internal/restore ./internal/daemon` (41 defeitos
+  plantados, 41 pegos por asserção). **Não verificado:** contra S3 de verdade (só o bucket falso),
+  Glacier real, Windows e macOS em execução (só compilação e `go vet`), download multipart
+  (≥ 100 MB) na verificação.
+
 ## 🧭 Instalação em um comando, com a chave testada (2026-09-27, v0.3.0)
 
 Um Windows real instalou com a chave do bucket errada e nada avisou; e a instalação pedia dois

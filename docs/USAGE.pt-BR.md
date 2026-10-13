@@ -168,6 +168,22 @@ chave já testados, só são gravados com ela, e o serviço só é instalado
 depois, com o token no disco. Não há `--wait=false` — o enrollment deixado sem
 espera não teria quem o concluísse.
 
+### Teste de restauração por amostra
+
+De tempos em tempos (o padrão do painel é uma vez por semana, por armazenamento) o painel
+escolhe uma amostra de arquivos do backup e o agente os restaura de verdade — baixa a versão
+do bucket, grava, relê, confere tamanho e SHA-256 e apaga. É a prova de que o backup restaura.
+
+- Os arquivos vão para `verificacao/` dentro da pasta do estado local (no Linux,
+  `/var/lib/arkame/estado/verificacao/`), que só o administrador lê, nunca entra no backup e é
+  esvaziada ao fim de cada rodada e ao iniciar o serviço. Cada arquivo é apagado logo depois de
+  conferido: o pico de disco é o maior arquivo da amostra, e um arquivo maior que 5% do espaço
+  livre é pulado.
+- Não roda junto com backup nem com a limpeza de retenção, e dá a vez ao backup que chegar.
+- Objeto em classe fria (Glacier, Deep Archive) é pulado: o agente não pede reidratação.
+- O download da amostra é tráfego de saída do seu bucket, por conta do seu provedor.
+- Sem estado local (`ARKAME_STATE_DIR=off`) o agente não faz o teste.
+
 ### Atualização do agente
 
 O agente se atualiza sozinho quando o painel manda: dentro da janela da
