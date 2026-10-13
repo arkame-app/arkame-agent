@@ -77,7 +77,16 @@ type Options struct {
 	// do agente e a da configuração dele (ver ErrDestinoProtegido). Caminhos
 	// como este processo os vê.
 	Protegidas []string
+	// SemReidratar: o objeto em classe fria (InvalidObjectState) devolve
+	// ErrFrio em vez de pedir a reidratação. É o teste de restauração por
+	// amostra: ele não pode disparar um RestoreObject, que o provedor cobra,
+	// por conta própria.
+	SemReidratar bool
 }
+
+// ErrFrio: o objeto está em classe fria (Glacier, Deep Archive) e quem chamou
+// pediu para não reidratar (Options.SemReidratar). Nada foi pedido ao provedor.
+var ErrFrio = errors.New("objeto em classe fria; reidratação não pedida")
 
 // Run baixa um item do bucket e escreve no destino. Se o destino já tem o
 // item inteiro (mesmo tamanho e sha256 — um item refeito porque o resultado
@@ -176,6 +185,9 @@ func Run(ctx context.Context, opts Options, item api.RestoreItem) error {
 	if hashErr != nil {
 		var iose *s3types.InvalidObjectState
 		if errors.As(hashErr, &iose) {
+			if opts.SemReidratar {
+				return fmt.Errorf("%w: %s@%s", ErrFrio, item.SourceKey, item.SourceVersionID)
+			}
 			return handleColdStorage(ctx, opts.S3, item, iose)
 		}
 		return hashErr
@@ -693,4 +705,23 @@ func padraoTemporario(finalName string) string {
 		finalName = finalName[:corte]
 	}
 	return prefixo + finalName
+}
+
+// ObjetoSumiu identifica o erro de S3 de objeto ou versão que não existe —
+// o sinal para o painel marcar a versão como indisponível.
+func ObjetoSumiu(err error) bool {
+	if err == nil {
+		return false
+	}
+	var ae interface{ ErrorCode() string }
+	if errors.As(err, &ae) {
+		switch ae.ErrorCode() {
+		case "NoSuchKey", "NoSuchVersion", "NotFound":
+			return true
+		}
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "NoSuchKey") ||
+		strings.Contains(msg, "NoSuchVersion") ||
+		strings.Contains(msg, "status code: 404")
 }
