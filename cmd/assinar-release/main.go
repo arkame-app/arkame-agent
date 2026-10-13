@@ -153,6 +153,10 @@ func chavePrivada() (ed25519.PrivateKey, error) {
 	return ed25519.NewKeyFromSeed(seed), nil
 }
 
+// chavesEmbutidas são as chaves que os agentes desta árvore aceitam. É variável
+// para os testes, que assinam com chave gerada na hora, poderem dizer quais são.
+var chavesEmbutidas = atualizacao.ChavesConfiaveis
+
 func assinar(versao, arquivo, saida string) error {
 	v, err := atualizacao.LerVersao(versao)
 	if err != nil {
@@ -171,7 +175,7 @@ func assinar(versao, arquivo, saida string) error {
 	// árvore embute: assinar com uma chave que os agentes não conhecem
 	// publicaria um release que nenhum deles aceita.
 	publica := chave.Public().(ed25519.PublicKey)
-	if embutidas := atualizacao.ChavesConfiaveis(); len(embutidas) > 0 {
+	if embutidas := chavesEmbutidas(); len(embutidas) > 0 {
 		if err := atualizacao.VerificarAssinatura(embutidas, v, checksums, assinatura); err != nil {
 			return fmt.Errorf("a chave de %s (pública %s) não é nenhuma das embutidas em internal/atualizacao/chaves.go: os agentes recusariam este release",
 				envChavePrivada, base64.StdEncoding.EncodeToString(publica))

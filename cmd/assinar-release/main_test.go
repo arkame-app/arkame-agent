@@ -23,6 +23,7 @@ func TestAssinarEVerificarComoNaRelease(t *testing.T) {
 	}
 	t.Setenv(envChavePrivada, base64.StdEncoding.EncodeToString(priv.Seed()))
 	t.Setenv(envChavePublica, base64.StdEncoding.EncodeToString(pub))
+	embutir(t, pub)
 
 	arquivo := filepath.Join(t.TempDir(), "checksums.txt")
 	conteudo := []byte("abc  arkame-agent_linux_amd64\n")
@@ -108,6 +109,7 @@ func TestGerarGravaAPrivadaEmArquivoENaoAImprime(t *testing.T) {
 	// O arquivo gravado é o que o `assinar` lê do ambiente.
 	t.Setenv(envChavePrivada, string(conteudo))
 	t.Setenv(envChavePublica, publica)
+	embutir(t, ed25519.NewKeyFromSeed(seed).Public().(ed25519.PublicKey))
 	checksums := filepath.Join(t.TempDir(), "checksums.txt")
 	_ = os.WriteFile(checksums, []byte("abc  arkame-agent_linux_amd64\n"), 0o644)
 	if err := rodar([]string{"assinar", "0.5.0", checksums}); err != nil {
@@ -135,5 +137,47 @@ func TestGerarGravaAPrivadaEmArquivoENaoAImprime(t *testing.T) {
 	}
 	if s, err := saidaDoGerar([]string{"--saida", saida}); err != nil || s != saida {
 		t.Fatalf("--saida: %q %v", s, err)
+	}
+}
+
+// embutir faz de conta, pela duração do teste, que os agentes embutem só estas
+// chaves — a de produção (chaves.go) não tem privada disponível para teste.
+func embutir(t *testing.T, chaves ...ed25519.PublicKey) {
+	t.Helper()
+	antes := chavesEmbutidas
+	chavesEmbutidas = func() []ed25519.PublicKey { return chaves }
+	t.Cleanup(func() { chavesEmbutidas = antes })
+}
+
+// Assinar com uma chave que os agentes não embutem publicaria um release que
+// nenhum deles aceita: o `assinar` recusa e não grava a assinatura.
+func TestAssinarComChaveQueOsAgentesNaoEmbutemERecusado(t *testing.T) {
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outra, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(envChavePrivada, base64.StdEncoding.EncodeToString(priv.Seed()))
+	embutir(t, outra)
+
+	arquivo := filepath.Join(t.TempDir(), "checksums.txt")
+	if err := os.WriteFile(arquivo, []byte("abc  arkame-agent_linux_amd64\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := rodar([]string{"assinar", "v0.5.0", arquivo}); err == nil {
+		t.Fatal("assinou com chave que os agentes não embutem")
+	}
+	if _, err := os.Stat(arquivo + ".ed25519"); err == nil {
+		t.Fatal("gravou a assinatura recusada")
+	}
+}
+
+// A chave embutida de verdade vale: sem ela o agente não se atualiza sozinho.
+func TestAChaveDeProducaoEstaEmbutida(t *testing.T) {
+	if len(atualizacao.ChavesConfiaveis()) == 0 {
+		t.Fatal("nenhuma chave de release embutida")
 	}
 }
