@@ -29,10 +29,16 @@ Contrato: itens 34–38 de `~/claude-plans/arkame-relevancia-2026-10-05/contrato
 - **Estado local:** versão reprovada por `not_found`, `hash_mismatch` ou `size_mismatch` sai do
   estado — o backup seguinte lê o arquivo e o envia de novo.
 - Serviço parando no meio: sem relato (o painel reentrega a rodada).
-- Provas: `go test ./internal/verificacao ./internal/restore ./internal/daemon` (41 defeitos
-  plantados, 41 pegos por asserção). **Não verificado:** contra S3 de verdade (só o bucket falso),
-  Glacier real, Windows e macOS em execução (só compilação e `go vet`), download multipart
-  (≥ 100 MB) na verificação.
+- `ARKAME_RESTORE_TEST_INTERVAL_SEC` encurta o intervalo da pergunta (padrão: de hora em hora, a
+  primeira 5 min depois do arranque); não encurta a espera de 24 h do painel sem a rota. É para o
+  laço de ponta a ponta do painel e para diagnóstico.
+- Provas: `go test ./internal/verificacao ./internal/restore ./internal/daemon` (44 defeitos
+  plantados, 44 pegos por asserção). No laço de ponta a ponta do painel (`scripts/laco.sh`: este
+  agente, RustFS local, painel local): a amostra é restaurada e relatada, inclusive o arquivo de
+  105 MB (download multipart); com uma versão apagada direto no bucket a rodada seguinte aponta
+  o arquivo, e o backup seguinte o envia de novo. **Não verificado:** AWS, B2, Wasabi e OCI de
+  verdade, Glacier real, Windows e macOS em execução (só compilação e `go vet`), Docker com
+  `/host`.
 
 ## 🧭 Instalação em um comando, com a chave testada (2026-09-27, v0.3.0)
 
