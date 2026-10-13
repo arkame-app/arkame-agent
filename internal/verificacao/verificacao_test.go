@@ -17,6 +17,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/arkame-app/agent/internal/api"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -37,6 +38,10 @@ type objetoFalso struct {
 	// frioNoGet: o HEAD não diz a classe (OCI) e o GET responde InvalidObjectState.
 	frioNoGet  bool
 	headStatus int // status forçado do HEAD (403, 500…)
+	getStatus  int // status forçado do GET
+	// seguraCorpo: o GET manda o cabeçalho e metade do corpo e para, até o
+	// cliente desistir (ou o teste acabar).
+	seguraCorpo bool
 }
 
 // bucketFalso é um S3 de mentira: HEAD e GET por chave + versão, e conta o
@@ -49,6 +54,8 @@ type bucketFalso struct {
 	restores int
 	// aoGet roda no começo de cada GET, com a chave pedida.
 	aoGet func(chave string)
+	// fim solta os GET presos em seguraCorpo quando o teste acaba.
+	fim chan struct{}
 }
 
 func (b *bucketFalso) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -108,6 +115,20 @@ func (b *bucketFalso) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			erro(http.StatusNotFound, "NoSuchVersion")
 		case o.frioNoGet:
 			erro(http.StatusForbidden, "InvalidObjectState")
+		case o.getStatus != 0:
+			erro(o.getStatus, "Erro")
+		case o.seguraCorpo:
+			w.Header().Set("Content-Length", strconv.Itoa(len(o.conteudo)))
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(o.conteudo[:len(o.conteudo)/2])
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+			select {
+			case <-r.Context().Done():
+			case <-b.fim:
+			case <-time.After(8 * time.Second): // o cliente não desistiu: o teste acusa pela demora
+			}
 		default:
 			_, _ = w.Write(o.conteudo)
 		}
@@ -124,9 +145,10 @@ func (b *bucketFalso) contagem() (heads, gets, restores int) {
 
 func novoBucket(t *testing.T) (*bucketFalso, *s3.Client) {
 	t.Helper()
-	b := &bucketFalso{objetos: map[string]*objetoFalso{}}
+	b := &bucketFalso{objetos: map[string]*objetoFalso{}, fim: make(chan struct{})}
 	srv := httptest.NewServer(b)
 	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(b.fim) })
 	return b, s3.New(s3.Options{
 		Region: "us-east-1", BaseEndpoint: aws.String(srv.URL), UsePathStyle: true,
 		Credentials:                credentials.NewStaticCredentialsProvider("ak", "sk", ""),
@@ -529,23 +551,40 @@ func TestServicoParandoInterrompeARodada(t *testing.T) {
 	}
 }
 
-// Credencial recusada e erro do provedor são falha do item, cada um com o seu
-// código; pasta local sem escrita é item pulado (não é defeito do backup).
+// Só a resposta definitiva do bucket reprova o item: credencial recusada (403)
+// e pedido que repetir não muda (400). Erro do provedor (5xx), limite de
+// requisições e rede fora do ar são do momento: o item é pulado como
+// `transient`. Pasta local sem escrita também é item pulado (`local_error`).
 func TestClassificacaoDosErros(t *testing.T) {
 	b, s3c := novoBucket(t)
 	m := novaMesa(t)
 	disco(t, 1<<40)
 	negado := b.guardar(prefixo+"negado", []byte("x"))
 	quebrado := b.guardar(prefixo+"quebrado", []byte("y"))
+	recusado := b.guardar(prefixo+"recusado", []byte("w"))
+	lento := b.guardar(prefixo+"lento", []byte("v"))
+	caiuNoGet := b.guardar(prefixo+"caiu-no-get", []byte("u"))
+	recusadoNoGet := b.guardar(prefixo+"recusado-no-get", []byte("t"))
 	b.objeto(negado.Key).headStatus = http.StatusForbidden
 	b.objeto(quebrado.Key).headStatus = http.StatusInternalServerError
+	b.objeto(recusado.Key).headStatus = http.StatusBadRequest
+	b.objeto(lento.Key).headStatus = http.StatusTooManyRequests
+	b.objeto(caiuNoGet.Key).getStatus = http.StatusServiceUnavailable
+	b.objeto(recusadoNoGet.Key).getStatus = http.StatusBadRequest
 
-	res, _ := Rodar(context.Background(), m.opcoes(s3c), []api.VerifyItem{negado, quebrado})
+	res, _ := Rodar(context.Background(), m.opcoes(s3c), []api.VerifyItem{negado, quebrado, recusado, lento, caiuNoGet, recusadoNoGet})
 
 	conferir(t, res[0], StatusFalhou, ErroAcessoNegado)
-	conferir(t, res[1], StatusFalhou, ErroDeDownload)
+	conferir(t, res[1], StatusPulado, PuladoTransitorio)
+	conferir(t, res[2], StatusFalhou, ErroDeDownload)
+	conferir(t, res[3], StatusPulado, PuladoTransitorio)
+	conferir(t, res[4], StatusPulado, PuladoTransitorio)
+	conferir(t, res[5], StatusFalhou, ErroDeDownload)
 	if len(res[1].Detail) > maxDetalhe {
 		t.Fatalf("detalhe com %d bytes", len(res[1].Detail))
+	}
+	if sobrou := m.arquivos(t); len(sobrou) != 0 {
+		t.Fatalf("sobrou no disco: %v", sobrou)
 	}
 
 	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
@@ -599,5 +638,137 @@ func TestDestinoDoRun(t *testing.T) {
 		if raiz != c.raiz || destino != c.destino {
 			t.Errorf("destinoDoRun(%q, %q) = %q, %q; queria %q, %q", c.hostRoot, c.pasta, raiz, destino, c.raiz, c.destino)
 		}
+	}
+}
+
+// Bucket fora do alcance (conexão recusada, DNS, rede): nenhum item é
+// reprovado — todos vão como `transient`.
+func TestRedeForaDoArNaoReprova(t *testing.T) {
+	b, _ := novoBucket(t)
+	m := novaMesa(t)
+	disco(t, 1<<40)
+	it := b.guardar(prefixo+"a", []byte("a"))
+	morto := httptest.NewServer(http.NotFoundHandler())
+	url := morto.URL
+	morto.Close()
+	s3c := s3.New(s3.Options{
+		Region: "us-east-1", BaseEndpoint: aws.String(url), UsePathStyle: true,
+		Credentials: credentials.NewStaticCredentialsProvider("ak", "sk", ""),
+		Retryer:     aws.NopRetryer{},
+	})
+
+	res, interrompida := Rodar(context.Background(), m.opcoes(s3c), []api.VerifyItem{it})
+
+	if interrompida {
+		t.Fatal("rede fora do ar não é parada do serviço")
+	}
+	conferir(t, res[0], StatusPulado, PuladoTransitorio)
+}
+
+// O executor baixou e conferiu; o que ficou no disco é outra coisa. É defeito
+// do disco local (ou alguém mexeu na pasta), não do backup: `local_error`,
+// nunca `hash_mismatch` — esse marcaria a versão boa como indisponível.
+func TestDivergenciaNaReleituraEDoDiscoLocal(t *testing.T) {
+	for _, caso := range []struct {
+		nome    string
+		estraga func(arquivo string) error
+	}{
+		{"conteúdo trocado, mesmo tamanho", func(a string) error { return os.WriteFile(a, []byte("XXXXXXXX"), 0o600) }},
+		{"arquivo truncado", func(a string) error { return os.Truncate(a, 3) }},
+	} {
+		t.Run(caso.nome, func(t *testing.T) {
+			b, s3c := novoBucket(t)
+			m := novaMesa(t)
+			disco(t, 1<<40)
+			it := b.guardar(prefixo+"planilha.ods", []byte("conteudo"))
+			antes := aposRestaurar
+			aposRestaurar = func(arquivo string) {
+				if err := caso.estraga(arquivo); err != nil {
+					t.Errorf("estragando o arquivo: %v", err)
+				}
+			}
+			t.Cleanup(func() { aposRestaurar = antes })
+
+			res, _ := Rodar(context.Background(), m.opcoes(s3c), []api.VerifyItem{it})
+
+			conferir(t, res[0], StatusPulado, PuladoErroLocal)
+			if res[0].SHA256 != "" || res[0].Bytes != 0 {
+				t.Fatalf("item pulado não leva hash nem bytes: %+v", res[0])
+			}
+			if sobrou := m.arquivos(t); len(sobrou) != 0 {
+				t.Fatalf("sobrou no disco: %v", sobrou)
+			}
+		})
+	}
+}
+
+// O serviço parando no meio do download de um item grande: o cancelamento do
+// contexto corta o GetObject em curso — a rodada volta como interrompida em
+// instantes, sem esperar o corpo, e sem deixar arquivo.
+func TestParadaInterrompeODownloadEmCurso(t *testing.T) {
+	b, s3c := novoBucket(t)
+	m := novaMesa(t)
+	disco(t, 1<<40)
+	it := b.guardar(prefixo+"dump.sql", []byte(strings.Repeat("d", 1<<20)))
+	b.objeto(it.Key).seguraCorpo = true
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	b.aoGet = func(string) { time.AfterFunc(100*time.Millisecond, cancel) }
+
+	inicio := time.Now()
+	res, interrompida := Rodar(ctx, m.opcoes(s3c), []api.VerifyItem{it})
+
+	if !interrompida {
+		t.Fatalf("o download cortado pela parada tem de voltar como interrompido; veio %+v", res)
+	}
+	if d := time.Since(inicio); d > 5*time.Second {
+		t.Fatalf("a parada esperou o corpo do objeto: %v", d)
+	}
+	if sobrou := m.arquivos(t); len(sobrou) != 0 {
+		t.Fatalf("sobrou no disco: %v", sobrou)
+	}
+}
+
+// O prazo da rodada também corta o download em curso: o item vai como
+// `timeout` (não é falha do arquivo) e a rodada termina.
+func TestPrazoInterrompeODownloadEmCurso(t *testing.T) {
+	b, s3c := novoBucket(t)
+	m := novaMesa(t)
+	disco(t, 1<<40)
+	it := b.guardar(prefixo+"dump.sql", []byte(strings.Repeat("d", 1<<20)))
+	b.objeto(it.Key).seguraCorpo = true
+	o := m.opcoes(s3c)
+	o.Prazo = 300 * time.Millisecond
+
+	inicio := time.Now()
+	res, interrompida := Rodar(context.Background(), o, []api.VerifyItem{it})
+
+	if interrompida {
+		t.Fatal("prazo vencido não é parada do serviço")
+	}
+	conferir(t, res[0], StatusPulado, PuladoPrazo)
+	if d := time.Since(inicio); d > 5*time.Second {
+		t.Fatalf("o prazo não cortou o download: %v", d)
+	}
+}
+
+// O detalhe é a mensagem do SDK, que cita a chave: sai sem NUL nem controle,
+// em no máximo 200 bytes, sem partir caractere.
+func TestDetalheSaneado(t *testing.T) {
+	sujo := "erro\x00na chave\nlinha\tdois\x1b[31m " + strings.Repeat("ção", 200) + string([]byte{0xff, 0xfe})
+	limpo := cortar(sujo)
+	if len(limpo) > 200 {
+		t.Fatalf("detalhe com %d bytes; o teto é 200", len(limpo))
+	}
+	if !utf8.ValidString(limpo) {
+		t.Fatalf("detalhe com caractere partido: %q", limpo)
+	}
+	for _, r := range limpo {
+		if r < 0x20 || r == 0x7f {
+			t.Fatalf("detalhe com byte de controle %#x: %q", r, limpo)
+		}
+	}
+	if !strings.HasPrefix(limpo, "erro na chave linha dois") {
+		t.Fatalf("o texto legível tem de ficar: %q", limpo)
 	}
 }

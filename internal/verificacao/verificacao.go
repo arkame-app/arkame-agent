@@ -13,7 +13,12 @@
 //   - o nome do arquivo no disco é o índice do item (item-0007), nunca a chave
 //     do objeto: uma chave como `../../etc/passwd` não escolhe onde se grava;
 //   - item fora do prefixo do armazenamento, sem versão ou com sha256 que não
-//     é hex de 64 não é baixado;
+//     é hex de 64 não é baixado. O prefixo vem do próprio painel, junto com o
+//     plano: a conferência pega plano malformado, e NÃO é defesa contra um
+//     painel malicioso — o agente lê do bucket qualquer chave que o painel
+//     pedir. O que protege nesse caso é que os dados restaurados não saem da
+//     máquina (o relato leva só status, tamanho e hash) e que o nome no disco
+//     é neutro;
 //   - objeto em classe fria (Glacier, Deep Archive) é pulado, sem pedir a
 //     reidratação, que o provedor cobra;
 //   - o que cabe no disco é decidido aqui: o teto de bytes da rodada e 5% do
@@ -32,6 +37,7 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -61,16 +67,19 @@ const (
 	ErroAcessoNegado   = "access_denied"
 	ErroDeDownload     = "download_error"
 
-	PuladoFrio       = "cold"
-	PuladoSemEspaco  = "no_space"
-	PuladoAcimaTeto  = "over_budget"
-	PuladoOcupado    = "busy"
-	PuladoPrazo      = "timeout"
-	PuladoErroLocal  = "local_error"
-	PuladoInvalido   = "invalid_item"
-	maxDetalhe       = 300
-	fracaoDoLivre    = 20 // um item ocupa no máximo 1/20 (5%) do espaço livre
-	nomeDoItemPadrao = "item-%04d"
+	PuladoFrio      = "cold"
+	PuladoSemEspaco = "no_space"
+	PuladoAcimaTeto = "over_budget"
+	PuladoOcupado   = "busy"
+	PuladoPrazo     = "timeout"
+	PuladoErroLocal = "local_error"
+	PuladoInvalido  = "invalid_item"
+	// PuladoTransitorio: o bucket não deu resposta definitiva (5xx, prazo,
+	// rede, DNS). Não se pôde testar; não é defeito do backup.
+	PuladoTransitorio = "transient"
+	maxDetalhe        = 200
+	fracaoDoLivre     = 20 // um item ocupa no máximo 1/20 (5%) do espaço livre
+	nomeDoItemPadrao  = "item-%04d"
 )
 
 // Tetos próprios do agente, valham o que valerem os do painel.
@@ -99,6 +108,8 @@ type Opcoes struct {
 	// MaxBytes é o teto somado dos itens baixados; Prazo, o da rodada inteira.
 	MaxBytes int64
 	Prazo    time.Duration
+	// RunID só entra no log.
+	RunID string
 	// Ceder, entre um item e outro, diz se a rodada deve parar para dar a vez
 	// (há backup esperando o bucket). nil: nunca cede.
 	Ceder func() bool
@@ -283,21 +294,27 @@ func conferirItem(ctx context.Context, o Opcoes, exec restore.Options, destino s
 	}
 
 	// O que vale é o que ficou no disco: relê o arquivo gravado.
+	aposRestaurar(arquivo)
 	tamanho, soma, err := reler(arquivo)
 	if err != nil {
 		pular(PuladoErroLocal, "relendo o item: "+err.Error())
 		return
 	}
-	if tamanho != it.Size {
-		falhar(ErroTamanhoDiverge, fmt.Sprintf("tamanho gravado=%d, no catálogo=%d", tamanho, it.Size))
-		return
-	}
-	if !strings.EqualFold(soma, it.SHA256) {
-		falhar(ErroHashDiverge, fmt.Sprintf("sha256 gravado=%s, no catálogo=%s", soma, it.SHA256))
+	// O executor já conferiu tamanho e sha256 do que veio do bucket. Se o que
+	// está no disco é outra coisa, o defeito é do disco local (ou alguém mexeu
+	// na pasta): não se acusa o backup por isso.
+	if tamanho != it.Size || !strings.EqualFold(soma, it.SHA256) {
+		slog.Warn("teste de restauração: o arquivo relido do disco não é o que foi baixado; item pulado (disco local)",
+			"run_id", o.RunID, "indice", i)
+		pular(PuladoErroLocal, "o arquivo relido do disco difere do que foi baixado e conferido")
 		return
 	}
 	r.Status, r.Bytes, r.SHA256 = StatusOK, tamanho, soma
 }
+
+// aposRestaurar é o ponto, entre a gravação e a releitura, em que o teste
+// estraga o arquivo como faria um disco com defeito.
+var aposRestaurar = func(string) {}
 
 // itemInvalido devolve por que o item não é baixado ("" quando serve).
 func itemInvalido(o Opcoes, it api.VerifyItem) string {
@@ -336,6 +353,13 @@ func frio(h *s3.HeadObjectOutput) bool {
 
 // classificarErroDeS3 leva o erro de uma chamada à S3 ao código do contrato.
 // falha=false: o item é pulado (não se pôde testar), não falho.
+//
+// Só reprova o backup a resposta definitiva do bucket: a versão não existe
+// (404), a chave do servidor não lê (403), ou outro 4xx que repetir não muda
+// (download_error). 5xx, limite de requisições, prazo, rede e DNS são do
+// momento: o item vai como pulado (transient) e a rodada seguinte o testa —
+// um provedor fora do ar por dez minutos não pode virar "teste de restauração
+// falhou" na caixa do cliente.
 func classificarErroDeS3(err error) (codigo string, falha bool) {
 	switch {
 	case restore.ObjetoSumiu(err):
@@ -343,27 +367,31 @@ func classificarErroDeS3(err error) (codigo string, falha bool) {
 	case acessoNegado(err):
 		return ErroAcessoNegado, true
 	}
-	return ErroDeDownload, true
+	var re interface{ HTTPStatusCode() int }
+	if errors.As(err, &re) {
+		st := re.HTTPStatusCode()
+		if st >= 400 && st < 500 && st != http.StatusRequestTimeout && st != http.StatusTooManyRequests {
+			return ErroDeDownload, true
+		}
+	}
+	return PuladoTransitorio, false
 }
 
-// classificarErroDoRun separa o que é do bucket ou da rede (falha do item) do
-// que é do disco local (o item é pulado: não é defeito do backup).
+// classificarErroDoRun separa o que é do bucket ou da rede (classificarErroDeS3)
+// do que é do disco local (o item é pulado: não é defeito do backup).
 func classificarErroDoRun(err error) (codigo string, falha bool) {
-	if restore.ObjetoSumiu(err) {
-		return ErroNaoEncontrado, true
-	}
-	if acessoNegado(err) {
-		return ErroAcessoNegado, true
+	if restore.ObjetoSumiu(err) || acessoNegado(err) {
+		return classificarErroDeS3(err)
 	}
 	var deApi smithy.APIError
 	var deCaminho *fs.PathError
 	msg := err.Error()
 	switch {
 	case errors.As(err, &deApi), strings.HasPrefix(msg, "s3 "):
-		return ErroDeDownload, true
+		return classificarErroDeS3(err)
 	case strings.HasPrefix(msg, "write tmp") && !errors.As(err, &deCaminho):
 		// A cópia parou na leitura do corpo (rede), não na gravação.
-		return ErroDeDownload, true
+		return PuladoTransitorio, false
 	}
 	return PuladoErroLocal, false
 }
@@ -423,8 +451,17 @@ func destinoDoRun(hostRoot, pasta string) (raiz, destino string) {
 	return "/", pasta
 }
 
-// cortar limita o detalhe a maxDetalhe bytes, sem partir um caractere.
+// cortar limita o detalhe a maxDetalhe bytes, sem partir um caractere, e troca
+// por espaço o que não é texto de uma linha (NUL, controles, UTF-8 inválido):
+// o detalhe é a mensagem do SDK, que cita a chave do objeto — e uma chave pode
+// trazer qualquer byte. O painel grava isso em jsonb, que recusa \u0000.
 func cortar(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if r == utf8.RuneError || r < 0x20 || r == 0x7f || (r >= 0x80 && r < 0xa0) {
+			return ' '
+		}
+		return r
+	}, strings.ToValidUTF8(s, " "))
 	if len(s) <= maxDetalhe {
 		return s
 	}
