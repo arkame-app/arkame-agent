@@ -129,6 +129,11 @@ func newUninstallCmd() *cobra.Command {
 			// O estado é derivável e não tem segredo: o que não sair não
 			// desfaz a desinstalação, mas é dito.
 			semVizinhos := completo && len(outros) == 0 && len(service.OutrosAgentes(serviceName)) == 0
+			// O que um teste de restauração interrompido deste agente deixou:
+			// arquivos do servidor restaurados, na pasta do estado.
+			for _, v := range daemon.PastasDeVerificacao(cfg, pastasDoEstado) {
+				_ = os.RemoveAll(v)
+			}
 			if saiu, ficou := removerEstado(estados, pastasDoEstado, semVizinhos); len(saiu) > 0 || len(ficou) > 0 {
 				if len(saiu) > 0 {
 					fmt.Fprintln(os.Stderr, "  ✓ Estado local do backup removido:", strings.Join(saiu, ", "))
@@ -298,6 +303,9 @@ func removerEstado(arquivos, pastas []string, semVizinhos bool) (saiu, ficou []s
 		saiu = append(saiu, p)
 	}
 	for _, dir := range pastas {
+		// A pasta do teste de restauração só sai se ficou vazia (a de outro
+		// agente da máquina fica).
+		_ = os.Remove(filepath.Join(dir, "verificacao"))
 		if semVizinhos {
 			restos, _ := filepath.Glob(filepath.Join(dir, "indice-*.lotes"))
 			for _, r := range restos {
