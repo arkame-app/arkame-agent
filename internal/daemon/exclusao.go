@@ -52,6 +52,9 @@ type exclusaoDoBucket struct {
 	// esperando conta os backups parados no Lock: o teste de restauração olha
 	// entre um item e outro e dá a vez (backupEsperando).
 	esperando atomic.Int32
+	// pendente é o plano de teste de restauração que o painel já entregou e
+	// ainda não pôde rodar porque o bucket ficou ocupado (planoPendente).
+	pendente planoPendente
 }
 
 const (
@@ -95,6 +98,15 @@ func (e *exclusaoDoBucket) verificacao(fn func()) bool {
 	defer e.mu.Unlock()
 	e.quem.Store(atividadeVerificacao)
 	fn()
+	return true
+}
+
+// livre diz se o bucket está desocupado agora — sem segurar a trava.
+func (e *exclusaoDoBucket) livre() bool {
+	if !e.mu.TryLock() {
+		return false
+	}
+	e.mu.Unlock()
 	return true
 }
 
