@@ -74,9 +74,13 @@ func pastasDoEstado(cfg *config.Config) []string {
 func pastasForaDoBackup(cfg *config.Config) []string {
 	var out []string
 	for _, p := range pastasDoEstado(cfg) {
-		out = append(out, p)
-		if real, err := filepath.EvalSymlinks(p); err == nil && real != p {
-			out = append(out, real)
+		// A pasta do teste de restauração fica dentro da do estado e já sai
+		// com ela; vai também pelo nome, para não depender disso.
+		for _, q := range []string{p, filepath.Join(p, pastaDaVerificacao)} {
+			out = append(out, q)
+			if real, err := filepath.EvalSymlinks(q); err == nil && real != q {
+				out = append(out, real)
+			}
 		}
 	}
 	return out

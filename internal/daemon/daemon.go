@@ -82,13 +82,14 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	capacidadesDeclaradas.Store(atl.capacidades())
 
 	var wg sync.WaitGroup
-	wg.Add(8)
+	wg.Add(9)
 	go func() { defer wg.Done(); heartbeatLoop(ctx, client, cfg, svc, atl) }()
 	go func() { defer wg.Done(); probeLoop(ctx, client, s3Client, cfg) }()
 	go func() { defer wg.Done(); planLoop(ctx, client, s3Client, cfg, trava) }()
 	go func() { defer wg.Done(); restoreLoop(ctx, client, s3Client, cfg, oc) }()
 	go func() { defer wg.Done(); fsBrowseLoop(ctx, client, cfg) }()
 	go func() { defer wg.Done(); purgeLoop(ctx, client, s3Client, cfg, trava) }()
+	go func() { defer wg.Done(); verifyLoop(ctx, client, s3Client, cfg, trava) }()
 	go func() { defer wg.Done(); atl.laco(ctx) }()
 	go func() { defer wg.Done(); atl.vigiarProva(ctx) }()
 
@@ -1237,22 +1238,7 @@ func processarFilaDeRestoreCom(ctx context.Context, c *api.Client, s3c *s3.Clien
 
 // isObjectGone identifica erros S3 de objeto/versão inexistente — sinal pro
 // painel reconciliar o índice (marcar a versão como indisponível).
-func isObjectGone(err error) bool {
-	if err == nil {
-		return false
-	}
-	var ae interface{ ErrorCode() string }
-	if errors.As(err, &ae) {
-		switch ae.ErrorCode() {
-		case "NoSuchKey", "NoSuchVersion", "NotFound":
-			return true
-		}
-	}
-	msg := err.Error()
-	return strings.Contains(msg, "NoSuchKey") ||
-		strings.Contains(msg, "NoSuchVersion") ||
-		strings.Contains(msg, "status code: 404")
-}
+func isObjectGone(err error) bool { return restore.ObjetoSumiu(err) }
 
 // fsBrowseLoop atende o explorador de pastas do wizard de plano no painel:
 // long-poll em GET /fs-requests (o servidor segura a conexão até ~25s; 204 =

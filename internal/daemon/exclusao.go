@@ -29,6 +29,8 @@ import (
 //   - O backup espera (Lock). A limpeza em curso é curta e limitada — o painel
 //     emite no máximo uma rodada por dia, com teto de versões — e o backup
 //     agendado não pode ser pulado.
+//   - O teste de restauração por amostra não espera (TryLock) e dá a vez ao
+//     backup que chegar no meio dele (verificacao, backupEsperando).
 //   - A limpeza não espera (TryLock). Com backup em curso, ela nem pergunta ao
 //     painel — perguntar é o que emite a rodada, e o plano tem de ser montado
 //     com o bucket parado — e tenta de novo em reprovaDoExpurgo, não na hora
@@ -47,16 +49,23 @@ type exclusaoDoBucket struct {
 	// quem segura a trava agora (atividadeBackup ou atividadeExpurgo), para a
 	// atualização adiada dizer ao painel por quê.
 	quem atomic.Value
+	// esperando conta os backups parados no Lock: o teste de restauração olha
+	// entre um item e outro e dá a vez (backupEsperando).
+	esperando atomic.Int32
 }
 
 const (
 	atividadeBackup  = "backup"
 	atividadeExpurgo = "purge"
+	// atividadeVerificacao: o teste de restauração por amostra.
+	atividadeVerificacao = "verify"
 )
 
 // backup roda fn com o bucket só para ele, esperando a limpeza em curso.
 func (e *exclusaoDoBucket) backup(fn func() error) error {
+	e.esperando.Add(1)
 	e.mu.Lock()
+	e.esperando.Add(-1)
 	defer e.mu.Unlock()
 	e.quem.Store(atividadeBackup)
 	return fn()
@@ -73,6 +82,24 @@ func (e *exclusaoDoBucket) limpeza(fn func()) bool {
 	fn()
 	return true
 }
+
+// verificacao roda fn (o teste de restauração por amostra) se o bucket estiver
+// livre. Como a limpeza, não espera: devolve false, sem rodar fn, com backup
+// ou limpeza em curso. O backup que chegar durante o teste espera — pouco: o
+// teste vê que há backup esperando (backupEsperando) e encerra no item em que
+// está.
+func (e *exclusaoDoBucket) verificacao(fn func()) bool {
+	if !e.mu.TryLock() {
+		return false
+	}
+	defer e.mu.Unlock()
+	e.quem.Store(atividadeVerificacao)
+	fn()
+	return true
+}
+
+// backupEsperando diz se há backup parado à espera do bucket.
+func (e *exclusaoDoBucket) backupEsperando() bool { return e.esperando.Load() > 0 }
 
 // executarPlanoExclusivo é o executePlan com o bucket fechado para a limpeza
 // de retenção do começo ao fim da sessão (do /start ao /complete).

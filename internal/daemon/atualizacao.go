@@ -204,7 +204,15 @@ func novoAtualizador(cfg *config.Config, svc service.Detected, s3c *s3.Client, o
 // no JSON, ausente é agente antigo.
 func (a *atualizador) capacidades() []string {
 	caps := capacidadesDoIndice()
-	if a == nil || a.impedimento != "" {
+	if a == nil {
+		return caps
+	}
+	// O teste de restauração por amostra: só com armazenamento configurado e
+	// pasta de estado onde restaurar (podeVerificar).
+	if podeVerificar(a.cfg) {
+		caps = append(caps, api.CapacidadeVerificarRestauracao)
+	}
+	if a.impedimento != "" {
 		return caps
 	}
 	return append(caps, atualizacao.Capacidade)
