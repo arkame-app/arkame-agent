@@ -44,10 +44,40 @@ Contrato: itens 48–58 de `~/claude-plans/arkame-relevancia-2026-10-05/contrato
 - **`arkame-bancada inventario`**: semeia um S3 de verdade, mede o inventário contra um painel de
   verdade e limpa. O S3 falso da bancada ganhou marcador de exclusão, estado do versionamento,
   retenção de Object Lock, chaves codificadas e erro por status.
-- **Testes:** `internal/inventario` (24 testes) e `internal/daemon/inventario_test.go` (10). 27
+- **Testes:** `internal/inventario` (24 testes; 31 com os da revisão) e `internal/daemon/inventario_test.go` (10; 11 com o da revisão). 27
   defeitos plantados, 27 pegos por asserção (três testes foram reforçados no caminho: prazo durante
   a amostra, teto de requisições por janela e a pergunta com o bucket ocupado). `go test -race
   -count=1 ./...`: 22 pacotes ok. Laço de ponta a ponta do painel: 79 conferências.
+- **Revisão independente do S9 (14/10) — correções no agente** (contrato, itens 64–66):
+  - **Prazo por requisição (M2).** Listagem, `HeadObject` e leitura do versionamento do inventário
+    têm 60 s cada (`inventario.PrazoDaRequisicao`); estourou → rodada incompleta, `transient`, nada
+    afirmado. Antes, um provedor que aceitasse a conexão e não respondesse segurava a janela — e a
+    trava do bucket, com o backup esperando — até o prazo da rodada (até 6 h). O mesmo prazo foi
+    posto no `HeadObject` do teste de restauração (`verificacao`: item pulado como `transient`) e
+    no da conferência da versão atual da limpeza (`purge`: desbaste da chave recusado). O download
+    do corpo não tem esse prazo.
+  - **Vez do backup no meio da janela (M2).** `Opcoes.Ceder` (= `trava.backupEsperando`) é
+    perguntado entre uma requisição e outra da mesma janela, nas quatro fases (fusão, resto da
+    listagem, confirmações, amostra): com backup esperando, a janela acaba na requisição em curso.
+  - **Retomada da listagem a cada página do plano (B5).** Depois de buscar a página seguinte no
+    painel, a listagem recomeça da última entrada consumida. Um backup que rode nesse intervalo não
+    deixa mais a rodada com `unconfirmed` (ou `listing_inconsistent`). Custa uma listagem a mais por
+    página do plano: 300 mil versões passaram de 300 para 329 listagens (os dois testes que fixavam
+    a contagem foram atualizados para o número novo, exato).
+  - **`size_mismatch` confirmado por `HeadObject` (B6).** Como o faltante: só é relatado se o
+    `HeadObject` da versão também der outro tamanho (até 200 confirmações; desmentidas em maioria →
+    `listing_inconsistent`).
+  - **Testes:** `internal/inventario/revisao_test.go` (7), mais um em `daemon`, `purge` e
+    `verificacao`. 21 defeitos plantados, 20 pegos por asserção; o que passou é equivalente no
+    ponto em que é usado (retomar a listagem só com a chave, sem a versão, no marcador: na retomada
+    todas as versões da última chave consumida já foram vistas). Um teste novo estava verde pelo
+    motivo errado e foi consertado antes de valer: a primeira listagem do S3 falso recém-semeado
+    leva ~0,4 s e estourava sozinha o prazo curto do teste — o defeito plantado ("HEAD sem prazo")
+    passava.
+  - **Não verificado:** o prazo de 60 s contra provedor de verdade lento (só S3 falso); o
+    comportamento do marcador de chave + versão na retomada em AWS, B2, Wasabi, R2, OCI e GCS (é o
+    mesmo par que o provedor devolve como `NextKeyMarker`/`NextVersionIdMarker`; se um provedor
+    repetir entradas, elas são contadas a mais em `bucket_versions`, e nunca viram faltante).
 - **Não feito / não verificado:**
   - `used_bytes` na mesma passada: o inventário lista só o prefixo DESTE servidor, e o `used_bytes`
     da sondagem é do bucket inteiro (outros servidores dividem o bucket) — não dá para trocar um
