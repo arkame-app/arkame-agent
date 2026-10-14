@@ -464,6 +464,21 @@ func TestTravaPorJanelaESemSegurarDuranteOPainel(t *testing.T) {
 	if janelas.Load() < 5 {
 		t.Fatalf("45 listagens têm de se dividir em várias janelas, vieram %d", janelas.Load())
 	}
+
+	// O plano só cita o fim do prefixo: até chegar lá são 45 listagens de
+	// objetos a mais, que não cabem numa janela só.
+	janelas.Store(0)
+	maiorJanela.Store(0)
+	doFim, semMais := paginas(itens[len(itens)-100:], 10_000)
+	o.Proxima, o.Amostra = semMais, 0
+	r, _ = Rodar(context.Background(), o, doFim)
+	exigirCompleto(t, r)
+	if r.Found != 100 || r.ExtraVersions != 44_900 {
+		t.Fatalf("found=%d a mais=%d", r.Found, r.ExtraVersions)
+	}
+	if maiorJanela.Load() > requisicoesPorJanela || janelas.Load() < 3 {
+		t.Fatalf("atravessar 45 mil objetos a mais tem de soltar a trava no caminho: maior janela=%d requisições, %d janelas", maiorJanela.Load(), janelas.Load())
+	}
 }
 
 func TestTravaOcupadaAteOPrazo(t *testing.T) {
@@ -501,6 +516,29 @@ func TestPrazoDaRodada(t *testing.T) {
 	r := rodar(t, b, itens, 1000, func(o *Opcoes) { o.Prazo = 100 * time.Millisecond })
 	if r.Complete || r.Interrupted != Prazo || len(r.Missing) != 0 {
 		t.Fatalf("passou do prazo: esperava deadline, veio complete=%v %q", r.Complete, r.Interrupted)
+	}
+}
+
+// O prazo que vence depois de os faltantes já estarem confirmados (durante a
+// amostra) ainda deixa a rodada incompleta — e incompleta não leva faltante.
+func TestPrazoDuranteAAmostraNaoLevaFaltantes(t *testing.T) {
+	f, b := novoBucket(t)
+	semear(f, 200, 1, arq)
+	itens := catalogo(f)
+	f.ApagarVersao(itens[10].Key, itens[10].VersionID)
+	var heads atomic.Int32
+	f.Antes(func(op string, _ *http.Request) {
+		// O primeiro HEAD é a confirmação do faltante; os da amostra demoram.
+		if op == "HeadObjectVersion" && heads.Add(1) > 1 {
+			time.Sleep(60 * time.Millisecond)
+		}
+	})
+	r := rodar(t, b, itens, 1000, func(o *Opcoes) { o.Prazo, o.Amostra = 250*time.Millisecond, 50 })
+	if r.Complete || r.Interrupted != Prazo {
+		t.Fatalf("esperava a rodada cortada pelo prazo durante a amostra: complete=%v %q (%d HEAD)", r.Complete, r.Interrupted, heads.Load())
+	}
+	if len(r.Missing) != 0 || r.MissingTotal != 0 || len(r.Sample.Items) != 0 {
+		t.Fatalf("rodada incompleta não leva faltante, nem o já confirmado: %+v total=%d amostra=%d", r.Missing, r.MissingTotal, len(r.Sample.Items))
 	}
 }
 

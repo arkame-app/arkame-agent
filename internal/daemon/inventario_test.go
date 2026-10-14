@@ -166,7 +166,11 @@ func TestInventarioNaoPerguntaComBucketOcupado(t *testing.T) {
 	p := m.servirInventario(m.catalogoParaInventario(), 100, nil, nil)
 	trava := &exclusaoDoBucket{}
 	trava.mu.Lock()
-	proxima := rodadaDeInventario(context.Background(), m.c, m.s3c, m.cfg, trava)
+	// Com prazo: se o inventário perguntasse e ficasse esperando a vez, o teste
+	// acusaria pela pergunta, não por travar.
+	ctx, cancelar := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancelar()
+	proxima := rodadaDeInventario(ctx, m.c, m.s3c, m.cfg, trava)
 	trava.mu.Unlock()
 	if proxima != reprovaDaVerificacao {
 		t.Fatalf("com o bucket ocupado tenta de novo em %v; veio %v", reprovaDaVerificacao, proxima)
