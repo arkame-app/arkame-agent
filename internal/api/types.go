@@ -553,3 +553,122 @@ type VerifyResultResponse struct {
 	MarkedUnavailable int    `json:"marked_unavailable"`
 	Duplicate         bool   `json:"duplicate,omitempty"`
 }
+
+// --- Inventário do bucket (contrato, itens 48 a 52) ---
+
+// CapacidadeInventariarBucket: o agente sabe conferir o catálogo que o painel
+// entrega em páginas contra a listagem do bucket. Só quem a declara recebe
+// plano de inventário.
+const CapacidadeInventariarBucket = "bucket_inventory"
+
+// InventoryItem é uma versão que o catálogo do painel diz existir.
+type InventoryItem struct {
+	Key       string `json:"key"`
+	VersionID string `json:"version_id"`
+	Size      int64  `json:"size"`
+	// Unavailable: o painel já tem a versão por indisponível. Se ela estiver
+	// no bucket com o tamanho certo, vai em found_again (e a marca é desfeita);
+	// se continuar ausente, não é relatada de novo.
+	Unavailable bool `json:"unavailable,omitempty"`
+}
+
+// InventoryPlanResponse é a resposta de GET /api/agents/{id}/inventory-plan:
+// uma página do plano. RunID vazio = nada a fazer. Next vazio = última página.
+type InventoryPlanResponse struct {
+	RunID           string          `json:"run_id"`
+	StorageID       string          `json:"storage_id"`
+	Bucket          string          `json:"bucket"`
+	PrefixRoot      string          `json:"prefix_root"`
+	Prefix          string          `json:"prefix"`
+	Page            int             `json:"page"`
+	DeadlineSeconds int64           `json:"deadline_seconds"`
+	SampleSize      int             `json:"sample_size"`
+	Items           []InventoryItem `json:"items"`
+	Next            string          `json:"next"`
+}
+
+// InventoryVersion aponta uma versão num relato de inventário.
+type InventoryVersion struct {
+	Key       string `json:"key"`
+	VersionID string `json:"version_id"`
+}
+
+// InventorySize é uma versão que está no bucket com tamanho diferente do
+// catálogo; Size é o do bucket.
+type InventorySize struct {
+	Key       string `json:"key"`
+	VersionID string `json:"version_id"`
+	Size      int64  `json:"size"`
+}
+
+// InventoryKey é uma chave com versão catalogada presente e marcador de
+// exclusão por cima.
+type InventoryKey struct {
+	Key string `json:"key"`
+}
+
+// InventorySampleItem é o que o HeadObject de um objeto da amostra respondeu.
+// Quem compara com o catálogo e com a política de Object Lock é o painel.
+type InventorySampleItem struct {
+	Key          string     `json:"key"`
+	VersionID    string     `json:"version_id"`
+	SHA256       string     `json:"sha256,omitempty"` // o metadado do objeto
+	LockMode     string     `json:"lock_mode,omitempty"`
+	RetainUntil  *time.Time `json:"retain_until,omitempty"`
+	LastModified *time.Time `json:"last_modified,omitempty"`
+}
+
+// InventorySample é a amostra de HeadObject da rodada.
+type InventorySample struct {
+	Checked int                   `json:"checked"`
+	Errors  int                   `json:"errors"`
+	Items   []InventorySampleItem `json:"items,omitempty"`
+}
+
+// InventoryResult é o corpo de POST /api/agents/{id}/inventory-result.
+//
+// Complete só é verdade quando o prefixo foi listado até o fim e o plano foi
+// consumido até a última página; senão Interrupted diz por quê, e nenhuma
+// lista de faltantes vai junto. Truncated: uma lista que importa (missing,
+// size_mismatch, found_again) foi cortada para caber.
+type InventoryResult struct {
+	RunID       string    `json:"run_id"`
+	StartedAt   time.Time `json:"started_at"`
+	FinishedAt  time.Time `json:"finished_at"`
+	Complete    bool      `json:"complete"`
+	Interrupted string    `json:"interrupted,omitempty"`
+	Detail      string    `json:"detail,omitempty"`
+	Versioning  string    `json:"versioning,omitempty"`
+
+	PlanVersions   int64 `json:"plan_versions"`
+	Found          int64 `json:"found"`
+	FoundBytes     int64 `json:"found_bytes"`
+	BucketVersions int64 `json:"bucket_versions"`
+	BucketBytes    int64 `json:"bucket_bytes"`
+	ExtraVersions  int64 `json:"extra_versions"`
+	ListRequests   int64 `json:"list_requests"`
+	HeadRequests   int64 `json:"head_requests"`
+	Unconfirmed    int64 `json:"unconfirmed"`
+
+	Missing            []InventoryVersion `json:"missing,omitempty"`
+	MissingTotal       int64              `json:"missing_total"`
+	SizeMismatch       []InventorySize    `json:"size_mismatch,omitempty"`
+	SizeMismatchTotal  int64              `json:"size_mismatch_total"`
+	DeleteMarkers      []InventoryKey     `json:"delete_markers,omitempty"`
+	DeleteMarkersTotal int64              `json:"delete_markers_total"`
+	FoundAgain         []InventoryVersion `json:"found_again,omitempty"`
+	Sample             InventorySample    `json:"sample"`
+	Truncated          bool               `json:"truncated,omitempty"`
+}
+
+// InventoryResultResponse é o que o painel registrou da rodada.
+type InventoryResultResponse struct {
+	Status            string `json:"status"`
+	Reason            string `json:"reason,omitempty"`
+	Missing           int    `json:"missing"`
+	SizeMismatch      int    `json:"size_mismatch"`
+	Rejected          int    `json:"rejected"`
+	MarkedUnavailable int    `json:"marked_unavailable"`
+	Unmarked          int    `json:"unmarked"`
+	Duplicate         bool   `json:"duplicate,omitempty"`
+}

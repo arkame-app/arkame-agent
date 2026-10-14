@@ -471,3 +471,10 @@ func cortar(s string) string {
 	}
 	return s[:corte]
 }
+
+// ClassificarErroDeS3 é a régua do que é resposta definitiva do bucket e do
+// que é erro do momento, para quem mais precisa dela (o inventário do bucket):
+// uma régua só, para um provedor fora do ar não virar "falta" em lugar nenhum.
+func ClassificarErroDeS3(err error) (codigo string, definitivo bool) {
+	return classificarErroDeS3(err)
+}
