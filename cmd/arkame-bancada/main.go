@@ -37,7 +37,7 @@ func main() {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
-	raiz.AddCommand(cmdGerar(), cmdMutar(), cmdMedir())
+	raiz.AddCommand(cmdGerar(), cmdMutar(), cmdMedir(), cmdInventario())
 	if err := raiz.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "erro:", err)
 		os.Exit(1)
