@@ -212,6 +212,10 @@ func (a *atualizador) capacidades() []string {
 	if podeVerificar(a.cfg) {
 		caps = append(caps, api.CapacidadeVerificarRestauracao)
 	}
+	// O inventário do bucket: basta o armazenamento configurado (nada é gravado).
+	if podeInventariar(a.cfg) {
+		caps = append(caps, api.CapacidadeInventariarBucket)
+	}
 	if a.impedimento != "" {
 		return caps
 	}

@@ -82,7 +82,7 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	capacidadesDeclaradas.Store(atl.capacidades())
 
 	var wg sync.WaitGroup
-	wg.Add(9)
+	wg.Add(10)
 	go func() { defer wg.Done(); heartbeatLoop(ctx, client, cfg, svc, atl) }()
 	go func() { defer wg.Done(); probeLoop(ctx, client, s3Client, cfg) }()
 	go func() { defer wg.Done(); planLoop(ctx, client, s3Client, cfg, trava) }()
@@ -90,6 +90,7 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	go func() { defer wg.Done(); fsBrowseLoop(ctx, client, cfg) }()
 	go func() { defer wg.Done(); purgeLoop(ctx, client, s3Client, cfg, trava) }()
 	go func() { defer wg.Done(); verifyLoop(ctx, client, s3Client, cfg, trava) }()
+	go func() { defer wg.Done(); inventoryLoop(ctx, client, s3Client, cfg, trava) }()
 	go func() { defer wg.Done(); atl.laco(ctx) }()
 	go func() { defer wg.Done(); atl.vigiarProva(ctx) }()
 

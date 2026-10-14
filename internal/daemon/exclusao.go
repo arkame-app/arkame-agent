@@ -31,6 +31,9 @@ import (
 //     agendado não pode ser pulado.
 //   - O teste de restauração por amostra não espera (TryLock) e dá a vez ao
 //     backup que chegar no meio dele (verificacao, backupEsperando).
+//   - O inventário do bucket não espera (TryLock), pega a trava por janela de
+//     poucas requisições e a solta entre uma e outra (inventario, em
+//     inventario.go): só lê o bucket, e o backup que chegar passa na frente.
 //   - A limpeza não espera (TryLock). Com backup em curso, ela nem pergunta ao
 //     painel — perguntar é o que emite a rodada, e o plano tem de ser montado
 //     com o bucket parado — e tenta de novo em reprovaDoExpurgo, não na hora
