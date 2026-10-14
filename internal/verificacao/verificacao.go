@@ -205,6 +205,9 @@ func Rodar(ctx context.Context, o Opcoes, itens []api.VerifyItem) (resultados []
 	return resultados, false
 }
 
+// prazoDaConsulta é quanto um HeadObject pode levar (variável para os testes).
+var prazoDaConsulta = 60 * time.Second
+
 // conferirItem faz um item: valida, olha o objeto, confere espaço, restaura,
 // relê, confere e apaga. O arquivo do item nunca sobrevive à função.
 func conferirItem(ctx context.Context, o Opcoes, exec restore.Options, destino string, i int, it api.VerifyItem, somados *int64, r *api.VerifyResultItem) {
@@ -220,7 +223,13 @@ func conferirItem(ctx context.Context, o Opcoes, exec restore.Options, destino s
 		return
 	}
 
-	head, err := o.S3.HeadObject(ctx, &s3.HeadObjectInput{Bucket: &o.Bucket, Key: &it.Key, VersionId: &it.VersionID})
+	// A consulta tem prazo próprio: o provedor que aceita a conexão e não
+	// responde não segura a trava do bucket até o prazo da rodada. Estourou, o
+	// item é pulado como erro do momento. (O download do corpo não tem este
+	// prazo: arquivo grande demora.)
+	hctx, soltar := context.WithTimeout(ctx, prazoDaConsulta)
+	head, err := o.S3.HeadObject(hctx, &s3.HeadObjectInput{Bucket: &o.Bucket, Key: &it.Key, VersionId: &it.VersionID})
+	soltar()
 	if err != nil {
 		codigo, falha := classificarErroDeS3(err)
 		if falha {

@@ -19,7 +19,15 @@
 //     rede, DNS), permissão negada, listagem fora de ordem, página do plano
 //     que não veio: a rodada sai INCOMPLETA, sem lista de faltantes;
 //   - a trava do bucket é pedida por janela (Opcoes.Janela) e nunca fica
-//     segurada durante uma chamada ao painel (Opcoes.Proxima).
+//     segurada durante uma chamada ao painel (Opcoes.Proxima); cada requisição
+//     ao bucket tem prazo próprio (PrazoDaRequisicao — estourou, a rodada sai
+//     incompleta, "transient"), e entre uma requisição e outra da mesma janela
+//     o inventário vê se há backup esperando (Opcoes.Ceder) e solta a trava;
+//   - tamanho diferente só é relatado depois de um HeadObject daquela versão
+//     confirmar o tamanho — como o faltante, não se afirma pela listagem só;
+//   - depois de cada página do plano buscada no painel (sem a trava), a
+//     listagem é retomada a partir da última entrada consumida: o que um backup
+//     enviou e catalogou nesse intervalo aparece nas duas listas.
 //
 // O que cada achado quer dizer para a restauração (versão ausente, tamanho
 // diferente, marcador de exclusão) está documentado no painel, em
@@ -63,6 +71,11 @@ const (
 	requisicoesPorJanela = 20
 	PrazoMinimo          = 60 * time.Second
 	PrazoMaximo          = 6 * time.Hour
+	// PrazoDaRequisicao: quanto UMA requisição ao bucket (listagem, HeadObject,
+	// leitura do versionamento) pode levar. Sem ele, um provedor que aceita a
+	// conexão e não responde segurava a janela — e a trava do bucket, com o
+	// backup esperando — até o prazo da rodada inteira (até 6 h).
+	PrazoDaRequisicao = 60 * time.Second
 )
 
 // Entrada é uma linha da listagem de versões: uma versão ou um marcador de
@@ -136,6 +149,12 @@ type Opcoes struct {
 	// seguida. Devolve false, sem rodar fn, se não conseguiu a vez até o
 	// contexto vencer. Nil: roda direto (testes).
 	Janela func(ctx context.Context, fn func()) bool
+	// Ceder diz se há backup esperando o bucket: perguntado entre uma
+	// requisição e outra da mesma janela, encerra a janela cedo. Nil: nunca.
+	Ceder func() bool
+	// PrazoDaRequisicao troca o prazo de uma requisição ao bucket; zero: o
+	// padrão (PrazoDaRequisicao).
+	PrazoDaRequisicao time.Duration
 	// Proxima busca no painel a página do plano de um cursor. É chamada SEM a
 	// trava do bucket.
 	Proxima func(ctx context.Context, cursor string) (*api.InventoryPlanResponse, error)
@@ -185,9 +204,11 @@ type motor struct {
 	proxVersao string
 	comecou    bool
 	fimDaLista bool
-	// ultimaChave é a última chave consumida da listagem (a ordem é conferida).
-	ultimaChave string
-	temUltima   bool
+	// ultimaChave e ultimaVersao são a última entrada consumida da listagem (a
+	// ordem é conferida, e é dali que a listagem é retomada).
+	ultimaChave  string
+	ultimaVersao string
+	temUltima    bool
 
 	// O plano: os itens da janela e o grupo (mesma chave) em curso.
 	itens       []api.InventoryItem
@@ -203,10 +224,39 @@ type motor struct {
 
 	candidatos      []api.InventoryVersion
 	candidatosTotal int64
-	amostra         []api.InventoryVersion
-	oferecidos      int64
-	sorteio         *rand.Rand
+	// tamanhos são as versões que a listagem trouxe com tamanho diferente do
+	// catálogo, à espera do HeadObject que confirma (até MaxDivergencias).
+	tamanhos      []tamanhoSuspeito
+	tamanhosTotal int64
+	amostra       []api.InventoryVersion
+	oferecidos    int64
+	sorteio       *rand.Rand
 }
+
+// tamanhoSuspeito é uma versão presente na listagem com tamanho diferente do
+// catálogo.
+type tamanhoSuspeito struct {
+	v        api.InventoryVersion
+	catalogo int64
+}
+
+// requisicao devolve o contexto de UMA requisição ao bucket, com o prazo dela.
+func (m *motor) requisicao(ctx context.Context) (context.Context, context.CancelFunc) {
+	prazo := m.o.PrazoDaRequisicao
+	if prazo <= 0 {
+		prazo = PrazoDaRequisicao
+	}
+	return context.WithTimeout(ctx, prazo)
+}
+
+// semResposta diz se a requisição morreu pelo prazo DELA (e não pelo da
+// rodada, nem pelo cancelamento de quem chamou).
+func semResposta(ctx, rctx context.Context) bool {
+	return ctx.Err() == nil && rctx.Err() != nil
+}
+
+// ceder diz se a janela deve acabar agora, para o backup que está esperando.
+func (m *motor) ceder() bool { return m.o.Ceder != nil && m.o.Ceder() }
 
 // Rodar faz o inventário a partir da primeira página do plano e devolve o
 // relato. interrompida=true: o contexto de quem chamou foi cancelado (o serviço
@@ -315,6 +365,10 @@ func (m *motor) rodar(ctx context.Context, primeira *api.InventoryPlanResponse) 
 			return parar(ErroDoPlano, "página %d do plano: o painel respondeu outra rodada", pagina.Page+1)
 		}
 		pagina = proxima
+		// Enquanto a página vinha (sem a trava), um backup pode ter enviado e
+		// catalogado arquivos: a página nova já os cita, e o pedaço da listagem
+		// que está na memória é de antes deles. Retoma dali para a frente.
+		m.retomarListagem()
 	}
 
 	// O plano acabou; o resto da listagem são objetos a mais (não é erro) — e
@@ -323,6 +377,9 @@ func (m *motor) rodar(ctx context.Context, primeira *api.InventoryPlanResponse) 
 		return err
 	}
 	if err := m.confirmarFaltantes(ctx); err != nil {
+		return err
+	}
+	if err := m.confirmarTamanhos(ctx); err != nil {
 		return err
 	}
 	if err := m.conferirAmostra(ctx); err != nil {
@@ -334,7 +391,9 @@ func (m *motor) rodar(ctx context.Context, primeira *api.InventoryPlanResponse) 
 }
 
 func (m *motor) versionamento(ctx context.Context) string {
-	v, err := m.o.Bucket.Versionamento(ctx)
+	rctx, soltar := m.requisicao(ctx)
+	defer soltar()
+	v, err := m.o.Bucket.Versionamento(rctx)
 	if err != nil {
 		return ""
 	}
@@ -389,11 +448,17 @@ func (m *motor) carregar(ctx context.Context) (bool, error) {
 	if m.fimDaLista {
 		return false, nil
 	}
-	pg, err := m.o.Bucket.Listar(ctx, m.o.Prefixo, m.proxChave, m.proxVersao)
+	rctx, soltar := m.requisicao(ctx)
+	pg, err := m.o.Bucket.Listar(rctx, m.o.Prefixo, m.proxChave, m.proxVersao)
+	parou := semResposta(ctx, rctx)
+	soltar()
 	m.r.ListRequests++
 	if err != nil {
 		if ctx.Err() != nil {
 			return false, ctx.Err()
+		}
+		if parou {
+			return false, parar(Transitorio, "listagem: o armazenamento não respondeu no prazo da requisição")
 		}
 		return false, m.erroDoBucket("listagem", err)
 	}
@@ -412,6 +477,33 @@ func (m *motor) carregar(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
+// retomarListagem joga fora o que sobrou da página da listagem em memória e
+// faz a requisição seguinte recomeçar logo depois da última entrada consumida
+// — o mesmo marcador (chave e versão) que o provedor daria se a página tivesse
+// acabado ali. O que já foi consumido não volta: toda chave do plano fechada
+// até aqui é menor ou igual à última consumida, e a listagem já passou por
+// ela.
+func (m *motor) retomarListagem() {
+	if !m.comecou {
+		return
+	}
+	m.buf, m.pos, m.fimDaLista = nil, 0, false
+	m.proxChave, m.proxVersao = "", ""
+	if m.temUltima {
+		m.proxChave, m.proxVersao = m.ultimaChave, m.ultimaVersao
+	}
+}
+
+// cabecalho faz o HeadObject de uma versão, com o prazo da requisição.
+// semResposta: o armazenamento não respondeu no prazo (nunca é "ausente").
+func (m *motor) cabecalho(ctx context.Context, v api.InventoryVersion) (h Cabecalho, parou bool, err error) {
+	rctx, soltar := m.requisicao(ctx)
+	defer soltar()
+	h, err = m.o.Bucket.Cabecalho(rctx, v.Key, v.VersionID)
+	m.r.HeadRequests++
+	return h, err != nil && semResposta(ctx, rctx), err
+}
+
 func (m *motor) erroDoBucket(onde string, err error) error {
 	switch m.o.Bucket.Classificar(err) {
 	case ErroNegado:
@@ -427,7 +519,7 @@ func (m *motor) consumir(e Entrada) error {
 	if m.temUltima && e.Key < m.ultimaChave {
 		return parar(ForaDeOrdem, "a listagem devolveu %q depois de %q", cortar(e.Key), cortar(m.ultimaChave))
 	}
-	m.ultimaChave, m.temUltima = e.Key, true
+	m.ultimaChave, m.ultimaVersao, m.temUltima = e.Key, e.VersionID, true
 	m.pos++
 	if !e.Marcador {
 		m.r.BucketVersions++
@@ -438,6 +530,7 @@ func (m *motor) consumir(e Entrada) error {
 
 // avancar anda na fusão até acabar os itens ou gastar as requisições da janela.
 func (m *motor) avancar(ctx context.Context, requisicoes int) error {
+	feitas := 0
 	for m.i < len(m.itens) {
 		if !m.aberto {
 			if err := m.abrirGrupo(); err != nil {
@@ -450,10 +543,11 @@ func (m *motor) avancar(ctx context.Context, requisicoes int) error {
 				if m.fimDaLista {
 					break
 				}
-				if requisicoes == 0 {
-					return nil // a janela acabou; o grupo segue aberto
+				if requisicoes == 0 || (feitas > 0 && m.ceder()) {
+					return nil // a janela acabou (ou há backup esperando); o grupo segue aberto
 				}
 				requisicoes--
+				feitas++
 				if _, err := m.carregar(ctx); err != nil {
 					return err
 				}
@@ -534,9 +628,11 @@ func (m *motor) fecharGrupo() {
 		case m.tamanho[k] != it.Size:
 			algumaPresente = true
 			if !it.Unavailable {
-				m.r.SizeMismatchTotal++
-				if len(m.r.SizeMismatch) < MaxDivergencias {
-					m.r.SizeMismatch = append(m.r.SizeMismatch, api.InventorySize{Key: it.Key, VersionID: it.VersionID, Size: m.tamanho[k]})
+				// Suspeita: só vira "tamanho diferente" se o HeadObject da
+				// versão confirmar (confirmarTamanhos).
+				m.tamanhosTotal++
+				if len(m.tamanhos) < MaxDivergencias {
+					m.tamanhos = append(m.tamanhos, tamanhoSuspeito{v: v, catalogo: it.Size})
 				}
 			}
 		default:
@@ -603,7 +699,7 @@ func (m *motor) esgotarListagem(ctx context.Context) error {
 					acabou = true
 					return nil
 				}
-				if n == 0 {
+				if n == 0 || (n < requisicoesPorJanela && m.ceder()) {
 					return nil
 				}
 				n--
@@ -622,18 +718,22 @@ func (m *motor) esgotarListagem(ctx context.Context) error {
 	}
 }
 
-// emLotes roda fn para cada item, em janelas de até requisicoesPorJanela.
+// emLotes roda fn para cada item, em janelas de até requisicoesPorJanela —
+// menos, se entre um item e outro houver backup esperando.
 func emLotes[T any](ctx context.Context, m *motor, itens []T, fn func(T) error) error {
-	for ini := 0; ini < len(itens); ini += requisicoesPorJanela {
+	for ini := 0; ini < len(itens); {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		fim := min(ini+requisicoesPorJanela, len(itens))
 		err := m.naJanela(ctx, func() error {
-			for _, it := range itens[ini:fim] {
-				if err := fn(it); err != nil {
+			for n := 0; ini < len(itens) && n < requisicoesPorJanela; n++ {
+				if n > 0 && m.ceder() {
+					return nil
+				}
+				if err := fn(itens[ini]); err != nil {
 					return err
 				}
+				ini++
 			}
 			return nil
 		})
@@ -651,14 +751,16 @@ func emLotes[T any](ctx context.Context, m *motor, itens []T, fn func(T) error) 
 func (m *motor) confirmarFaltantes(ctx context.Context) error {
 	confirmados := make([]api.InventoryVersion, 0, len(m.candidatos))
 	err := emLotes(ctx, m, m.candidatos, func(v api.InventoryVersion) error {
-		_, err := m.o.Bucket.Cabecalho(ctx, v.Key, v.VersionID)
-		m.r.HeadRequests++
+		_, parou, err := m.cabecalho(ctx, v)
 		if err == nil {
 			m.r.Unconfirmed++
 			return nil
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		if parou {
+			return parar(Transitorio, "confirmação de versão ausente: o armazenamento não respondeu no prazo da requisição")
 		}
 		if m.o.Bucket.Classificar(err) == ErroAusente {
 			confirmados = append(confirmados, v)
@@ -680,10 +782,61 @@ func (m *motor) confirmarFaltantes(ctx context.Context) error {
 		excedente = 0
 	}
 	m.r.MissingTotal = int64(len(confirmados)) + excedente
-	if m.candidatosTotal > int64(len(m.candidatos)) || m.r.SizeMismatchTotal > int64(len(m.r.SizeMismatch)) {
+	if m.candidatosTotal > int64(len(m.candidatos)) {
 		m.r.Truncated = true
 	}
 	m.candidatos = nil
+	return nil
+}
+
+// confirmarTamanhos pergunta ao bucket, versão a versão, pelo tamanho das que
+// a listagem trouxe diferente do catálogo. Só a que o HeadObject também dá com
+// outro tamanho é relatada — com o tamanho do HeadObject. A que ele dá com o
+// tamanho do catálogo foi desmentida (a listagem do provedor errou) e conta
+// como encontrada; a que ele não acha mais não é afirmada de jeito nenhum (a
+// listagem a viu: o inventário seguinte decide). Desmentidas em maioria: a
+// listagem não é confiável, e a rodada não vale.
+func (m *motor) confirmarTamanhos(ctx context.Context) error {
+	var desmentidas int64
+	err := emLotes(ctx, m, m.tamanhos, func(t tamanhoSuspeito) error {
+		h, parou, err := m.cabecalho(ctx, t.v)
+		switch {
+		case err == nil && h.Size != t.catalogo:
+			m.r.SizeMismatch = append(m.r.SizeMismatch, api.InventorySize{Key: t.v.Key, VersionID: t.v.VersionID, Size: h.Size})
+		case err == nil:
+			desmentidas++
+			m.r.Unconfirmed++
+			m.r.Found++
+			m.r.FoundBytes += t.catalogo
+		case ctx.Err() != nil:
+			return ctx.Err()
+		case parou:
+			return parar(Transitorio, "confirmação de tamanho: o armazenamento não respondeu no prazo da requisição")
+		case m.o.Bucket.Classificar(err) == ErroAusente:
+			desmentidas++
+			m.r.Unconfirmed++
+		default:
+			return m.erroDoBucket("confirmação de tamanho", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if desmentidas >= 10 && desmentidas > int64(len(m.r.SizeMismatch)) {
+		return parar(Inconsistente, "o HeadObject desmentiu o tamanho de %d de %d versões da listagem", desmentidas, len(m.tamanhos))
+	}
+	// As que passaram do teto não foram conferidas uma a uma: contam no total
+	// (a lista vai cortada), a não ser que a listagem tenha sido desmentida.
+	excedente := m.tamanhosTotal - int64(len(m.tamanhos))
+	if desmentidas > 0 {
+		excedente = 0
+	}
+	m.r.SizeMismatchTotal = int64(len(m.r.SizeMismatch)) + excedente
+	if m.tamanhosTotal > int64(len(m.tamanhos)) {
+		m.r.Truncated = true
+	}
+	m.tamanhos = nil
 	return nil
 }
 
@@ -692,8 +845,7 @@ func (m *motor) confirmarFaltantes(ctx context.Context) error {
 func (m *motor) conferirAmostra(ctx context.Context) error {
 	itens := make([]api.InventorySampleItem, 0, len(m.amostra))
 	err := emLotes(ctx, m, m.amostra, func(v api.InventoryVersion) error {
-		h, err := m.o.Bucket.Cabecalho(ctx, v.Key, v.VersionID)
-		m.r.HeadRequests++
+		h, _, err := m.cabecalho(ctx, v)
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()

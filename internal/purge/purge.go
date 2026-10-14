@@ -35,6 +35,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -216,9 +217,17 @@ func protegerVersaoAtual(ctx context.Context, o Options, itens []Version) (aceit
 	return aceitas, recusadas
 }
 
+// prazoDaConsulta é quanto o HeadObject da versão atual pode levar (variável
+// para os testes).
+var prazoDaConsulta = 60 * time.Second
+
 // versaoAtual devolve o VersionId da versão atual da chave, ou "" se a chave
 // não tem versão atual (404).
 func versaoAtual(ctx context.Context, o Options, key string) (string, error) {
+	// Com prazo próprio: o provedor que não responde não segura a trava do
+	// bucket. Estourou, a conferência falhou — e o desbaste da chave é recusado.
+	ctx, soltar := context.WithTimeout(ctx, prazoDaConsulta)
+	defer soltar()
 	out, err := o.S3.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket: aws.String(o.Bucket),
 		Key:    aws.String(key),

@@ -268,8 +268,12 @@ func TestVinteECincoMilVersoesComAcentoEmOrdemDeBytes(t *testing.T) {
 	if r.Found != 25_000 || r.MissingTotal != 0 || r.ExtraVersions != 0 || r.SizeMismatchTotal != 0 {
 		t.Fatalf("tudo no lugar: found=%d faltando=%d a mais=%d tamanho=%d (%s)", r.Found, r.MissingTotal, r.ExtraVersions, r.SizeMismatchTotal, r.Detail)
 	}
-	if r.ListRequests != 25 {
-		t.Fatalf("25 mil versões são 25 listagens de mil, vieram %d", r.ListRequests)
+	// 25 listagens de mil, e mais uma: a cada página do plano buscada no painel
+	// a listagem é retomada da última entrada consumida (o resto da página em
+	// memória é relido). São duas viradas de página do plano; numa delas a
+	// retomada cai na divisa de uma página da listagem e não custa nada.
+	if r.ListRequests != 26 {
+		t.Fatalf("25 mil versões em 3 páginas do plano são 26 listagens, vieram %d", r.ListRequests)
 	}
 	// Faltando: a primeira, as duas da divisa, uma no meio e a última.
 	apagar := []api.InventoryItem{itens[0], itens[tam-1], itens[tam], itens[17_321], itens[len(itens)-1]}
@@ -572,7 +576,9 @@ func TestMemoriaLimitadaAJanela(t *testing.T) {
 	})
 	r := rodar(t, b, itens, 10_000, func(o *Opcoes) { o.Amostra = 200 })
 	exigirCompleto(t, r)
-	if r.Found != total || r.ListRequests != total/1000 {
+	// Uma listagem a cada mil versões, e uma a mais por virada de página do
+	// plano (a retomada da listagem): 300 + 29.
+	if r.Found != total || r.ListRequests != total/1000+total/10_000-1 {
 		t.Fatalf("found=%d listagens=%d", r.Found, r.ListRequests)
 	}
 	var cresceu uint64

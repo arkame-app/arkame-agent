@@ -401,3 +401,57 @@ func TestEsperaDoInventarioConfigurada(t *testing.T) {
 		t.Fatalf("a amostra pedida pelo painel vale até o teto: %d", a)
 	}
 }
+
+// Revisão do S9 (M2): o backup que chega no MEIO de uma janela do inventário
+// não espera a janela inteira — entre uma requisição e outra o inventário vê
+// que há backup esperando e solta a trava.
+func TestBackupPassaNoMeioDaJanelaDoInventario(t *testing.T) {
+	antes := esperaPelaVezDoInventario
+	esperaPelaVezDoInventario = 2 * time.Millisecond
+	t.Cleanup(func() { esperaPelaVezDoInventario = antes })
+
+	m := mesaComBackup(t, 40)
+	itens := m.catalogoParaInventario()
+	trava := &exclusaoDoBucket{}
+	// Uma página só e uma listagem só: a janela que interessa é a da amostra,
+	// com quatro HeadObject.
+	p := m.servirInventario(itens, 1000, trava, nil)
+	var ordem []string
+	var mu gosync.Mutex
+	anotar := func(s string) {
+		mu.Lock()
+		ordem = append(ordem, s)
+		mu.Unlock()
+	}
+	var umaVez gosync.Once
+	feito := make(chan struct{})
+	m.s3.Antes(func(op string, _ *http.Request) {
+		if op != "HeadObjectVersion" {
+			return
+		}
+		anotar("head")
+		// No primeiro HEAD da janela, um backup chega e fica esperando o bucket.
+		umaVez.Do(func() {
+			go func() {
+				_ = trava.backup(func() error {
+					anotar("backup")
+					return nil
+				})
+				close(feito)
+			}()
+			time.Sleep(20 * time.Millisecond)
+		})
+	})
+	rodadaDeInventario(context.Background(), m.c, m.s3c, m.cfg, trava)
+	m.s3.Antes(nil)
+	<-feito
+	r := p.relato(t)
+	if !r.Complete || r.Found != 40 || r.Sample.Checked != 4 {
+		t.Fatalf("o inventário segue depois do backup e termina, com a amostra inteira: %+v", r)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(ordem) != 5 || ordem[0] != "head" || ordem[1] != "backup" {
+		t.Fatalf("o backup tinha de rodar logo depois do HEAD em curso, não no fim da janela de quatro: %v", ordem)
+	}
+}

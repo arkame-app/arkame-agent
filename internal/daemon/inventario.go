@@ -26,8 +26,10 @@ import (
 // A trava do bucket é a mesma de backup, limpeza e teste de restauração, e o
 // inventário é o mais educado dos quatro: pega-a por janela de poucas
 // requisições, sem esperar na fila (TryLock), solta entre uma janela e outra,
-// dá a vez ao backup que estiver esperando e nunca a segura enquanto fala com
-// o painel. Uma limpeza que rode entre duas janelas pode apagar versão que o
+// dá a vez ao backup que estiver esperando — inclusive no meio da janela,
+// entre uma requisição e outra — e nunca a segura enquanto fala com o painel.
+// Cada requisição ao bucket tem prazo de 60 s (inventario.PrazoDaRequisicao):
+// um provedor que não responde não segura a trava até o prazo da rodada. Uma limpeza que rode entre duas janelas pode apagar versão que o
 // plano ainda citava: o painel sabe o que mandou apagar e não a conta como
 // faltante.
 
@@ -184,6 +186,9 @@ func executarInventario(ctx context.Context, c *api.Client, s3c *s3.Client, cfg 
 		Prazo:   prazo,
 		Amostra: amostra,
 		Janela:  trava.inventario,
+		// Entre uma requisição e outra da mesma janela: backup esperando, a
+		// janela acaba ali.
+		Ceder: trava.backupEsperando,
 		Proxima: func(ctx context.Context, cursor string) (*api.InventoryPlanResponse, error) {
 			var p api.InventoryPlanResponse
 			rota := "/api/agents/" + cfg.AgentID + "/inventory-plan?run_id=" + url.QueryEscape(primeira.RunID) + "&cursor=" + url.QueryEscape(cursor)
