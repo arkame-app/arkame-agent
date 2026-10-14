@@ -20,6 +20,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
@@ -32,6 +33,13 @@ type VersaoFalsa struct {
 	SHA256  string // metadado x-amz-meta-sha256
 	Tamanho int64
 	Dados   []byte // só com GuardarDados
+	// Marcador: é um marcador de exclusão (PorMarcador), não uma versão.
+	Marcador bool
+	// TravaModo e TravaAte: a retenção de Object Lock que o HeadObject devolve.
+	TravaModo string
+	TravaAte  time.Time
+	// Modificado vai como Last-Modified no HeadObject (zero: não vai).
+	Modificado time.Time
 }
 
 // S3Falso é um S3 versionado em memória, com o que o agente usa: HeadObject,
@@ -49,6 +57,9 @@ type S3Falso struct {
 	SemMemoria bool
 	antes      atomic.Pointer[func(op string, r *http.Request)]
 	falhar     atomic.Pointer[func(op string, r *http.Request) bool]
+	recusar    atomic.Pointer[func(op string, r *http.Request) (int, string)]
+	// versionamento é o que o GetBucketVersioning responde ("" = Enabled).
+	versionamento atomic.Pointer[string]
 
 	mu       sync.Mutex
 	objetos  map[string][]VersaoFalsa // chave → versões, a atual por último
@@ -193,6 +204,37 @@ func (f *S3Falso) TotalDeVersoes() int {
 	return n
 }
 
+// Recusar define, por requisição, uma resposta de erro do S3 com o status e o
+// código dados (403 AccessDenied, 503 SlowDown…); status 0 deixa passar. Nil
+// desliga.
+func (f *S3Falso) Recusar(fn func(op string, r *http.Request) (status int, codigo string)) {
+	if fn == nil {
+		f.recusar.Store(nil)
+		return
+	}
+	f.recusar.Store(&fn)
+}
+
+// Versionamento define o que o GetBucketVersioning responde: "Enabled",
+// "Suspended" ou "" (nunca ligado).
+func (f *S3Falso) Versionamento(estado string) { f.versionamento.Store(&estado) }
+
+// Semear grava uma versão direto no bucket, sem requisição — para montar
+// buckets grandes depressa. Devolve o id da versão.
+func (f *S3Falso) Semear(chave string, v VersaoFalsa) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.gravar(chave, v)
+}
+
+// PorMarcador põe um marcador de exclusão por cima da chave, como faz um
+// DeleteObject sem versão num bucket versionado. Devolve o id do marcador.
+func (f *S3Falso) PorMarcador(chave string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.gravar(chave, VersaoFalsa{Marcador: true})
+}
+
 // ApagarVersao tira uma versão direto do bucket, por fora do agente — o
 // "alguém apagou o objeto" dos testes. Devolve se achou.
 func (f *S3Falso) ApagarVersao(chave, versao string) bool {
@@ -315,6 +357,17 @@ func (f *S3Falso) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		erroS3(w, http.StatusInternalServerError, "InternalError")
 		return
 	}
+	if fn := f.recusar.Load(); fn != nil {
+		if status, codigo := (*fn)(op, r); status != 0 {
+			_, _ = io.Copy(io.Discard, r.Body)
+			if r.Method == http.MethodHead {
+				w.WriteHeader(status)
+			} else {
+				erroS3(w, status, codigo)
+			}
+			return
+		}
+	}
 	q := r.URL.Query()
 
 	// O corpo é lido fora da trava: envios simultâneos não se enfileiram.
@@ -339,7 +392,15 @@ func (f *S3Falso) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer f.mu.Unlock()
 	switch op {
 	case "GetBucketVersioning":
-		fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?><VersioningConfiguration><Status>Enabled</Status></VersioningConfiguration>`)
+		estado := "Enabled"
+		if p := f.versionamento.Load(); p != nil {
+			estado = *p
+		}
+		if estado == "" {
+			fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?><VersioningConfiguration></VersioningConfiguration>`)
+		} else {
+			fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?><VersioningConfiguration><Status>%s</Status></VersioningConfiguration>`, estado)
+		}
 	case "GetObjectLockConfiguration":
 		erroS3(w, http.StatusNotFound, "ObjectLockConfigurationNotFoundError")
 	case "GetBucketLifecycleConfiguration":
@@ -374,7 +435,29 @@ func (f *S3Falso) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		}
-		w.Header().Set("x-amz-meta-sha256", v.SHA256)
+		if v.Marcador {
+			// O marcador de exclusão não é objeto: sem versão na pergunta a chave
+			// "não existe"; com a versão dele, o S3 responde 405.
+			w.Header().Set("x-amz-delete-marker", "true")
+			if q.Get("versionId") != "" {
+				w.WriteHeader(http.StatusMethodNotAllowed)
+			} else if op == "GetObject" {
+				erroS3(w, http.StatusNotFound, "NoSuchKey")
+			} else {
+				w.WriteHeader(http.StatusNotFound)
+			}
+			return
+		}
+		if v.SHA256 != "" {
+			w.Header().Set("x-amz-meta-sha256", v.SHA256)
+		}
+		if v.TravaModo != "" {
+			w.Header().Set("x-amz-object-lock-mode", v.TravaModo)
+			w.Header().Set("x-amz-object-lock-retain-until-date", v.TravaAte.UTC().Format(time.RFC3339))
+		}
+		if !v.Modificado.IsZero() {
+			w.Header().Set("Last-Modified", v.Modificado.UTC().Format(http.TimeFormat))
+		}
 		w.Header().Set("x-amz-version-id", v.ID)
 		w.Header().Set("Content-Length", strconv.FormatInt(v.Tamanho, 10))
 		w.WriteHeader(http.StatusOK)
@@ -477,9 +560,19 @@ func (f *S3Falso) listar(w http.ResponseWriter, q url.Values) {
 	chaves := f.chavesOrdenadas()
 	marcaChave, marcaVersao := q.Get("key-marker"), q.Get("version-id-marker")
 	prefixo := q.Get("prefix")
+	// Com encoding-type=url as chaves saem codificadas, e a resposta diz que
+	// codificou — como o S3 de verdade.
+	chaveXML := xmlTexto
+	codificada := q.Get("encoding-type") == "url"
+	if codificada {
+		chaveXML = url.QueryEscape
+	}
 	i := sort.SearchStrings(chaves, marcaChave)
 	var b strings.Builder
 	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?><ListVersionsResult><Name>b</Name>`)
+	if codificada {
+		b.WriteString(`<EncodingType>url</EncodingType>`)
+	}
 	n := 0
 	truncado := false
 	var proxChave, proxVersao string
@@ -505,15 +598,20 @@ fora:
 				truncado = true
 				break fora
 			}
-			fmt.Fprintf(&b, `<Version><Key>%s</Key><VersionId>%s</VersionId><IsLatest>%t</IsLatest><Size>%d</Size></Version>`,
-				xmlTexto(k), vs[j].ID, j == len(vs)-1, vs[j].Tamanho)
+			if vs[j].Marcador {
+				fmt.Fprintf(&b, `<DeleteMarker><Key>%s</Key><VersionId>%s</VersionId><IsLatest>%t</IsLatest></DeleteMarker>`,
+					chaveXML(k), vs[j].ID, j == len(vs)-1)
+			} else {
+				fmt.Fprintf(&b, `<Version><Key>%s</Key><VersionId>%s</VersionId><IsLatest>%t</IsLatest><Size>%d</Size></Version>`,
+					chaveXML(k), vs[j].ID, j == len(vs)-1, vs[j].Tamanho)
+			}
 			n++
 			proxChave, proxVersao = k, vs[j].ID
 		}
 	}
 	fmt.Fprintf(&b, `<IsTruncated>%t</IsTruncated>`, truncado)
 	if truncado {
-		fmt.Fprintf(&b, `<NextKeyMarker>%s</NextKeyMarker><NextVersionIdMarker>%s</NextVersionIdMarker>`, xmlTexto(proxChave), proxVersao)
+		fmt.Fprintf(&b, `<NextKeyMarker>%s</NextKeyMarker><NextVersionIdMarker>%s</NextVersionIdMarker>`, chaveXML(proxChave), proxVersao)
 	}
 	b.WriteString(`</ListVersionsResult>`)
 	w.Header().Set("Content-Type", "application/xml")
