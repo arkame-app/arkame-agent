@@ -4,6 +4,60 @@
 
 > Trabalho ativo principal está no painel (`~/hugo-projects/arkame/`). Para o status global do produto, ver `~/hugo-projects/arkame/STATUS.md`.
 
+## 🧾 Inventário do bucket (2026-10-13/14, sprint S9 — branch `feat/s9-inventario-do-bucket`, não lançado)
+
+Contrato: itens 48–58 de `~/claude-plans/arkame-relevancia-2026-10-05/contrato-indice-em-lotes.md`
+(plano técnico § 1.3). Vai na mesma 0.5.0 do teste de restauração, que ainda não foi lançada.
+
+- **Capacidade `bucket_inventory`** no heartbeat e no `/sessions/start`, com armazenamento
+  configurado (`podeInventariar`; não precisa de pasta de estado — nada é gravado).
+- **Laço novo `inventoryLoop`** (9º do daemon): primeira pergunta 12 min depois do arranque, depois
+  de hora em hora (`ARKAME_RESTORE_TEST_INTERVAL_SEC` encurta); `GET …/inventory-plan` (a pergunta e
+  as páginas, por cursor) e `POST …/inventory-result`. Bucket ocupado → nem pergunta, tenta em
+  1 min. Painel sem a rota (404) → pergunta de novo em 24 h, uma linha de log por processo.
+- **`internal/inventario`**: funde o plano do painel (o catálogo deste servidor, em páginas de até
+  10 mil versões, em ordem de bytes da chave) com o `ListObjectVersions` do prefixo do servidor
+  (`encoding-type=url`, mil por página). Memória na janela: uma página do plano, uma da listagem e
+  as listas do relato, que têm teto — medido: **+0,7 MiB de memória viva com 300 mil versões** (o
+  teste falha acima de 8 MiB), e **35 MB de pico residente** inventariando 200 mil versões no
+  RustFS local (200 listagens, 202 HEAD, 47,7 s).
+- **Só afirma "falta"** para a versão por cuja chave a listagem passou **e** cujo `HeadObject`
+  respondeu 404. Erro do momento (5xx, 408, 429, prazo, rede, DNS) → `transient`; 403 →
+  `access_denied`; listagem fora de ordem → `unordered`; truncada sem marcador ou desmentida em
+  massa pelo `HeadObject` → `listing_inconsistent`; plano fora de ordem, fora do prefixo ou página
+  que não veio → `plan_error`. Em todos: rodada incompleta, **zero faltantes** no relato.
+- Marcador de exclusão por cima de chave com versão catalogada presente: relatado como marcador,
+  não como faltante (a versão segue restaurando pelo id). Objeto a mais: só contado. Versão que o
+  painel já tinha por indisponível: presente → `found_again`; ausente → não é relatada de novo.
+  Versionamento conferido no começo e no fim.
+- **Amostra de até 200 `HeadObject`** (reservatório uniforme sobre as versões encontradas): o
+  agente relata o metadado `sha256`, o modo e a data de retenção do Object Lock e a data de
+  gravação; quem compara é o painel. O agente grava o metadado `sha256` em todo envio (`PutObject` e
+  multipart) — conferido no código (`sync/engine.go`) e no laço de ponta a ponta.
+- **Trava do bucket por janela** (`exclusaoDoBucket.inventario`, atividade `inventory`): até 20
+  requisições por janela, `TryLock` sem entrar na fila, não pega com backup esperando, solta entre
+  uma janela e outra e nunca é segurada durante a chamada ao painel. Espera a vez até o prazo da
+  rodada (aí relata `busy`). O prefixo do plano tem de ser exatamente `<prefix_root>data/<agente>/`.
+- Relato cortado para 900 KiB (primeiro a amostra e os marcadores; depois as listas que importam,
+  com `truncated`). Serviço parando no meio: sem relato (o painel reentrega). Versão ausente ou de
+  tamanho diferente sai do estado local — o backup seguinte reenvia o arquivo.
+- **`arkame-bancada inventario`**: semeia um S3 de verdade, mede o inventário contra um painel de
+  verdade e limpa. O S3 falso da bancada ganhou marcador de exclusão, estado do versionamento,
+  retenção de Object Lock, chaves codificadas e erro por status.
+- **Testes:** `internal/inventario` (24 testes) e `internal/daemon/inventario_test.go` (10). 27
+  defeitos plantados, 27 pegos por asserção (três testes foram reforçados no caminho: prazo durante
+  a amostra, teto de requisições por janela e a pergunta com o bucket ocupado). `go test -race
+  -count=1 ./...`: 22 pacotes ok. Laço de ponta a ponta do painel: 79 conferências.
+- **Não feito / não verificado:**
+  - `used_bytes` na mesma passada: o inventário lista só o prefixo DESTE servidor, e o `used_bytes`
+    da sondagem é do bucket inteiro (outros servidores dividem o bucket) — não dá para trocar um
+    pelo outro. O relato leva `bucket_bytes` do prefixo; o painel o guarda no resumo da rodada. A
+    medição de uso uma vez por dia acima de 100 mil versões já existia (`daemon/uso.go`).
+  - Só RustFS de verdade. AWS, B2, Wasabi, R2, OCI e GCS não foram exercitados: o que protege de
+    um provedor que liste fora de ordem ou ignore `encoding-type` é a conferência da ordem, a
+    decodificação só quando o provedor diz que codificou, e o `HeadObject` de confirmação.
+  - Windows e macOS: só compilação cruzada.
+
 ## 🧪 Teste de restauração por amostra (2026-10-13, sprint S8 — branch `feat/s8-restauracao-comprovada`, não lançado)
 
 Contrato: itens 34–38 de `~/claude-plans/arkame-relevancia-2026-10-05/contrato-indice-em-lotes.md`.

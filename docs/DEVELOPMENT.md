@@ -6,7 +6,7 @@
 
 ## Status
 
-**Status:** funcional. Enrollment (Ed25519 + bearer JWT), daemon com 8 loops (heartbeat com renovação do token, atualização do próprio programa, probe, planos/backup, restauração, explorador de pastas, expurgo de retenção, teste de restauração por amostra), sync engine (walker + hash + dedup HeadObject + multipart upload), restore com escrita atômica + verify, e warming de cold storage estão implementados. Build limpo (`go vet ./...`). Resta hardening (mTLS, snapshots, observabilidade) — ver "O que falta".
+**Status:** funcional. Enrollment (Ed25519 + bearer JWT), daemon com 9 loops (heartbeat com renovação do token, atualização do próprio programa, probe, planos/backup, restauração, explorador de pastas, expurgo de retenção, teste de restauração por amostra, inventário do bucket), sync engine (walker + hash + dedup HeadObject + multipart upload), restore com escrita atômica + verify, e warming de cold storage estão implementados. Build limpo (`go vet ./...`). Resta hardening (mTLS, snapshots, observabilidade) — ver "O que falta".
 
 ## Arquitetura
 
@@ -50,6 +50,7 @@ arkame-agent/
 │   ├── restore/                # executor de restauração (escrita atômica, sha256, cold storage)
 │   ├── purge/                  # expurgo de versões autorizado pelo painel (retenção)
 │   ├── verificacao/            # teste de restauração por amostra: restaura, confere e apaga
+│   ├── inventario/             # inventário do bucket: funde o catálogo do painel com a listagem de versões
 │   ├── fsbrowse/               # listagem de pastas para o explorador do painel
 │   ├── scheduler/              # janelas de tempo + decisão de "should run agora"
 │   ├── daemon/                 # loops do serviço (heartbeat, probe, planos, restauração, pastas, expurgo, verificação)
