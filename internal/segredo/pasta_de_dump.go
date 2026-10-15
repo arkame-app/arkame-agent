@@ -31,6 +31,11 @@ func PastaDeDump(dir, escritor string) error {
 	if !filepath.IsAbs(dir) {
 		return fmt.Errorf("a pasta do dump tem de ser um caminho absoluto: %s", dir)
 	}
+	// Antes de criar qualquer coisa: a primeira pasta que já existe e as de
+	// cima. Depois, de novo, com a do dump criada.
+	if err := acimaDeConfianca(primeiraQueExiste(filepath.Dir(dir))); err != nil {
+		return err
+	}
 	if err := PastaPrivada(dir); err != nil {
 		return err
 	}
@@ -77,6 +82,16 @@ func conteudoDeConfianca(dir string) error {
 		}
 	}
 	return nil
+}
+
+// primeiraQueExiste sobe de p até a primeira pasta que existe.
+func primeiraQueExiste(p string) string {
+	for ; filepath.Dir(p) != p; p = filepath.Dir(p) {
+		if _, err := os.Lstat(p); err == nil {
+			return p
+		}
+	}
+	return p
 }
 
 // acimaDeConfianca confere cada pasta de p até a raiz do volume (fora ela):

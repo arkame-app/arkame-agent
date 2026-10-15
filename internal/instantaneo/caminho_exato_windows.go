@@ -3,8 +3,6 @@
 package instantaneo
 
 import (
-	"errors"
-	"os"
 	"strings"
 
 	"golang.org/x/sys/windows"
@@ -13,7 +11,10 @@ import (
 // caminhoExato abre p sem seguir ponto de reparse e compara o caminho que o
 // sistema dá ao handle com p, letra por letra.
 func caminhoExato(p string) (bool, error) {
-	nome, err := windows.UTF16PtrFromString(p)
+	// Com o prefixo `\\?\`: sem ele, caminho acima de 260 caracteres falha
+	// como "caminho não encontrado" (o os.Lstat o punha sozinho; a chamada
+	// direta, não), e o arquivo viraria "removido".
+	nome, err := windows.UTF16PtrFromString(`\\?\` + p)
 	if err != nil {
 		return false, err
 	}
@@ -21,7 +22,9 @@ func caminhoExato(p string) (bool, error) {
 		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil,
 		windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS|windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
+		// Só "arquivo ou caminho não encontrado" é ausência; o resto (nome
+		// inválido, longo demais, acesso negado) é dúvida.
+		if err == windows.ERROR_FILE_NOT_FOUND || err == windows.ERROR_PATH_NOT_FOUND {
 			return false, nil
 		}
 		return false, err
