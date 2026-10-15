@@ -87,3 +87,18 @@ func TestPastaDeDumpRecusaRelativoEWriterForaDoWindows(t *testing.T) {
 		t.Fatalf("--writer fora do Windows: %v", err)
 	}
 }
+
+// Uma pasta acima de outro dono: ele renomearia a pasta do dump e poria a sua
+// no lugar entre um dump e outro. Vale também quando a pasta do dump já existe.
+func TestPastaDeDumpRecusaPastaAcimaAlheia(t *testing.T) {
+	base := t.TempDir()
+	acima := filepath.Join(base, "Dumps")
+	dir := filepath.Join(acima, "sql")
+	if err := PastaDeDump(dir, ""); err != nil {
+		t.Fatal(err)
+	}
+	donoFalso(t, acima)
+	if err := PastaDeDump(dir, ""); !errors.Is(err, ErrDonoNaoConfiavel) {
+		t.Fatalf("pasta acima de outro dono aceita: %v", err)
+	}
+}

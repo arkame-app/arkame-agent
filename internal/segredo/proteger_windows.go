@@ -17,6 +17,8 @@ const somenteAdministradores = "D:P(A;;FA;;;BA)(A;;FA;;;SY)"
 
 // O mesmo para a pasta, herdado por arquivos (OI) e subpastas (CI): o que o
 // agente gravar nela — agent.id, log — nasce protegido.
+const sidDoTrustedInstaller = "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464"
+
 const pastaSomenteAdministradores = "D:P(A;OICI;FA;;;BA)(A;OICI;FA;;;SY)"
 
 // protegerComModo aplica a DACL; o modo Unix não significa nada no Windows.
@@ -82,6 +84,11 @@ func donoConfiavel(caminho string) (confiavel bool, dono string, err error) {
 		}
 	}
 	if eu, uerr := windows.GetCurrentProcessToken().GetTokenUser(); uerr == nil && sid.Equals(eu.User.Sid) {
+		return true, dono, nil
+	}
+	// TrustedInstaller é dono das pastas do próprio Windows (C:\ProgramData
+	// em algumas versões, C:\Program Files).
+	if sid.String() == sidDoTrustedInstaller {
 		return true, dono, nil
 	}
 	return false, dono, nil

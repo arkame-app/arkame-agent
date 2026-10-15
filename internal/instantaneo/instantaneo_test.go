@@ -178,29 +178,23 @@ func TestNoDiscoComDispositivosParecidos(t *testing.T) {
 
 // AindaNoDisco: chave do bucket vira caminho do disco; só "não existe" é falta.
 func TestAindaNoDisco(t *testing.T) {
-	velho := lstatNoDisco
-	t.Cleanup(func() { lstatNoDisco = velho })
+	velho := caminhoExatoNoDisco
+	t.Cleanup(func() { caminhoExatoNoDisco = velho })
 	var pedido string
-	lstatNoDisco = func(p string) (os.FileInfo, error) { pedido = p; return nil, os.ErrNotExist }
+	exatos := map[string]bool{`C:\Users\x\a.ost`: true}
+	caminhoExatoNoDisco = func(p string) (bool, error) { pedido = p; return exatos[p], nil }
 	i := &Instantaneo{}
-	if i.AindaNoDisco("C:/Users/x/a.ost") || pedido != `C:\Users\x\a.ost` {
+	if !i.AindaNoDisco("C:/Users/x/a.ost") || pedido != `C:\Users\x\a.ost` {
 		t.Fatalf("caminho conferido %q", pedido)
 	}
-	// Existe, e com o nome escrito igual; renomeado só na caixa, não.
-	velhosNomes := nomesNaPasta
-	t.Cleanup(func() { nomesNaPasta = velhosNomes })
-	lstatNoDisco = func(p string) (os.FileInfo, error) { return nil, nil }
-	var pasta string
-	nomesNaPasta = func(d string) ([]string, error) { pasta = d; return []string{"a.ost", "B.txt"}, nil }
-	if !i.AindaNoDisco("C:/Users/x/a.ost") || pasta != `C:\Users\x\` {
-		t.Fatalf("nome igual tem de contar como existe (pasta %q)", pasta)
+	// Renomeado só nas maiúsculas (o arquivo ou a pasta): a chave antiga não
+	// existe mais.
+	if i.AindaNoDisco("C:/Users/X/a.ost") || i.AindaNoDisco("C:/Users/x/A.ost") {
+		t.Fatal("caminho com outra caixa contado como existente")
 	}
-	if i.AindaNoDisco("C:/Users/x/b.txt") {
-		t.Fatal("renomeado só nas maiúsculas: a chave antiga não existe mais")
-	}
-	lstatNoDisco = func(string) (os.FileInfo, error) { return nil, os.ErrPermission }
+	caminhoExatoNoDisco = func(string) (bool, error) { return false, os.ErrPermission }
 	if !i.AindaNoDisco("C:/Users/x/a.ost") {
-		t.Fatal("erro que não é 'não existe' tem de contar como existe")
+		t.Fatal("erro na conferência tem de contar como existe")
 	}
 	if i.AindaNoDisco("sem-unidade/x") {
 		t.Fatal("chave sem unidade não está no disco")

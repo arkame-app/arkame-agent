@@ -34,6 +34,14 @@ func PastaDeDump(dir, escritor string) error {
 	if err := PastaPrivada(dir); err != nil {
 		return err
 	}
+	// Mais do que a pasta do estado: nenhuma pasta acima pode ser junção ou
+	// link (Windows), e todas têm de ser de dono confiável — quem é dono de
+	// uma delas renomeia a de baixo e põe a sua no lugar entre um dump e
+	// outro. (Na pasta do estado isso não é exigido: instalações com
+	// %ProgramData% redirecionado continuam funcionando.)
+	if err := acimaDeConfianca(filepath.Dir(dir)); err != nil {
+		return err
+	}
 	if err := conteudoDeConfianca(dir); err != nil {
 		return err
 	}
@@ -66,6 +74,20 @@ func conteudoDeConfianca(dir string) error {
 		}
 		if err := ConferirDono(p); err != nil {
 			return fmt.Errorf("%w — apague-o e rode de novo", err)
+		}
+	}
+	return nil
+}
+
+// acimaDeConfianca confere cada pasta de p até a raiz do volume (fora ela):
+// pasta de verdade, sem link no Windows, e de dono confiável.
+func acimaDeConfianca(p string) error {
+	if err := semLinkAcima(p); err != nil {
+		return err
+	}
+	for ; filepath.Dir(p) != p; p = filepath.Dir(p) {
+		if err := ConferirDono(p); err != nil {
+			return err
 		}
 	}
 	return nil

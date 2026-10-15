@@ -146,11 +146,6 @@ func PastaPrivada(dir string) error {
 		fi, err := os.Lstat(p)
 		if err == nil {
 			if p == filepath.Clean(dir) {
-				// Também as de cima: uma junção no meio do caminho levaria a
-				// pasta (já existente) para onde quem a controla quiser.
-				if err := semLinkAcima(filepath.Dir(p)); err != nil {
-					return err
-				}
 				return pastaQueJaExistia(p, fi)
 			}
 			// Criar dentro da pasta de outro usuário não adianta: quem é dono
@@ -160,9 +155,6 @@ func PastaPrivada(dir string) error {
 			// passava, porque o dono conferido era o do destino — e ele
 			// trocava o destino depois.
 			if err := pastaQueJaExistia(p, fi); err != nil {
-				return err
-			}
-			if err := semLinkAcima(filepath.Dir(p)); err != nil {
 				return err
 			}
 			break

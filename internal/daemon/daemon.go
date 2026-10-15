@@ -731,15 +731,6 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 			completeBody.ErrorMessage += "; " + inst.Aviso
 		}
 	}
-	if result.SoNoDisco > 0 {
-		aviso := fmt.Sprintf(msgForaDoInstantaneo, result.SoNoDisco, result.ExemploSoNoDisco)
-		if completeStatus == "complete" && completeBody.ErrorCode == "" {
-			completeBody.ErrorCode = codigoForaDoInstantaneo
-			completeBody.ErrorMessage = aviso
-		} else {
-			completeBody.ErrorMessage += "; " + aviso
-		}
-	}
 	if inst.AvisoDosEscritores != "" {
 		// O instantâneo existe e foi lido; um programa é que não congelou.
 		// Código próprio: "lido do disco" seria falso.
@@ -751,10 +742,23 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 			completeBody.ErrorMessage += "; " + inst.AvisoDosEscritores
 		}
 	}
+	if result.SoNoDisco > 0 {
+		aviso := fmt.Sprintf(msgForaDoInstantaneo, result.SoNoDisco, result.ExemploSoNoDisco)
+		if completeStatus == "complete" && completeBody.ErrorCode == "" {
+			completeBody.ErrorCode = codigoForaDoInstantaneo
+			completeBody.ErrorMessage = aviso
+		} else {
+			completeBody.ErrorMessage += "; " + aviso
+		}
+	}
 	// O aviso do instantâneo vai junto do do comando de depois, que tem a
 	// precedência no código: os dois dizem algo que a pessoa precisa saber.
 	semInstantaneo := ""
-	for _, a := range []string{inst.Aviso, inst.AvisoDosEscritores} {
+	foraDaCopia := ""
+	if result.SoNoDisco > 0 {
+		foraDaCopia = fmt.Sprintf(msgForaDoInstantaneo, result.SoNoDisco, result.ExemploSoNoDisco)
+	}
+	for _, a := range []string{inst.Aviso, inst.AvisoDosEscritores, foraDaCopia} {
 		if a != "" {
 			semInstantaneo += "; " + a
 		}

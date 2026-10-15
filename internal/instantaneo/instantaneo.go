@@ -27,11 +27,9 @@ package instantaneo
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"os"
-	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -196,33 +194,20 @@ func (i *Instantaneo) AindaNoDisco(rel string) bool {
 		return false
 	}
 	p := u + `\` + strings.ReplaceAll(strings.TrimLeft(rel[len(u):], "/"), "/", `\`)
-	_, err := lstatNoDisco(p)
-	if err != nil {
-		return !errors.Is(err, os.ErrNotExist)
-	}
-	// O NTFS não diferencia maiúsculas: `A.txt` renomeado para `a.txt` ainda
-	// "existe" como `A.txt`, e a chave antiga ficaria para sempre. Só vale o
-	// nome escrito igual.
-	corte := strings.LastIndex(p, `\`)
-	nomes, err := nomesNaPasta(p[:corte+1])
+	// O NTFS não diferencia maiúsculas: `A.txt` (ou a pasta `Docs`)
+	// renomeado para `a.txt` ainda "existe" como antes, e a chave antiga
+	// ficaria para sempre. Só vale o caminho inteiro escrito igual — uma
+	// chamada, sem listar pasta nenhuma.
+	existe, err := caminhoExatoNoDisco(p)
 	if err != nil {
 		return true // na dúvida, não se declara remoção
 	}
-	return slices.Contains(nomes, p[corte+1:])
+	return existe
 }
 
-// nomesNaPasta lista os nomes como o disco os grava; os testes o trocam.
-var nomesNaPasta = func(dir string) ([]string, error) {
-	f, err := os.Open(dir)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	return f.Readdirnames(-1)
-}
-
-// lstatNoDisco é o os.Lstat do disco vivo; os testes o trocam.
-var lstatNoDisco = os.Lstat
+// caminhoExatoNoDisco diz se p existe com as maiúsculas exatas em todas as
+// partes (no Windows, pelo caminho final do handle). Os testes o trocam.
+var caminhoExatoNoDisco = caminhoExato
 
 // Fechar solta o instantâneo. Com o ctx já cancelado (o serviço parando),
 // solta sem avisar os escritores e sem esperar: o Windows dá poucos segundos
