@@ -4,6 +4,32 @@
 
 > Trabalho ativo principal está no painel (`~/hugo-projects/arkame/`). Para o status global do produto, ver `~/hugo-projects/arkame/STATUS.md`.
 
+## 📸 Instantâneo do volume no Windows (VSS) (2026-10-15, sprint S14 — `main`, não lançado)
+
+Vai na mesma 0.5.0. **A prova real só existe num Windows**: aqui o código COM compila e passa
+no `go vet` para amd64 e arm64, mas nunca rodou. Antes da tag: `arkame-agent check-snapshot`
+num prompt de administrador, e um backup de pasta com um `.pst` aberto.
+
+- **`internal/instantaneo`:** `Abrir(ctx, modo, pastas)` cria o instantâneo das unidades do
+  plano (depois do comando de antes: o dump entra), `Ler(p)` leva `C:\x` a
+  `\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopyN\x`, `Fechar()` solta (antes do comando de
+  depois). Nunca falha: sem instantâneo lê do disco, com `Aviso`.
+- **VSS pela vtable de `IVssBackupComponents`**, sem cgo (`vss_windows.go`): contexto de
+  backup (apagado no Release — o agente nunca apaga cópia de sombra), `VSS_BT_COPY`,
+  escritores avisados, `AbortBackup` depois do `StartSnapshotSet`, nova tentativa com outro
+  instantâneo em andamento, unidade sem suporte (exFAT, rede, `subst`) lida do disco sem
+  derrubar as outras. `chamar` tem `//go:uintptrescapes` e toda conversão de ponteiro fica na
+  própria chamada (conferido com `-gcflags=-m`: os parâmetros de saída vão para o heap).
+- **Walker:** `EngineOptions.Leitura` troca a raiz de leitura; a chave no bucket segue a do
+  disco, e a pasta do estado local é ignorada também dentro do instantâneo.
+- **Painel:** `snapshot` no plano (`auto`/`off`), `consistency_method` (`vss`/`none`) no
+  `/complete`, aviso `snapshot_unavailable` numa sessão que segue `complete`. Capacidade
+  `volume_snapshot` (só no Windows de 64 bits) — o painel só mostra a opção a quem a declara.
+- **`arkame-agent check-snapshot [pasta]`:** cria, lista, lê um arquivo de dentro e solta.
+- **Revisão de ABI** independente (vtable contra o vsbackup.h, GUID por valor no x64 e no
+  ARM64, layout de `VSS_SNAPSHOT_PROP`): quatro defeitos corrigidos (ponteiros na pilha,
+  `AbortBackup`, volume sem suporte, `CoInitializeSecurity` a cada instantâneo).
+
 ## 🧾 Inventário do bucket (2026-10-13/14, sprint S9 — branch `feat/s9-inventario-do-bucket`, não lançado)
 
 Contrato: itens 48–58 de `~/claude-plans/arkame-relevancia-2026-10-05/contrato-indice-em-lotes.md`
@@ -439,7 +465,7 @@ Repo público (Apache 2.0) em [`arkame-app/arkame-agent`](https://github.com/ark
 
 - **Self-update** do binário em produção (fase posterior)
 - **mTLS hardening** (fase 2) — substituir bearer JWT por mTLS com CA do painel, sem quebrar o contrato atual
-- **VSS no Windows** pra snapshots consistentes (Linux LVM também no roadmap)
+- **LVM/btrfs no Linux** pra snapshots consistentes (o VSS do Windows entrou na 0.5.0)
 
 ## Como compilar (sem Go local)
 

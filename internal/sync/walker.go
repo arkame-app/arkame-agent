@@ -83,14 +83,24 @@ func linkSemAlvo(err error) bool {
 // é gravado antes de o canal de erros fechar: só se lê depois de vê-lo fechado
 // (receber o erro não basta, ele vai antes da gravação).
 func walk(ctx context.Context, hostRoot string, sourcePaths []string, excludeGlobs []string, puladosOut *puladosDoWalk) (<-chan FileInfo, <-chan error) {
-	return walkSem(ctx, hostRoot, sourcePaths, excludeGlobs, puladosOut, nil, nil)
+	return walkSem(ctx, hostRoot, sourcePaths, excludeGlobs, puladosOut, nil, nil, nil)
 }
 
 // walkSem é o walk que nunca entra nas pastas de ignorar (caminhos reais,
 // absolutos): a pasta do estado local do agente, que muda durante o backup e
 // não é dado do cliente. Com listadas, anota as pastas que abriu e listou sem
 // erro (remocao_provada.go); só se lê depois de o canal de erros fechar.
-func walkSem(ctx context.Context, hostRoot string, sourcePaths []string, excludeGlobs []string, puladosOut *puladosDoWalk, ignorar []string, listadas *pastasListadas) (<-chan FileInfo, <-chan error) {
+// ler leva o caminho real ao caminho de onde ler (o instantâneo do volume,
+// EngineOptions.Leitura); nil lê do disco.
+func walkSem(ctx context.Context, hostRoot string, sourcePaths []string, excludeGlobs []string, puladosOut *puladosDoWalk, ignorar []string, listadas *pastasListadas, ler func(string) string) (<-chan FileInfo, <-chan error) {
+	if ler != nil {
+		// A pasta do estado local é ignorada também dentro do instantâneo.
+		lidas := make([]string, 0, len(ignorar))
+		for _, ig := range ignorar {
+			lidas = append(lidas, ler(ig))
+		}
+		ignorar = lidas
+	}
 	out := make(chan FileInfo, 128)
 	errs := make(chan error, 1)
 
@@ -143,6 +153,11 @@ func walkSem(ctx context.Context, hostRoot string, sourcePaths []string, exclude
 			// restaura /home, mesmo que no disco seja /var/home.
 			escolhido := caminho.NoDisco(hostRoot, sp)
 			root := caminho.Real(hostRoot, sp)
+			if ler != nil {
+				// Do instantâneo, quando há: a mesma pasta, congelada. A chave
+				// continua a do disco (escolhido).
+				root = ler(root)
+			}
 			chave := func(p string) string {
 				return caminho.NaChave(hostRoot, escolhido+strings.TrimPrefix(p, root))
 			}
@@ -212,7 +227,13 @@ func walkSem(ctx context.Context, hostRoot string, sourcePaths []string, exclude
 					// resolvido no servidor (no Docker, o container resolveria
 					// pelo lado dele). Link para pasta não é seguido — evita
 					// laço e cópia em dobro do que já está em outro lugar.
-					alvo := caminho.Real(hostRoot, strings.TrimPrefix(path, filepath.Clean(hostRoot)))
+					// No Windows não há o que resolver (caminho.Real devolve o
+					// mesmo caminho), e o do instantâneo nem é um caminho com
+					// unidade: o os.Stat segue o link.
+					alvo := path
+					if !caminho.Windows {
+						alvo = caminho.Real(hostRoot, strings.TrimPrefix(path, filepath.Clean(hostRoot)))
+					}
 					st, serr := os.Stat(alvo)
 					if serr != nil {
 						// Link quebrado não tem o que copiar. Destino que não

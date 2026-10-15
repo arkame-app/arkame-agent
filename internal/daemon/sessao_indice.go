@@ -468,6 +468,11 @@ type corpoDeConclusao struct {
 	// HSM) ou ilegíveis que ficaram de fora. Mesma regra: vai sempre.
 	ReparseSkipped int               `json:"reparse_skipped"`
 	Index          *api.IndexSummary `json:"index,omitempty"`
+	// ConsistencyMethod: de onde os arquivos foram lidos — "vss" (instantâneo
+	// do volume), "none" (o Windows tentou e leu do disco). Ausente fora do
+	// Windows. Vai no /complete, e não no /start, porque o instantâneo só
+	// existe depois do comando de antes: o dump que ele grava entra nele.
+	ConsistencyMethod string `json:"consistency_method,omitempty"`
 }
 
 // entradaDoMapa é uma entrada do version_map inline.

@@ -56,6 +56,10 @@ type EngineOptions struct {
 	// Ignorar são pastas (caminho real) em que a varredura nunca entra: a do
 	// estado local.
 	Ignorar []string
+	// Leitura leva o caminho real de uma pasta do plano ao caminho de onde
+	// lê-la: o instantâneo do volume (instantaneo.Instantaneo.Ler). nil lê do
+	// disco. A chave no bucket é sempre a do disco.
+	Leitura func(string) string
 	// VerificarDias é o ciclo da reconferência rotativa (releitura +
 	// HeadObject de cada arquivo que o atalho pularia). Zero: 30.
 	VerificarDias int
@@ -288,7 +292,7 @@ func Run(ctx context.Context, o EngineOptions) (*Result, error) {
 	if o.Delta && o.RemovidosEmParcial {
 		listadas = novasPastasListadas()
 	}
-	fileCh, errCh := walkSem(ctx, o.HostRoot, o.SourcePaths, o.ExcludeGlobs, &pulados, o.Ignorar, listadas)
+	fileCh, errCh := walkSem(ctx, o.HostRoot, o.SourcePaths, o.ExcludeGlobs, &pulados, o.Ignorar, listadas, o.Leitura)
 
 	numerados := make(chan itemDoWalk, 128)
 	go func() {

@@ -14,6 +14,7 @@ import (
 	"github.com/arkame-app/agent/internal/api"
 	"github.com/arkame-app/agent/internal/atualizacao"
 	"github.com/arkame-app/agent/internal/config"
+	"github.com/arkame-app/agent/internal/instantaneo"
 	"github.com/arkame-app/agent/internal/service"
 	"github.com/arkame-app/agent/internal/storage"
 	"github.com/arkame-app/agent/pkg/version"
@@ -215,6 +216,9 @@ func (a *atualizador) capacidades() []string {
 	// O inventário do bucket: basta o armazenamento configurado (nada é gravado).
 	if podeInventariar(a.cfg) {
 		caps = append(caps, api.CapacidadeInventariarBucket)
+	}
+	if instantaneo.Suportado {
+		caps = append(caps, api.CapacidadeInstantaneoDoVolume)
 	}
 	if a.impedimento != "" {
 		return caps

@@ -231,6 +231,10 @@ sudo /opt/arkame/bin/arkame-agent uninstall
 ~/.local/bin/arkame-agent uninstall --service-scope user
 ```
 
+Windows (elevated prompt): `arkame-agent status`, `arkame-agent check-storage`,
+`arkame-agent check-snapshot` (creates a volume snapshot, reads a file from it
+and releases it — the same thing every backup does before reading).
+
 Docker: `sudo docker logs --tail 50 arkame-agent`, and always restart or stop
 with `-t 150`. Removing the agent leaves your backups in the bucket.
 
@@ -308,9 +312,22 @@ Things you should know before relying on it:
   then fails safely and keeps the current program; Windows 10 and Windows
   Server work. Integrity is covered by the signed checksums.
 - **The container image is not signed** with cosign; only `checksums.txt` is.
-- **No filesystem snapshots** (LVM, VSS, btrfs). Files are read as they are;
-  for databases, dump to a folder first (a plan's pre-backup command natively,
-  or a host cron job with Docker, where pre/post commands do not run).
+- **Snapshots on Windows only.** On 64-bit Windows the agent reads each backup
+  from a Volume Shadow Copy (VSS): after the plan's pre-backup command, the
+  volumes of the plan are frozen for a few seconds, applications that take
+  part (SQL Server, Exchange) flush their writes, and files are read from the
+  frozen copy — open and locked files (an open Outlook `.pst`) included. It is
+  a copy-only backup (`VSS_BT_COPY`), so other backup software's history is
+  untouched, and the snapshot is released as soon as reading ends; the agent
+  never deletes shadow copies. If a snapshot can't be created (FAT32/exFAT or
+  network drive, no shadow storage left, not running as administrator), that
+  drive is read live and the session is completed with a
+  `snapshot_unavailable` warning. A plan can turn it off. Test it with
+  `arkame-agent check-snapshot [folder]` from an elevated prompt. Linux and
+  macOS read files as they are (no LVM/btrfs snapshots yet); for databases,
+  dump to a folder first — the panel's plan form has ready-made recipes for
+  PostgreSQL, MySQL/MariaDB, MongoDB and SQL Server (a host cron job with
+  Docker, where pre/post commands do not run).
 - **Native Linux service restores** into `/etc`, `/usr` or `/boot` fail because
   the systemd unit uses `ProtectSystem=full`; restore elsewhere and copy. The
   Docker install can write there.

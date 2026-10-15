@@ -69,6 +69,9 @@ type Plan struct {
 	PostHook string `json:"post_hook,omitempty"`
 	// Prazo de cada comando, em segundos. Zero usa o padrão do executor.
 	HookTimeoutSeconds int `json:"hook_timeout_seconds,omitempty"`
+	// Snapshot: o instantâneo do volume antes de ler (VSS, no Windows).
+	// "auto" ou vazio (painel de antes do campo) tenta; "off" lê do disco.
+	Snapshot string `json:"snapshot,omitempty"`
 }
 
 type StorageRef struct {
@@ -560,6 +563,11 @@ type VerifyResultResponse struct {
 // entrega em páginas contra a listagem do bucket. Só quem a declara recebe
 // plano de inventário.
 const CapacidadeInventariarBucket = "bucket_inventory"
+
+// CapacidadeInstantaneoDoVolume: o agente lê o backup de um instantâneo do
+// volume (VSS, no Windows de 64 bits). O painel só mostra a opção do plano a
+// quem a declara.
+const CapacidadeInstantaneoDoVolume = "volume_snapshot"
 
 // InventoryItem é uma versão que o catálogo do painel diz existir.
 type InventoryItem struct {

@@ -29,6 +29,7 @@ import (
 	"github.com/arkame-app/agent/internal/estado"
 	"github.com/arkame-app/agent/internal/fsbrowse"
 	"github.com/arkame-app/agent/internal/hooks"
+	"github.com/arkame-app/agent/internal/instantaneo"
 	"github.com/arkame-app/agent/internal/purge"
 	"github.com/arkame-app/agent/internal/restore"
 	"github.com/arkame-app/agent/internal/scheduler"
@@ -572,7 +573,15 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 		MaxMbps:      plan.Throttle.MaxMbps,
 	}
 	indice.configurar(&opcoes, cfg)
+	// Instantâneo do volume, depois do comando de antes (o dump dele entra) e
+	// solto assim que a leitura acaba — antes do comando de depois, que
+	// costuma apagar o dump.
+	inst := abrirInstantaneo(ctx, plan.Snapshot, plan.SourcePaths)
+	if inst.Ativo() {
+		opcoes.Leitura = inst.Ler
+	}
 	result, syncErr := rodarSync(ctx, opcoes)
+	inst.Fechar()
 	// Comando de depois: roda com sucesso OU com falha, porque é ele que limpa
 	// o dump temporário — deixar o arquivo para trás encheria o disco do
 	// cliente justamente nos dias em que o backup deu errado.
@@ -664,10 +673,11 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 	}
 
 	completeBody := corpoDeConclusao{
-		Status:           completeStatus,
-		Stats:            result.Stats,
-		CloudOnlySkipped: result.CloudOnlySkipped,
-		ReparseSkipped:   result.ReparseSkipped,
+		Status:            completeStatus,
+		Stats:             result.Stats,
+		CloudOnlySkipped:  result.CloudOnlySkipped,
+		ReparseSkipped:    result.ReparseSkipped,
+		ConsistencyMethod: inst.Metodo,
 	}
 	guardados := result.Guardados()
 	// Mapeia FileEntry pro JSON que o painel espera. Só no caminho inline:
@@ -706,6 +716,17 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 		completeBody.ErrorMessage += nota
 		slog.Warn("backup parcial", "plan_id", plan.ID, "session_id", startResp.SessionID,
 			"arquivos_com_falha", result.FilesFailed, "err", syncErr, "causa", completeBody.ErrorMessage)
+	}
+	if inst.Aviso != "" {
+		// Sem instantâneo a sessão segue: os arquivos foram lidos do disco,
+		// como antes. Concluída, o aviso é o código dela; parcial, vai junto
+		// da causa.
+		if completeStatus == "complete" {
+			completeBody.ErrorCode = codigoSemInstantaneo
+			completeBody.ErrorMessage = inst.Aviso + msgSemInstantaneo
+		} else {
+			completeBody.ErrorMessage += "; " + inst.Aviso
+		}
 	}
 	if completeStatus == "complete" && falhaDoDepois != "" {
 		completeBody.ErrorCode = "post_hook_failed"
@@ -914,6 +935,17 @@ const notaDoDepois = "; comando de depois falhou"
 // notaDoDepoisInterrompido é a nota quando a parada do serviço derrubou o
 // comando de depois: ele não falhou.
 const notaDoDepoisInterrompido = "; " + msgDoDepoisInterrompido
+
+// codigoSemInstantaneo é o aviso da sessão concluída que leu do disco porque
+// o instantâneo do volume não pôde ser criado. Os avisos do comando de depois
+// têm precedência: o que eles dizem pede ação no servidor.
+const codigoSemInstantaneo = "snapshot_unavailable"
+
+// msgSemInstantaneo completa o aviso com a consequência.
+const msgSemInstantaneo = ". Os arquivos dessas unidades foram lidos direto do disco: um arquivo aberto e sendo gravado durante o backup pode ter sido copiado pela metade"
+
+// abrirInstantaneo é instantaneo.Abrir; os testes o trocam.
+var abrirInstantaneo = instantaneo.Abrir
 
 // msgDoDepoisInterrompido é o error_message de post_hook_interrupted, o aviso
 // da sessão completa cujo comando de depois a parada do serviço derrubou: o
