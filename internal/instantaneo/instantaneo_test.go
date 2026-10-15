@@ -162,3 +162,35 @@ func TestVivoENoDisco(t *testing.T) {
 		t.Fatalf("NoDisco = %q", got)
 	}
 }
+
+// A tradução respeita o fim do nome do dispositivo: ShadowCopy1 não come o
+// começo de ShadowCopy12.
+func TestNoDiscoComDispositivosParecidos(t *testing.T) {
+	trocar(t, true, func(context.Context, []string) (map[string]string, func(bool), string, error) {
+		return map[string]string{"C:": `\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy1`, "D:": `\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy12`}, func(bool) {}, "", nil
+	})
+	i := Abrir(context.Background(), "auto", []string{`C:\a`, `D:\b`})
+	msg := `\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy12\b\x; \\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy1\a\y`
+	if got := i.NoDisco(msg); got != `D:\b\x; C:\a\y` {
+		t.Fatalf("NoDisco = %q", got)
+	}
+}
+
+// AindaNoDisco: chave do bucket vira caminho do disco; só "não existe" é falta.
+func TestAindaNoDisco(t *testing.T) {
+	velho := lstatNoDisco
+	t.Cleanup(func() { lstatNoDisco = velho })
+	var pedido string
+	lstatNoDisco = func(p string) (os.FileInfo, error) { pedido = p; return nil, os.ErrNotExist }
+	i := &Instantaneo{}
+	if i.AindaNoDisco("C:/Users/x/a.ost") || pedido != `C:\Users\x\a.ost` {
+		t.Fatalf("caminho conferido %q", pedido)
+	}
+	lstatNoDisco = func(string) (os.FileInfo, error) { return nil, os.ErrPermission }
+	if !i.AindaNoDisco("C:/Users/x/a.ost") {
+		t.Fatal("erro que não é 'não existe' tem de contar como existe")
+	}
+	if i.AindaNoDisco("sem-unidade/x") {
+		t.Fatal("chave sem unidade não está no disco")
+	}
+}

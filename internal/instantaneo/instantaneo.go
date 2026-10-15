@@ -27,6 +27,7 @@ package instantaneo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -65,8 +66,13 @@ type Instantaneo struct {
 	// instantâneo, "none" quando se tentou e não deu, vazio quando não se
 	// tentou (outro sistema, plano que dispensa).
 	Metodo string
-	// Aviso é por que não houve instantâneo, quando se tentou.
+	// Aviso é por que não houve instantâneo (em todas ou em parte das
+	// unidades), quando se tentou: o que ele cobre foi lido do disco.
 	Aviso string
+	// AvisoDosEscritores lista os programas (escritores do VSS) que falharam
+	// ao congelar. O instantâneo existe e foi lido; os arquivos desses
+	// programas é que saíram como depois de uma queda de energia.
+	AvisoDosEscritores string
 
 	// volumes leva a unidade ("C:") ao dispositivo do instantâneo dela
 	// (`\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy5`).
@@ -123,22 +129,8 @@ func Abrir(ctx context.Context, modo string, pastas []string) *Instantaneo {
 		i.Metodo = MetodoParcial
 		i.Aviso = strings.Join(fora, ", ") + " não aceita instantâneo (VSS): FAT32, exFAT, unidade de rede ou subst"
 	}
-	// Escritor que falhou (o SQL Server que não congelou a tempo): o
-	// instantâneo existe, mas o que esse programa guarda saiu como depois de
-	// uma queda de energia.
-	i.Somar(avisoDosEscritores)
+	i.AvisoDosEscritores = avisoDosEscritores
 	return i
-}
-
-// Somar acrescenta um aviso (o dos escritores, por exemplo) ao que já houver.
-func (i *Instantaneo) Somar(aviso string) {
-	if aviso == "" {
-		return
-	}
-	if i.Aviso != "" {
-		i.Aviso += "; "
-	}
-	i.Aviso += aviso
 }
 
 // Ler leva o caminho real de um arquivo (`C:\Users\x`) ao mesmo arquivo dentro
@@ -181,11 +173,34 @@ func (i *Instantaneo) NoDisco(msg string) string {
 	if i == nil {
 		return msg
 	}
-	for u, d := range i.volumes {
-		msg = strings.ReplaceAll(msg, d, u)
+	// Com a barra, e do maior para o menor: `…ShadowCopy1` é prefixo de
+	// `…ShadowCopy12`.
+	unidades := make([]string, 0, len(i.volumes))
+	for u := range i.volumes {
+		unidades = append(unidades, u)
+	}
+	sort.Slice(unidades, func(a, b int) bool { return len(i.volumes[unidades[a]]) > len(i.volumes[unidades[b]]) })
+	for _, u := range unidades {
+		msg = strings.ReplaceAll(msg, i.volumes[u]+`\`, u+`\`)
 	}
 	return msg
 }
+
+// AindaNoDisco diz se o arquivo de chave rel (`C:/Users/x/a.ost`, relativa
+// ao prefixo do plano) existe no disco vivo. Qualquer resposta que não seja
+// "não existe" conta como existe: na dúvida, não se declara remoção.
+func (i *Instantaneo) AindaNoDisco(rel string) bool {
+	u := caminho.Unidade(rel)
+	if u == "" {
+		return false
+	}
+	p := u + `\` + strings.ReplaceAll(strings.TrimLeft(rel[len(u):], "/"), "/", `\`)
+	_, err := lstatNoDisco(p)
+	return err == nil || !errors.Is(err, os.ErrNotExist)
+}
+
+// lstatNoDisco é o os.Lstat do disco vivo; os testes o trocam.
+var lstatNoDisco = os.Lstat
 
 // Fechar solta o instantâneo. Com o ctx já cancelado (o serviço parando),
 // solta sem avisar os escritores e sem esperar: o Windows dá poucos segundos

@@ -153,10 +153,14 @@ func walkSem(ctx context.Context, hostRoot string, sourcePaths []string, exclude
 			// restaura /home, mesmo que no disco seja /var/home.
 			escolhido := caminho.NoDisco(hostRoot, sp)
 			root := caminho.Real(hostRoot, sp)
+			// Do instantâneo, quando há: a mesma pasta, congelada. A chave
+			// continua a do disco (escolhido). A unidade sem instantâneo (um
+			// pendrive em exFAT) volta igual e segue a regra do disco.
+			doInstantaneo := false
 			if ler != nil {
-				// Do instantâneo, quando há: a mesma pasta, congelada. A chave
-				// continua a do disco (escolhido).
-				root = ler(root)
+				lida := ler(root)
+				doInstantaneo = lida != root
+				root = lida
 			}
 			chave := func(p string) string {
 				return caminho.NaChave(hostRoot, escolhido+strings.TrimPrefix(p, root))
@@ -190,7 +194,7 @@ func walkSem(ctx context.Context, hostRoot string, sourcePaths []string, exclude
 					// falha. O resto (permissão, erro de disco) entra na conta.
 					// Dentro de um instantâneo nada é apagado: "não existe" lá
 					// é a cópia de sombra que sumiu, e conta como falha.
-					if ler != nil || !errors.Is(err, fs.ErrNotExist) {
+					if doInstantaneo || !errors.Is(err, fs.ErrNotExist) {
 						anotar(path, err)
 					}
 					return nil
@@ -219,7 +223,7 @@ func walkSem(ctx context.Context, hostRoot string, sourcePaths []string, exclude
 				leitura := path
 				info, err := d.Info()
 				if err != nil {
-					if ler != nil || !errors.Is(err, fs.ErrNotExist) {
+					if doInstantaneo || !errors.Is(err, fs.ErrNotExist) {
 						anotar(path, err)
 					}
 					return nil

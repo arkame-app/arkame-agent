@@ -39,6 +39,15 @@ func newCheckSnapshotCmd() *cobra.Command {
 			}
 			dentro := inst.Ler(pasta)
 			fmt.Fprintln(saida, "  ✓ Instantâneo criado:", dentro)
+			// A mesma conferência que o backup faz antes de tratar algo como
+			// removido: se ela falhar aqui com o instantâneo vivo, todo backup
+			// sairia parcial.
+			if err := inst.Vivo(); err != nil {
+				return fmt.Errorf("✗ o instantâneo foi criado, mas a conferência de que ele existe falhou: %w", err)
+			}
+			if inst.AvisoDosEscritores != "" {
+				fmt.Fprintln(saida, "  ! "+inst.AvisoDosEscritores)
+			}
 			itens, err := os.ReadDir(dentro)
 			if err != nil {
 				return fmt.Errorf("✗ o instantâneo foi criado, mas a pasta não abriu dentro dele: %w", err)

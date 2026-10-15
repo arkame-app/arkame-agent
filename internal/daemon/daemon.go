@@ -581,6 +581,7 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 		opcoes.Leitura = inst.Ler
 		opcoes.LeituraViva = inst.Vivo
 		opcoes.NoDisco = inst.NoDisco
+		opcoes.AindaNoDisco = inst.AindaNoDisco
 	}
 	result, syncErr := rodarSync(ctx, opcoes)
 	inst.Fechar(ctx)
@@ -730,11 +731,24 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 			completeBody.ErrorMessage += "; " + inst.Aviso
 		}
 	}
+	if inst.AvisoDosEscritores != "" {
+		// O instantâneo existe e foi lido; um programa é que não congelou.
+		// Código próprio: "lido do disco" seria falso.
+		switch {
+		case completeStatus == "complete" && completeBody.ErrorCode == "":
+			completeBody.ErrorCode = codigoEscritorFalhou
+			completeBody.ErrorMessage = inst.AvisoDosEscritores
+		default:
+			completeBody.ErrorMessage += "; " + inst.AvisoDosEscritores
+		}
+	}
 	// O aviso do instantâneo vai junto do do comando de depois, que tem a
 	// precedência no código: os dois dizem algo que a pessoa precisa saber.
 	semInstantaneo := ""
-	if inst.Aviso != "" {
-		semInstantaneo = "; " + inst.Aviso
+	for _, a := range []string{inst.Aviso, inst.AvisoDosEscritores} {
+		if a != "" {
+			semInstantaneo += "; " + a
+		}
 	}
 	if completeStatus == "complete" && falhaDoDepois != "" {
 		completeBody.ErrorCode = "post_hook_failed"
@@ -948,6 +962,11 @@ const notaDoDepoisInterrompido = "; " + msgDoDepoisInterrompido
 // o instantâneo do volume não pôde ser criado. Os avisos do comando de depois
 // têm precedência: o que eles dizem pede ação no servidor.
 const codigoSemInstantaneo = "snapshot_unavailable"
+
+// codigoEscritorFalhou é o aviso da sessão lida do instantâneo em que um
+// escritor do VSS (o SQL Server, o Exchange) falhou ao congelar: os arquivos
+// dele saíram como depois de uma queda de energia.
+const codigoEscritorFalhou = "vss_writer_failed"
 
 // msgSemInstantaneo completa o aviso com a consequência.
 const msgSemInstantaneo = ". Os arquivos dessas unidades foram lidos direto do disco: um arquivo aberto e sendo gravado durante o backup pode ter sido copiado pela metade"

@@ -341,7 +341,9 @@ func montar(unidades []string, limite time.Time) (s *sessaoVSS, volumes map[stri
 		}
 		volumes[u] = dispositivo
 	}
-	return &sessaoVSS{bc: bc}, volumes, escritoresComFalha(bc, limite), nil
+	// Prazo próprio e curto: o instantâneo já existe, e a leitura do estado dos
+	// escritores não pode gastar o prazo da criação e descartá-lo.
+	return &sessaoVSS{bc: bc}, volumes, escritoresComFalha(bc, time.Now().Add(30*time.Second)), nil
 }
 
 // escritoresComFalha lê o estado de cada escritor depois do instantâneo. O

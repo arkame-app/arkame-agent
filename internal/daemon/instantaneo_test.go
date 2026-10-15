@@ -86,3 +86,20 @@ func TestSemTentativaNaoMandaOMetodo(t *testing.T) {
 		t.Fatalf("complete fora do Windows com consistency_method: %s", corpo)
 	}
 }
+
+// Escritor do VSS que falhou: o instantâneo foi lido, e o aviso tem código
+// próprio — "lido do disco" seria falso.
+func TestEscritorQueFalhouTemCodigoProprio(t *testing.T) {
+	var modo string
+	trocarInstantaneo(t, &instantaneo.Instantaneo{Metodo: instantaneo.MetodoVSS, AvisoDosEscritores: "escritores do VSS que falharam: SqlServerWriter"}, &modo)
+	painel, c := novoPainel(t)
+	cfg := &config.Config{AgentID: "a1", HostRoot: "/"}
+	if err := executePlan(context.Background(), c, bucketDeTeste(t, true), cfg, planoComArquivo(t)); err != nil {
+		t.Fatal(err)
+	}
+	got := lerConsistencia(t, painel)
+	if got.Status != "complete" || got.ErrorCode != codigoEscritorFalhou || got.ConsistencyMethod != "vss" ||
+		!strings.Contains(got.ErrorMessage, "SqlServerWriter") || strings.Contains(got.ErrorMessage, "disco") {
+		t.Fatalf("complete = %+v", got)
+	}
+}

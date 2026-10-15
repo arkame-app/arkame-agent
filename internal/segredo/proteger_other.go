@@ -48,3 +48,10 @@ func pastaDeVerdade(p string, _ os.FileInfo) error {
 func permitirEscrita(dir, escritor string) error {
 	return fmt.Errorf("--writer só existe no Windows (a conta %q não foi aplicada a %s)", escritor, dir)
 }
+
+// criarPastaFechada cria a pasta com 0700.
+func criarPastaFechada(p string) error { return os.Mkdir(p, 0o700) }
+
+// semLinkAcima: fora do Windows um link no caminho é escolha do
+// administrador (o estado em outro disco), e o dono conferido é o do destino.
+func semLinkAcima(string) error { return nil }

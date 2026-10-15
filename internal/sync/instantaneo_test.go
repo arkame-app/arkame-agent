@@ -97,3 +97,28 @@ func chavesDoOp(es []api.IndexEntry, op string) []string {
 	}
 	return out
 }
+
+// O Windows tira da cópia de sombra os arquivos de FilesNotToSnapshot (o .ost
+// do Outlook): eles faltam no instantâneo e continuam no disco. Faltar ali não
+// é remoção.
+func TestFaltaNaCopiaMasEstaNoDiscoNaoViraRemocao(t *testing.T) {
+	m := novaMesa(t)
+	m.semear(20)
+	m.rodar()
+	alvo := filepath.Join(m.raiz, "p01/arquivo-0001.txt")
+	if err := os.Remove(alvo); err != nil {
+		t.Fatal(err)
+	}
+	m.noDisco = func(rel string) bool { return strings.HasSuffix(rel, "/p01/arquivo-0001.txt") }
+	r, em := m.rodar()
+	if rem := chavesDoOp(em, api.OpRemoved); len(rem) != 0 {
+		t.Fatalf("arquivo que está no disco declarado removido: %v", rem)
+	}
+	if !r.InventarioCompleto {
+		t.Fatal("a sessão continua sendo inventário completo")
+	}
+	m.noDisco = func(string) bool { return false }
+	if _, em = m.rodar(); len(chavesDoOp(em, api.OpRemoved)) != 1 {
+		t.Fatalf("fora do disco, a remoção tinha de sair: %+v", em)
+	}
+}

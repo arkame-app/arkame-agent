@@ -66,6 +66,12 @@ type EngineOptions struct {
 	// em diante tudo dá "não existe", e sem esta conferência a falta virava
 	// remoção no catálogo de arquivos que continuam no disco.
 	LeituraViva func() error
+	// AindaNoDisco diz se o arquivo de chave rel (relativa ao prefixo do
+	// plano) ainda existe no disco vivo. Com instantâneo, o que falta nele não
+	// prova remoção: o Windows tira da cópia de sombra os arquivos da lista
+	// FilesNotToSnapshot (o .ost do Outlook, por exemplo), e a cópia pode ter
+	// sumido. nil: sem conferência.
+	AindaNoDisco func(rel string) bool
 	// NoDisco traduz uma mensagem com caminhos do instantâneo para os do disco
 	// (`C:\…`), que é o que a pessoa reconhece no painel. nil: sem tradução.
 	NoDisco func(string) string
@@ -362,7 +368,8 @@ func Run(ctx context.Context, o EngineOptions) (*Result, error) {
 		if err := o.LeituraViva(); err != nil {
 			leituraPerdida = true
 			perda := fmt.Errorf("o instantâneo do volume deixou de existir durante o backup; o que faltou não foi tratado como removido: %w", err)
-			walkErr = errors.Join(walkErr, perda)
+			// A perda vem primeiro: a mensagem é cortada em 4.000 caracteres.
+			walkErr = errors.Join(perda, walkErr)
 		}
 	}
 	result.CloudOnlySkipped = pulados.SoNaNuvem
@@ -659,9 +666,13 @@ func (c *coletor) fecharInventario() error {
 		case !ent.Removida && !vale && !ent.NaBase:
 			return estado.Apagar, ent // nunca chegou a uma sessão confirmada
 		}
+		foraDaSelecao := !sel.contem(rel)
+		if !foraDaSelecao && c.o.AindaNoDisco != nil && c.o.AindaNoDisco(rel) {
+			return estado.Manter, ent // falta na cópia, mas está no disco
+		}
 		ent.Removida = true
 		ent.NaBase = true
-		ent.ForaDaSelecao = !sel.contem(rel)
+		ent.ForaDaSelecao = foraDaSelecao
 		op := api.OpRemoved
 		if ent.ForaDaSelecao {
 			op = api.OpUnselected
@@ -729,6 +740,8 @@ func (c *coletor) removerOProvado(listadas *pastasListadas) error {
 			return estado.Manter, ent
 		case !listadas.saiu(rel):
 			return estado.Manter, ent // não foi lido: não é prova de que saiu
+		case c.o.AindaNoDisco != nil && c.o.AindaNoDisco(rel):
+			return estado.Manter, ent // falta na cópia, mas está no disco
 		}
 		ent.Removida = true
 		ent.NaBase = true

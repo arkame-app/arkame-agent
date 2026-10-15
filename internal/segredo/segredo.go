@@ -149,8 +149,15 @@ func PastaPrivada(dir string) error {
 				return pastaQueJaExistia(p, fi)
 			}
 			// Criar dentro da pasta de outro usuário não adianta: quem é dono
-			// da pasta de cima renomeia a nossa e põe outra no lugar.
-			if err := ConferirDono(p); err != nil {
+			// da pasta de cima renomeia a nossa e põe outra no lugar. E ela
+			// tem de ser uma pasta de verdade: uma junção criada por um
+			// usuário comum (dono dela) apontando para uma pasta do sistema
+			// passava, porque o dono conferido era o do destino — e ele
+			// trocava o destino depois.
+			if err := pastaQueJaExistia(p, fi); err != nil {
+				return err
+			}
+			if err := semLinkAcima(filepath.Dir(p)); err != nil {
 				return err
 			}
 			break
@@ -165,7 +172,9 @@ func PastaPrivada(dir string) error {
 	}
 	for i := len(faltam) - 1; i >= 0; i-- {
 		p := faltam[i]
-		err := os.Mkdir(p, 0o700)
+		// Já nasce fechada: criar e proteger depois deixava um instante em
+		// que a pasta herdava a permissão de cima.
+		err := criarPastaFechada(p)
 		if errors.Is(err, os.ErrExist) {
 			// Alguém a criou entre a consulta e agora: não é nossa.
 			fi, lerr := os.Lstat(p)
@@ -179,9 +188,6 @@ func PastaPrivada(dir string) error {
 		}
 		if err != nil {
 			return fmt.Errorf("criando %s: %w", dir, err)
-		}
-		if err := protegerPasta(p); err != nil {
-			return err
 		}
 	}
 	return nil
