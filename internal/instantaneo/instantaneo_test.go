@@ -3,6 +3,7 @@ package instantaneo
 import (
 	"context"
 	"errors"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -37,7 +38,7 @@ func TestUnidadesDoPlano(t *testing.T) {
 	}
 }
 
-func trocar(t *testing.T, win bool, f func(context.Context, []string) (map[string]string, func(), error)) {
+func trocar(t *testing.T, win bool, f func(context.Context, []string) (map[string]string, func(bool), string, error)) {
 	t.Helper()
 	velhoW, velhoC := noWindows, criar
 	noWindows, criar = win, f
@@ -47,9 +48,9 @@ func trocar(t *testing.T, win bool, f func(context.Context, []string) (map[strin
 func TestAbrirComInstantaneo(t *testing.T) {
 	soltou := 0
 	var pedidas []string
-	trocar(t, true, func(_ context.Context, u []string) (map[string]string, func(), error) {
+	trocar(t, true, func(_ context.Context, u []string) (map[string]string, func(bool), string, error) {
 		pedidas = u
-		return map[string]string{"C:": dispC}, func() { soltou++ }, nil
+		return map[string]string{"C:": dispC}, func(bool) { soltou++ }, "", nil
 	})
 	i := Abrir(context.Background(), "auto", []string{`C:\Users\x`})
 	if !i.Ativo() || i.Metodo != MetodoVSS || i.Aviso != "" {
@@ -61,8 +62,8 @@ func TestAbrirComInstantaneo(t *testing.T) {
 	if got := i.Ler(`C:\Users\x\a.txt`); got != dispC+`\Users\x\a.txt` {
 		t.Fatalf("Ler = %q", got)
 	}
-	i.Fechar()
-	i.Fechar()
+	i.Fechar(context.Background())
+	i.Fechar(context.Background())
 	if soltou != 1 {
 		t.Fatalf("soltou %d vezes; queria 1", soltou)
 	}
@@ -70,8 +71,8 @@ func TestAbrirComInstantaneo(t *testing.T) {
 
 // Falhar ao criar não falha o backup: lê do disco, e o motivo vai ao painel.
 func TestAbrirSemInstantaneoLeDoDisco(t *testing.T) {
-	trocar(t, true, func(context.Context, []string) (map[string]string, func(), error) {
-		return nil, nil, errors.New("acesso negado")
+	trocar(t, true, func(context.Context, []string) (map[string]string, func(bool), string, error) {
+		return nil, nil, "", errors.New("acesso negado")
 	})
 	i := Abrir(context.Background(), "", []string{`C:\a`, `D:\b`})
 	if i.Ativo() || i.Metodo != MetodoNenhum || !strings.Contains(i.Aviso, "C:, D:") || !strings.Contains(i.Aviso, "acesso negado") {
@@ -80,15 +81,15 @@ func TestAbrirSemInstantaneoLeDoDisco(t *testing.T) {
 	if got := i.Ler(`C:\a\x`); got != `C:\a\x` {
 		t.Fatalf("Ler sem instantâneo mudou o caminho: %q", got)
 	}
-	i.Fechar()
+	i.Fechar(context.Background())
 }
 
 // Plano que dispensa, e outro sistema: nem tenta.
 func TestAbrirNaoTenta(t *testing.T) {
 	chamou := false
-	f := func(context.Context, []string) (map[string]string, func(), error) {
+	f := func(context.Context, []string) (map[string]string, func(bool), string, error) {
 		chamou = true
-		return nil, nil, errors.New("x")
+		return nil, nil, "", errors.New("x")
 	}
 	trocar(t, true, f)
 	if i := Abrir(context.Background(), ModoDesligado, []string{`C:\a`}); i.Metodo != "" || chamou {
@@ -106,20 +107,58 @@ func TestNilLeDoDisco(t *testing.T) {
 	if i.Ler(`C:\a`) != `C:\a` || i.Ativo() {
 		t.Fatal("nil não lê do disco")
 	}
-	i.Fechar()
+	i.Fechar(context.Background())
 }
 
 // A unidade que não aceita instantâneo é lida do disco, com aviso, e as
 // outras seguem do instantâneo.
 func TestUnidadeSemSuporteLeDoDiscoComAviso(t *testing.T) {
-	trocar(t, true, func(context.Context, []string) (map[string]string, func(), error) {
-		return map[string]string{"C:": dispC}, func() {}, nil
+	trocar(t, true, func(context.Context, []string) (map[string]string, func(bool), string, error) {
+		return map[string]string{"C:": dispC}, func(bool) {}, "", nil
 	})
 	i := Abrir(context.Background(), "auto", []string{`C:\a`, `E:\pendrive`})
-	if !i.Ativo() || i.Metodo != MetodoVSS || !strings.Contains(i.Aviso, "E:") || strings.Contains(i.Aviso, "C:") {
+	if !i.Ativo() || i.Metodo != MetodoParcial || !strings.Contains(i.Aviso, "E:") || strings.Contains(i.Aviso, "C:") {
 		t.Fatalf("instantâneo = %+v; queria vss com aviso só de E:", i)
 	}
 	if i.Ler(`E:\pendrive\x`) != `E:\pendrive\x` || i.Ler(`C:\a\x`) != dispC+`\a\x` {
 		t.Fatal("E: devia ler do disco e C: do instantâneo")
+	}
+}
+
+// Com o serviço parando, solta rápido (sem avisar os escritores nem esperar).
+func TestFecharRapidoComCtxCancelado(t *testing.T) {
+	var rapido []bool
+	trocar(t, true, func(context.Context, []string) (map[string]string, func(bool), string, error) {
+		return map[string]string{"C:": dispC}, func(r bool) { rapido = append(rapido, r) }, "", nil
+	})
+	i := Abrir(context.Background(), "auto", []string{`C:\a`})
+	ctx, cancelar := context.WithCancel(context.Background())
+	cancelar()
+	i.Fechar(ctx)
+	if len(rapido) != 1 || !rapido[0] {
+		t.Fatalf("soltar chamado com %v; queria [true]", rapido)
+	}
+}
+
+// Vivo acusa o instantâneo que sumiu; NoDisco devolve os caminhos do disco.
+func TestVivoENoDisco(t *testing.T) {
+	trocar(t, true, func(context.Context, []string) (map[string]string, func(bool), string, error) {
+		return map[string]string{"C:": dispC}, func(bool) {}, "", nil
+	})
+	i := Abrir(context.Background(), "auto", []string{`C:\a`})
+	velho := statDoDispositivo
+	t.Cleanup(func() { statDoDispositivo = velho })
+	var pedido string
+	statDoDispositivo = func(p string) (os.FileInfo, error) { pedido = p; return nil, nil }
+	if err := i.Vivo(); err != nil || pedido != dispC+`\` {
+		t.Fatalf("Vivo = %v, conferiu %q", err, pedido)
+	}
+	statDoDispositivo = func(string) (os.FileInfo, error) { return nil, os.ErrNotExist }
+	if err := i.Vivo(); err == nil || !strings.Contains(err.Error(), "C:") {
+		t.Fatalf("Vivo com o instantâneo sumido = %v", err)
+	}
+	msg := "não consegui ler " + dispC + `\a\x.pst: acesso negado`
+	if got := i.NoDisco(msg); got != `não consegui ler C:\a\x.pst: acesso negado` {
+		t.Fatalf("NoDisco = %q", got)
 	}
 }

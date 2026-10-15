@@ -569,6 +569,11 @@ const CapacidadeInventariarBucket = "bucket_inventory"
 // quem a declara.
 const CapacidadeInstantaneoDoVolume = "volume_snapshot"
 
+// CapacidadePastaDeDump: o agente tem `prepare-dump-folder` e passa o próprio
+// caminho aos comandos do plano (ARKAME_AGENT). A receita do SQL Server no
+// painel depende dos dois.
+const CapacidadePastaDeDump = "dump_folder"
+
 // InventoryItem é uma versão que o catálogo do painel diz existir.
 type InventoryItem struct {
 	Key       string `json:"key"`

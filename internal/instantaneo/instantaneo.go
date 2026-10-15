@@ -27,7 +27,9 @@ package instantaneo
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -38,6 +40,10 @@ import (
 
 // MetodoVSS é o consistency_method da sessão lida de um instantâneo do VSS.
 const MetodoVSS = "vss"
+
+// MetodoParcial é o da sessão em que parte das unidades saiu do instantâneo e
+// parte do disco (um pendrive em exFAT no plano).
+const MetodoParcial = "vss-partial"
 
 // MetodoNenhum é o consistency_method da sessão do Windows que tentou o
 // instantâneo e leu do disco.
@@ -65,12 +71,13 @@ type Instantaneo struct {
 	// volumes leva a unidade ("C:") ao dispositivo do instantâneo dela
 	// (`\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy5`).
 	volumes map[string]string
-	soltar  func()
+	soltar  func(rapido bool)
 	uma     sync.Once
 }
 
 // criar monta o instantâneo das unidades e devolve o dispositivo de cada uma e
-// a função que o solta. Os testes a trocam.
+// a função que o solta (rápido: sem avisar os escritores e sem esperar, para o
+// serviço que está parando). Os testes a trocam.
 var criar = criarVSS
 
 // noWindows diz se o instantâneo se aplica; os testes o trocam.
@@ -92,7 +99,7 @@ func Abrir(ctx context.Context, modo string, pastas []string) *Instantaneo {
 	cctx, cancelar := context.WithTimeout(ctx, PrazoDaCriacao)
 	defer cancelar()
 	inicio := time.Now()
-	volumes, soltar, err := criar(cctx, unidades)
+	volumes, soltar, avisoDosEscritores, err := criar(cctx, unidades)
 	if err != nil {
 		slog.Warn("instantâneo do volume indisponível; os arquivos serão lidos direto do disco",
 			"unidades", strings.Join(unidades, ","), "err", err)
@@ -113,9 +120,25 @@ func Abrir(ctx context.Context, modo string, pastas []string) *Instantaneo {
 		}
 	}
 	if len(fora) > 0 {
+		i.Metodo = MetodoParcial
 		i.Aviso = strings.Join(fora, ", ") + " não aceita instantâneo (VSS): FAT32, exFAT, unidade de rede ou subst"
 	}
+	// Escritor que falhou (o SQL Server que não congelou a tempo): o
+	// instantâneo existe, mas o que esse programa guarda saiu como depois de
+	// uma queda de energia.
+	i.Somar(avisoDosEscritores)
 	return i
+}
+
+// Somar acrescenta um aviso (o dos escritores, por exemplo) ao que já houver.
+func (i *Instantaneo) Somar(aviso string) {
+	if aviso == "" {
+		return
+	}
+	if i.Aviso != "" {
+		i.Aviso += "; "
+	}
+	i.Aviso += aviso
 }
 
 // Ler leva o caminho real de um arquivo (`C:\Users\x`) ao mesmo arquivo dentro
@@ -133,12 +156,47 @@ func (i *Instantaneo) Ler(p string) string {
 // Ativo diz se a leitura é de um instantâneo.
 func (i *Instantaneo) Ativo() bool { return i != nil && len(i.volumes) > 0 }
 
-// Fechar solta o instantâneo. Pode ser chamada mais de uma vez.
-func (i *Instantaneo) Fechar() {
+// Vivo confere que cada instantâneo ainda existe: o Windows apaga a cópia de
+// sombra quando a área dela lota, e dali em diante tudo dentro dela "não
+// existe".
+func (i *Instantaneo) Vivo() error {
+	if i == nil {
+		return nil
+	}
+	for u, d := range i.volumes {
+		if _, err := statDoDispositivo(d + `\`); err != nil {
+			return fmt.Errorf("instantâneo de %s: %w", u, err)
+		}
+	}
+	return nil
+}
+
+// statDoDispositivo é o os.Stat da conferência; os testes o trocam.
+var statDoDispositivo = os.Stat
+
+// NoDisco troca, numa mensagem, o dispositivo de cada instantâneo pela
+// unidade: `\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy7\Users\x` vira
+// `C:\Users\x`, que é o que a pessoa reconhece.
+func (i *Instantaneo) NoDisco(msg string) string {
+	if i == nil {
+		return msg
+	}
+	for u, d := range i.volumes {
+		msg = strings.ReplaceAll(msg, d, u)
+	}
+	return msg
+}
+
+// Fechar solta o instantâneo. Com o ctx já cancelado (o serviço parando),
+// solta sem avisar os escritores e sem esperar: o Windows dá poucos segundos
+// ao serviço, e o comando de depois (que apaga o dump) vem em seguida. Pode
+// ser chamada mais de uma vez.
+func (i *Instantaneo) Fechar(ctx context.Context) {
 	if i == nil || i.soltar == nil {
 		return
 	}
-	i.uma.Do(i.soltar)
+	rapido := ctx != nil && ctx.Err() != nil
+	i.uma.Do(func() { i.soltar(rapido) })
 }
 
 // lerEm troca a unidade pelo dispositivo do instantâneo dela.

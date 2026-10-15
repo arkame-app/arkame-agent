@@ -42,3 +42,9 @@ func pastaDeVerdade(p string, _ os.FileInfo) error {
 	}
 	return nil
 }
+
+// permitirEscrita só existe no Windows: fora dele o comando de antes roda como
+// root e grava o dump ele mesmo.
+func permitirEscrita(dir, escritor string) error {
+	return fmt.Errorf("--writer só existe no Windows (a conta %q não foi aplicada a %s)", escritor, dir)
+}

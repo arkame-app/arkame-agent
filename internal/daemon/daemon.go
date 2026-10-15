@@ -579,9 +579,11 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 	inst := abrirInstantaneo(ctx, plan.Snapshot, plan.SourcePaths)
 	if inst.Ativo() {
 		opcoes.Leitura = inst.Ler
+		opcoes.LeituraViva = inst.Vivo
+		opcoes.NoDisco = inst.NoDisco
 	}
 	result, syncErr := rodarSync(ctx, opcoes)
-	inst.Fechar()
+	inst.Fechar(ctx)
 	// Comando de depois: roda com sucesso OU com falha, porque é ele que limpa
 	// o dump temporário — deixar o arquivo para trás encheria o disco do
 	// cliente justamente nos dias em que o backup deu errado.
@@ -728,13 +730,19 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 			completeBody.ErrorMessage += "; " + inst.Aviso
 		}
 	}
+	// O aviso do instantâneo vai junto do do comando de depois, que tem a
+	// precedência no código: os dois dizem algo que a pessoa precisa saber.
+	semInstantaneo := ""
+	if inst.Aviso != "" {
+		semInstantaneo = "; " + inst.Aviso
+	}
 	if completeStatus == "complete" && falhaDoDepois != "" {
 		completeBody.ErrorCode = "post_hook_failed"
-		completeBody.ErrorMessage = falhaDoDepois
+		completeBody.ErrorMessage = falhaDoDepois + semInstantaneo
 	}
 	if completeStatus == "complete" && interrompidoDepois {
 		completeBody.ErrorCode = "post_hook_interrupted"
-		completeBody.ErrorMessage = msgDoDepoisInterrompido
+		completeBody.ErrorMessage = msgDoDepoisInterrompido + semInstantaneo
 	}
 	if indice.emLotes {
 		reabrir := func(rctx context.Context) (string, *api.IndexOffer, error) {

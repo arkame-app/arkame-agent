@@ -33,7 +33,7 @@ func newCheckSnapshotCmd() *cobra.Command {
 			saida := cmd.ErrOrStderr()
 			pasta = caminho.NoDisco("", pasta)
 			inst := instantaneo.Abrir(cmd.Context(), "auto", []string{pasta})
-			defer inst.Fechar()
+			defer inst.Fechar(cmd.Context())
 			if !inst.Ativo() {
 				return fmt.Errorf("✗ %s", inst.Aviso)
 			}
@@ -56,7 +56,7 @@ func newCheckSnapshotCmd() *cobra.Command {
 				fmt.Fprintf(saida, "  ✓ %s lido inteiro do instantâneo (%d bytes)\n", it.Name(), n)
 				break
 			}
-			inst.Fechar()
+			inst.Fechar(cmd.Context())
 			fmt.Fprintln(saida, "  ✓ Instantâneo solto. O backup deste servidor lê os arquivos assim.")
 			return nil
 		},

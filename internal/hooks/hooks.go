@@ -25,6 +25,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -89,6 +90,10 @@ func Run(ctx context.Context, comando string, prazo time.Duration) (Result, erro
 	// inteiro do servidor ficaria preso, e o próximo backup nunca começaria.
 	cmd := novoComando(comando)
 	grupoProprio(cmd)
+	// ARKAME_AGENT: o caminho deste programa, para o comando chamar o próprio
+	// agente (`"%ARKAME_AGENT%" prepare-dump-folder …`) sem depender do PATH
+	// do serviço nem de onde ele foi instalado.
+	cmd.Env = append(os.Environ(), "ARKAME_AGENT="+programaDoAgente())
 
 	buf := &bufferSeguro{}
 	cmd.Stdout = buf
@@ -130,6 +135,15 @@ func Run(ctx context.Context, comando string, prazo time.Duration) (Result, erro
 		return r, fmt.Errorf("comando falhou: %w", err)
 	}
 	return r, fmt.Errorf("comando terminou com código %d", r.ExitCode)
+}
+
+// programaDoAgente é o executável deste processo; vazio se o sistema não diz.
+func programaDoAgente() string {
+	p, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	return p
 }
 
 // novoComando monta o processo do shell; os testes o trocam.

@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/arkame-app/agent/internal/api"
 )
 
 // Com instantâneo, os arquivos são lidos da cópia congelada, e a chave no
@@ -58,4 +60,40 @@ func TestWalkLeDoInstantaneoComAChaveDoDisco(t *testing.T) {
 			t.Fatalf("chave %q lida de %q; queria %q (lidos: %v)", k, lidos[k], abs, lidos)
 		}
 	}
+}
+
+// O instantâneo que some no meio da sessão (a área de cópias de sombra lotou)
+// faz tudo "não existir": nada disso pode virar remoção no catálogo. A sessão
+// que seria inventário completo deixa de ser, e não sai `removed`.
+func TestInstantaneoQueSumiuNaoViraRemocao(t *testing.T) {
+	m := novaMesa(t)
+	m.semear(20)
+	m.rodar()
+	if err := os.Remove(filepath.Join(m.raiz, "p01/arquivo-0001.txt")); err != nil {
+		t.Fatal(err)
+	}
+	m.viva = func() error { return os.ErrNotExist }
+	r, em := m.rodar()
+	if r.InventarioCompleto {
+		t.Fatal("com o instantâneo perdido a sessão não pode ser inventário completo")
+	}
+	if rem := chavesDoOp(em, api.OpRemoved); len(rem) != 0 {
+		t.Fatalf("remoção emitida com o instantâneo perdido: %v", rem)
+	}
+	// Com ele vivo, a mesma falta é remoção.
+	m.viva = func() error { return nil }
+	r, em = m.rodar()
+	if !r.InventarioCompleto || len(chavesDoOp(em, api.OpRemoved)) != 1 {
+		t.Fatalf("com o instantâneo vivo a remoção tinha de sair: completo=%v %+v", r.InventarioCompleto, em)
+	}
+}
+
+func chavesDoOp(es []api.IndexEntry, op string) []string {
+	var out []string
+	for _, e := range es {
+		if e.Op == op {
+			out = append(out, e.Key)
+		}
+	}
+	return out
 }

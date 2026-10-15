@@ -188,7 +188,9 @@ func walkSem(ctx context.Context, hostRoot string, sourcePaths []string, exclude
 					}
 					// Apagado durante a leitura: não há o que copiar, e não é
 					// falha. O resto (permissão, erro de disco) entra na conta.
-					if !errors.Is(err, fs.ErrNotExist) {
+					// Dentro de um instantâneo nada é apagado: "não existe" lá
+					// é a cópia de sombra que sumiu, e conta como falha.
+					if ler != nil || !errors.Is(err, fs.ErrNotExist) {
 						anotar(path, err)
 					}
 					return nil
@@ -217,7 +219,7 @@ func walkSem(ctx context.Context, hostRoot string, sourcePaths []string, exclude
 				leitura := path
 				info, err := d.Info()
 				if err != nil {
-					if !errors.Is(err, fs.ErrNotExist) {
+					if ler != nil || !errors.Is(err, fs.ErrNotExist) {
 						anotar(path, err)
 					}
 					return nil

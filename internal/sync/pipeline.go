@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"hash/fnv"
 	"log/slog"
 	"path"
@@ -60,6 +61,14 @@ type EngineOptions struct {
 	// lê-la: o instantâneo do volume (instantaneo.Instantaneo.Ler). nil lê do
 	// disco. A chave no bucket é sempre a do disco.
 	Leitura func(string) string
+	// LeituraViva confere, ao fim da varredura, que o instantâneo ainda
+	// existe. O Windows apaga a cópia de sombra quando a área dela lota: dali
+	// em diante tudo dá "não existe", e sem esta conferência a falta virava
+	// remoção no catálogo de arquivos que continuam no disco.
+	LeituraViva func() error
+	// NoDisco traduz uma mensagem com caminhos do instantâneo para os do disco
+	// (`C:\…`), que é o que a pessoa reconhece no painel. nil: sem tradução.
+	NoDisco func(string) string
 	// VerificarDias é o ciclo da reconferência rotativa (releitura +
 	// HeadObject de cada arquivo que o atalho pularia). Zero: 30.
 	VerificarDias int
@@ -340,6 +349,22 @@ func Run(ctx context.Context, o EngineOptions) (*Result, error) {
 	// fechado.
 	for range errCh {
 	}
+	if walkErr != nil && o.NoDisco != nil {
+		walkErr = erroNoDisco{msg: o.NoDisco(walkErr.Error()), err: walkErr}
+	}
+	if o.NoDisco != nil && result.PrimeiraFalha != "" {
+		result.PrimeiraFalha = o.NoDisco(result.PrimeiraFalha)
+	}
+	// O instantâneo sumiu durante a leitura: nada do que faltou prova
+	// remoção, e a sessão não é inventário.
+	leituraPerdida := false
+	if o.LeituraViva != nil {
+		if err := o.LeituraViva(); err != nil {
+			leituraPerdida = true
+			perda := fmt.Errorf("o instantâneo do volume deixou de existir durante o backup; o que faltou não foi tratado como removido: %w", err)
+			walkErr = errors.Join(walkErr, perda)
+		}
+	}
 	result.CloudOnlySkipped = pulados.SoNaNuvem
 	result.ReparseSkipped = pulados.Reparse
 	result.NaoPermitido = result.NaoPermitido || pulados.NaoPermitido
@@ -358,7 +383,7 @@ func Run(ctx context.Context, o EngineOptions) (*Result, error) {
 		if err := c.fecharInventario(); err != nil {
 			return result, err
 		}
-	} else if listadas != nil {
+	} else if listadas != nil && !leituraPerdida {
 		if err := c.removerOProvado(listadas); err != nil {
 			return result, err
 		}
@@ -786,3 +811,13 @@ func (s selecao) excluida(dentro string) bool {
 	}
 	return false
 }
+
+// erroNoDisco troca a mensagem (caminhos do instantâneo pelos do disco) sem
+// perder o erro de baixo para errors.Is.
+type erroNoDisco struct {
+	msg string
+	err error
+}
+
+func (e erroNoDisco) Error() string { return e.msg }
+func (e erroNoDisco) Unwrap() error { return e.err }

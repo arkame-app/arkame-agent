@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 	"unsafe"
@@ -37,6 +38,8 @@ var (
 	procCoInitializeEx = ole32.NewProc("CoInitializeEx")
 	procCoUninitialize = ole32.NewProc("CoUninitialize")
 	procCoInitSeg      = ole32.NewProc("CoInitializeSecurity")
+	oleaut32           = windows.NewLazySystemDLL("oleaut32.dll")
+	procSysFreeString  = oleaut32.NewProc("SysFreeString")
 )
 
 // Suportado: este agente sabe criar o instantâneo do volume.
@@ -50,6 +53,10 @@ const (
 	mGatherWriterMetadata  = 9
 	mPrepareForBackup      = 14
 	mAbortBackup           = 15
+	mGatherWriterStatus    = 16
+	mGetWriterStatusCount  = 17
+	mFreeWriterStatus      = 18
+	mGetWriterStatus       = 19
 	mBackupComplete        = 27
 	mSetContext            = 35
 	mStartSnapshotSet      = 36
@@ -210,9 +217,12 @@ type sessaoVSS struct {
 }
 
 // encerrar avisa os escritores que o backup terminou e solta o objeto, o que
-// apaga o instantâneo do contexto de backup.
-func (s *sessaoVSS) encerrar() {
-	_ = assincrona(s.bc, mBackupComplete, "BackupComplete", time.Now().Add(2*time.Minute))
+// apaga o instantâneo do contexto de backup. Rápido (o serviço parando), só
+// solta: o Release apaga o instantâneo do mesmo jeito.
+func (s *sessaoVSS) encerrar(rapido bool) {
+	if !rapido {
+		_ = assincrona(s.bc, mBackupComplete, "BackupComplete", time.Now().Add(2*time.Minute))
+	}
 	s.bc.liberar()
 }
 
@@ -220,9 +230,9 @@ func (s *sessaoVSS) encerrar() {
 // de cada uma; a que não aceita (um pendrive em exFAT no plano) fica de fora
 // do mapa e é lida do disco — sem derrubar o instantâneo das outras. Roda na
 // thread presa; em erro, já soltou tudo.
-func montar(unidades []string, limite time.Time) (s *sessaoVSS, volumes map[string]string, err error) {
+func montar(unidades []string, limite time.Time) (s *sessaoVSS, volumes map[string]string, aviso string, err error) {
 	if err := procCriarCompon.Find(); err != nil {
-		return nil, nil, fmt.Errorf("VSS indisponível neste Windows: %w", err)
+		return nil, nil, "", fmt.Errorf("VSS indisponível neste Windows: %w", err)
 	}
 	// Os escritores (SQL Server, Exchange) chamam o agente de volta; sem isto a
 	// chamada de volta pode ser recusada. Vale para o processo e é refeito a
@@ -233,7 +243,7 @@ func montar(unidades []string, limite time.Time) (s *sessaoVSS, volumes map[stri
 
 	ppbc := new(*objetoCOM)
 	if r, _, _ := procCriarCompon.Call(uintptr(unsafe.Pointer(ppbc))); falhou(uint32(r)) {
-		return nil, nil, erroHR("CreateVssBackupComponents", uint32(r))
+		return nil, nil, "", erroHR("CreateVssBackupComponents", uint32(r))
 	}
 	bc := *ppbc
 	// Depois do StartSnapshotSet, desistir exige AbortBackup: sem ele os
@@ -250,18 +260,18 @@ func montar(unidades []string, limite time.Time) (s *sessaoVSS, volumes map[stri
 	}()
 
 	if r := bc.chamar(mInitializeForBackup, 0); falhou(r) {
-		return nil, nil, erroHR("InitializeForBackup", r)
+		return nil, nil, "", erroHR("InitializeForBackup", r)
 	}
 	if r := bc.chamar(mSetContext, vssCtxBackup); falhou(r) {
-		return nil, nil, erroHR("SetContext", r)
+		return nil, nil, "", erroHR("SetContext", r)
 	}
 	// Sem escolher componentes, sem estado do sistema, backup do tipo cópia,
 	// sem arquivo parcial.
 	if r := bc.chamar(mSetBackupState, 0, 0, vssBtCopy, 0); falhou(r) {
-		return nil, nil, erroHR("SetBackupState", r)
+		return nil, nil, "", erroHR("SetBackupState", r)
 	}
 	if err := assincrona(bc, mGatherWriterMetadata, "GatherWriterMetadata", limite); err != nil {
-		return nil, nil, err
+		return nil, nil, "", err
 	}
 
 	provedor := new(windows.GUID) // GUID_NULL: o sistema escolhe o provedor
@@ -270,7 +280,7 @@ func montar(unidades []string, limite time.Time) (s *sessaoVSS, volumes map[stri
 	for _, u := range unidades {
 		nome, err := windows.UTF16PtrFromString(u + `\`)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, "", err
 		}
 		suportado := new(int32)
 		r := isVolumeSupported(bc, provedor, nome, suportado)
@@ -278,13 +288,13 @@ func montar(unidades []string, limite time.Time) (s *sessaoVSS, volumes map[stri
 			continue
 		}
 		if falhou(r) {
-			return nil, nil, erroHR("IsVolumeSupported "+u, r)
+			return nil, nil, "", erroHR("IsVolumeSupported "+u, r)
 		}
 		nomes[u] = nome
 		aceitas = append(aceitas, u)
 	}
 	if len(aceitas) == 0 {
-		return nil, nil, errors.New("nenhum volume do plano aceita instantâneo (FAT32, exFAT, unidade de rede ou subst)")
+		return nil, nil, "", errors.New("nenhum volume do plano aceita instantâneo (FAT32, exFAT, unidade de rede ou subst)")
 	}
 
 	// Outro instantâneo em criação (outro backup, um ponto de restauração do
@@ -297,7 +307,7 @@ func montar(unidades []string, limite time.Time) (s *sessaoVSS, volumes map[stri
 			continue
 		}
 		if falhou(r) {
-			return nil, nil, erroHR("StartSnapshotSet", r)
+			return nil, nil, "", erroHR("StartSnapshotSet", r)
 		}
 		break
 	}
@@ -306,43 +316,81 @@ func montar(unidades []string, limite time.Time) (s *sessaoVSS, volumes map[stri
 	for _, u := range aceitas {
 		id := new(windows.GUID)
 		if r := addToSnapshotSet(bc, nomes[u], provedor, id); falhou(r) {
-			return nil, nil, erroHR("AddToSnapshotSet "+u, r)
+			return nil, nil, "", erroHR("AddToSnapshotSet "+u, r)
 		}
 		ids[u] = id
 	}
 
 	if err := assincrona(bc, mPrepareForBackup, "PrepareForBackup", limite); err != nil {
-		return nil, nil, err
+		return nil, nil, "", err
 	}
 	if err := assincrona(bc, mDoSnapshotSet, "DoSnapshotSet", limite); err != nil {
-		return nil, nil, err
+		return nil, nil, "", err
 	}
 
 	volumes = make(map[string]string, len(aceitas))
 	for _, u := range aceitas {
 		p := new(propriedades)
 		if r := getSnapshotProperties(bc, ids[u], p); falhou(r) {
-			return nil, nil, erroHR("GetSnapshotProperties "+u, r)
+			return nil, nil, "", erroHR("GetSnapshotProperties "+u, r)
 		}
 		dispositivo := windows.UTF16PtrToString(p.SnapshotDeviceObject)
 		procLiberarProps.Call(uintptr(unsafe.Pointer(p)))
 		if dispositivo == "" {
-			return nil, nil, errors.New("o instantâneo de " + u + " veio sem dispositivo")
+			return nil, nil, "", errors.New("o instantâneo de " + u + " veio sem dispositivo")
 		}
 		volumes[u] = dispositivo
 	}
-	return &sessaoVSS{bc: bc}, volumes, nil
+	return &sessaoVSS{bc: bc}, volumes, escritoresComFalha(bc, limite), nil
+}
+
+// escritoresComFalha lê o estado de cada escritor depois do instantâneo. O
+// DoSnapshotSet dá certo mesmo quando um escritor (o do SQL Server, o do
+// Exchange) falha ao congelar: sem isto a sessão diria "vss" com os arquivos
+// desse programa como depois de uma queda de energia. Melhor esforço: erro
+// aqui não derruba o instantâneo, só deixa de avisar.
+func escritoresComFalha(bc *objetoCOM, limite time.Time) string {
+	if err := assincrona(bc, mGatherWriterStatus, "GatherWriterStatus", limite); err != nil {
+		return ""
+	}
+	defer bc.chamar(mFreeWriterStatus)
+	n := new(uint32)
+	if r := bc.chamar(mGetWriterStatusCount, uintptr(unsafe.Pointer(n))); falhou(r) {
+		return ""
+	}
+	var falhos []string
+	for i := uint32(0); i < *n && i < 256; i++ {
+		instancia, escritor := new(windows.GUID), new(windows.GUID)
+		nome := new(*uint16) // BSTR, liberado com SysFreeString
+		estado, hrFalha := new(int32), new(int32)
+		r := bc.chamar(mGetWriterStatus, uintptr(i), uintptr(unsafe.Pointer(instancia)), uintptr(unsafe.Pointer(escritor)),
+			uintptr(unsafe.Pointer(nome)), uintptr(unsafe.Pointer(estado)), uintptr(unsafe.Pointer(hrFalha)))
+		if falhou(r) || *nome == nil {
+			continue
+		}
+		texto := windows.UTF16PtrToString(*nome)
+		procSysFreeString.Call(uintptr(unsafe.Pointer(*nome)))
+		// VSS_WS_FAILED_AT_IDENTIFY (6) a VSS_WS_FAILED_AT_BACKUPSHUTDOWN (15).
+		if *estado >= 6 && *estado <= 15 {
+			falhos = append(falhos, texto)
+		}
+	}
+	if len(falhos) == 0 {
+		return ""
+	}
+	return "escritores do VSS que falharam (os arquivos deles saíram como depois de uma queda de energia): " + strings.Join(falhos, ", ")
 }
 
 // criarVSS cria o instantâneo das unidades numa thread própria, que o segura
 // até a função devolvida ser chamada.
-func criarVSS(ctx context.Context, unidades []string) (map[string]string, func(), error) {
+func criarVSS(ctx context.Context, unidades []string) (map[string]string, func(bool), string, error) {
 	type resultado struct {
 		volumes map[string]string
+		aviso   string
 		err     error
 	}
 	pronto := make(chan resultado, 1)
-	soltar := make(chan struct{})
+	soltar := make(chan bool, 1)
 	terminou := make(chan struct{})
 	limite, ok := ctx.Deadline()
 	if !ok {
@@ -359,35 +407,37 @@ func criarVSS(ctx context.Context, unidades []string) (map[string]string, func()
 			return
 		}
 		defer procCoUninitialize.Call()
-		s, volumes, err := montar(unidades, limite)
-		pronto <- resultado{volumes, err}
+		s, volumes, aviso, err := montar(unidades, limite)
+		pronto <- resultado{volumes, aviso, err}
 		if err != nil {
 			return
 		}
-		<-soltar
-		s.encerrar()
+		s.encerrar(<-soltar)
 	}()
 
 	select {
 	case r := <-pronto:
 		if r.err != nil {
-			return nil, nil, r.err
+			return nil, nil, "", r.err
 		}
-		fechar := func() {
-			close(soltar)
+		fechar := func(rapido bool) {
+			soltar <- rapido
+			if rapido {
+				return
+			}
 			select {
 			case <-terminou:
 			case <-time.After(3 * time.Minute):
 			}
 		}
-		return r.volumes, fechar, nil
+		return r.volumes, fechar, r.aviso, nil
 	case <-ctx.Done():
 		// Desistimos de esperar: quando a criação terminar, solta sozinha.
 		go func() {
 			if r := <-pronto; r.err == nil {
-				close(soltar)
+				soltar <- true
 			}
 		}()
-		return nil, nil, fmt.Errorf("a criação não terminou: %w", ctx.Err())
+		return nil, nil, "", fmt.Errorf("a criação não terminou: %w", ctx.Err())
 	}
 }

@@ -11,6 +11,6 @@ import (
 const Suportado = false
 
 // criarVSS não existe fora do Windows de 64 bits.
-func criarVSS(context.Context, []string) (map[string]string, func(), error) {
-	return nil, nil, errors.New("instantâneo de volume não suportado neste sistema")
+func criarVSS(context.Context, []string) (map[string]string, func(bool), string, error) {
+	return nil, nil, "", errors.New("instantâneo de volume não suportado neste sistema")
 }

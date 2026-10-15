@@ -147,3 +147,18 @@ func TestCancelamentoDeQuemChamaDizQueFoiInterrompido(t *testing.T) {
 		t.Fatal("não interrompeu o comando")
 	}
 }
+
+// O comando recebe o caminho do agente em ARKAME_AGENT: a receita do SQL
+// Server chama `"%ARKAME_AGENT%" prepare-dump-folder` por ele.
+func TestComandoRecebeOCaminhoDoAgente(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("comando de shell específico do unix")
+	}
+	r, err := Run(context.Background(), `printf '%s' "$ARKAME_AGENT"`, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Output == "" || r.Output != programaDoAgente() {
+		t.Fatalf("ARKAME_AGENT = %q; queria %q", r.Output, programaDoAgente())
+	}
+}

@@ -98,3 +98,15 @@ func pastaDeVerdade(p string, fi os.FileInfo) error {
 	}
 	return nil
 }
+
+// permitirEscrita refaz a DACL da pasta: Administradores e SYSTEM com
+// controle total, e escritor com modificar (0x1301bf), herdado por arquivos e
+// subpastas, sem herdar nada de cima. Pela API, por SID: vale em Windows de
+// qualquer idioma e sem processo externo.
+func permitirEscrita(dir, escritor string) error {
+	sid, _, _, err := windows.LookupSID("", escritor)
+	if err != nil {
+		return fmt.Errorf("a conta %q não existe neste Windows (para uma instância nomeada do SQL Server, NT Service\\MSSQL$<instância>): %w", escritor, err)
+	}
+	return aplicar(dir, "D:P(A;OICI;FA;;;BA)(A;OICI;FA;;;SY)(A;OICI;0x1301bf;;;"+sid.String()+")")
+}

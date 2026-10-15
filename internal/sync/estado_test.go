@@ -44,6 +44,8 @@ type mesa struct {
 	sortear func(int) int
 	// removParcial: o "painel" ofereceu `removed_partial` (item 27 do contrato).
 	removParcial bool
+	// viva é a LeituraViva da execução (o instantâneo do volume ainda existe?).
+	viva func() error
 }
 
 func (m *mesa) ultimaConfirmada() int {
@@ -98,9 +100,10 @@ func (m *mesa) rodar() (*Result, []api.IndexEntry) {
 		S3: m.cli, Bucket: "b", PrefixRoot: prefixoDeTeste, HostRoot: "/",
 		SourcePaths: []string{m.raiz}, ExcludeGlobs: m.exclusoes,
 		Trabalhadores: m.trabalhad, RehashTotal: m.rehash, VerificarTeto: m.teto,
-		Ignorar: []string{m.dirEst},
-		Agora:   func() time.Time { return m.agora },
-		Sortear: m.sortear,
+		Ignorar:     []string{m.dirEst},
+		Agora:       func() time.Time { return m.agora },
+		Sortear:     m.sortear,
+		LeituraViva: m.viva,
 	}
 	var emitidas []api.IndexEntry
 	o.Emitir = func(e api.IndexEntry) error { emitidas = append(emitidas, e); return nil }

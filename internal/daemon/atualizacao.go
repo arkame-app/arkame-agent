@@ -230,7 +230,10 @@ func (a *atualizador) capacidades() []string {
 // em lotes e em delta, e o `removed` com prova positiva em sessão parcial.
 // Não dependem da instalação.
 func capacidadesDoIndice() []string {
-	return []string{api.CapacidadeIndiceEmLotes, api.CapacidadeIndiceDelta, api.CapacidadeRemovidosEmParcial}
+	return []string{api.CapacidadeIndiceEmLotes, api.CapacidadeIndiceDelta, api.CapacidadeRemovidosEmParcial,
+		// prepare-dump-folder e ARKAME_AGENT nos comandos: também não
+		// dependem da instalação.
+		api.CapacidadePastaDeDump}
 }
 
 // relatoDoHeartbeat monta o `update` do heartbeat: a tentativa em curso (ou a
