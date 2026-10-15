@@ -34,6 +34,23 @@ func PastaDeDump(dir, escritor string) error {
 	if err := PastaPrivada(dir); err != nil {
 		return err
 	}
+	if err := conteudoDeConfianca(dir); err != nil {
+		return err
+	}
+	if escritor == "" {
+		return nil
+	}
+	if err := permitirEscrita(dir, escritor); err != nil {
+		return err
+	}
+	// De novo depois de fechar: um arquivo criado entre a primeira conferência
+	// e a troca da permissão (numa pasta que já existia com permissão larga)
+	// ficaria com a permissão explícita de quem o criou.
+	return conteudoDeConfianca(dir)
+}
+
+// conteudoDeConfianca recusa link, junção ou arquivo de outro dono na pasta.
+func conteudoDeConfianca(dir string) error {
 	entradas, err := os.ReadDir(dir)
 	if err != nil {
 		return err
@@ -51,8 +68,5 @@ func PastaDeDump(dir, escritor string) error {
 			return fmt.Errorf("%w — apague-o e rode de novo", err)
 		}
 	}
-	if escritor == "" {
-		return nil
-	}
-	return permitirEscrita(dir, escritor)
+	return nil
 }

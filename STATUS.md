@@ -25,7 +25,16 @@ num prompt de administrador, e um backup de pasta com um `.pst` aberto.
 - **Painel:** `snapshot` no plano (`auto`/`off`), `consistency_method` (`vss`/`none`) no
   `/complete`, aviso `snapshot_unavailable` numa sessão que segue `complete`. Capacidade
   `volume_snapshot` (só no Windows de 64 bits) — o painel só mostra a opção a quem a declara.
-- **`arkame-agent check-snapshot [pasta]`:** cria, lista, lê um arquivo de dentro e solta.
+- **`arkame-agent check-snapshot [pasta]`:** cria, confere que está vivo, lista, lê um arquivo de dentro e solta.
+- **`arkame-agent prepare-dump-folder <pasta> [--writer conta]`:** a pasta do dump da receita do SQL Server,
+  criada fechada (DACL no `CreateDirectory`), recusada se ela, algo dentro ou uma pasta acima foi criada por
+  outro ou é junção. Comandos do plano recebem `ARKAME_AGENT`. Capacidade `dump_folder`.
+- **Remoção com instantâneo:** "não existe" na cópia é falha; antes de declarar removido, confere o disco vivo
+  com o nome exato (FilesNotToSnapshot, cópia que some, troca só de maiúscula); os que faltam na cópia e estão
+  no disco viram o aviso `vss_excluded_files`. Escritor que falha: `vss_writer_failed`.
+- **Restrições conhecidas:** volume montado em pasta não entra no instantâneo; uma pasta acima da pasta do
+  dump que seja ponto de montagem de volume é recusada como junção; link absoluto dentro da cópia é seguido
+  para o disco vivo. Revisão em 4 passadas.
 - **Revisão de ABI** independente (vtable contra o vsbackup.h, GUID por valor no x64 e no
   ARM64, layout de `VSS_SNAPSHOT_PROP`): quatro defeitos corrigidos (ponteiros na pilha,
   `AbortBackup`, volume sem suporte, `CoInitializeSecurity` a cada instantâneo).

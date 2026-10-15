@@ -31,6 +31,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -196,7 +197,28 @@ func (i *Instantaneo) AindaNoDisco(rel string) bool {
 	}
 	p := u + `\` + strings.ReplaceAll(strings.TrimLeft(rel[len(u):], "/"), "/", `\`)
 	_, err := lstatNoDisco(p)
-	return err == nil || !errors.Is(err, os.ErrNotExist)
+	if err != nil {
+		return !errors.Is(err, os.ErrNotExist)
+	}
+	// O NTFS não diferencia maiúsculas: `A.txt` renomeado para `a.txt` ainda
+	// "existe" como `A.txt`, e a chave antiga ficaria para sempre. Só vale o
+	// nome escrito igual.
+	corte := strings.LastIndex(p, `\`)
+	nomes, err := nomesNaPasta(p[:corte+1])
+	if err != nil {
+		return true // na dúvida, não se declara remoção
+	}
+	return slices.Contains(nomes, p[corte+1:])
+}
+
+// nomesNaPasta lista os nomes como o disco os grava; os testes o trocam.
+var nomesNaPasta = func(dir string) ([]string, error) {
+	f, err := os.Open(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return f.Readdirnames(-1)
 }
 
 // lstatNoDisco é o os.Lstat do disco vivo; os testes o trocam.

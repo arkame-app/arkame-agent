@@ -731,6 +731,15 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 			completeBody.ErrorMessage += "; " + inst.Aviso
 		}
 	}
+	if result.SoNoDisco > 0 {
+		aviso := fmt.Sprintf(msgForaDoInstantaneo, result.SoNoDisco, result.ExemploSoNoDisco)
+		if completeStatus == "complete" && completeBody.ErrorCode == "" {
+			completeBody.ErrorCode = codigoForaDoInstantaneo
+			completeBody.ErrorMessage = aviso
+		} else {
+			completeBody.ErrorMessage += "; " + aviso
+		}
+	}
 	if inst.AvisoDosEscritores != "" {
 		// O instantâneo existe e foi lido; um programa é que não congelou.
 		// Código próprio: "lido do disco" seria falso.
@@ -967,6 +976,14 @@ const codigoSemInstantaneo = "snapshot_unavailable"
 // escritor do VSS (o SQL Server, o Exchange) falhou ao congelar: os arquivos
 // dele saíram como depois de uma queda de energia.
 const codigoEscritorFalhou = "vss_writer_failed"
+
+// codigoForaDoInstantaneo: arquivos que o Windows tira da cópia de sombra
+// (FilesNotToSnapshot) faltaram no instantâneo e estão no disco. Não foram
+// copiados; a versão guardada é a anterior.
+const codigoForaDoInstantaneo = "vss_excluded_files"
+
+// msgForaDoInstantaneo leva a quantidade e um exemplo.
+const msgForaDoInstantaneo = "%d arquivo(s) não estavam no instantâneo do volume, mas estão no disco (o Windows tira da cópia de sombra os da lista FilesNotToSnapshot, como o .ost do Outlook): não foram copiados nesta sessão, e a versão guardada é a anterior. Ex.: %s"
 
 // msgSemInstantaneo completa o aviso com a consequência.
 const msgSemInstantaneo = ". Os arquivos dessas unidades foram lidos direto do disco: um arquivo aberto e sendo gravado durante o backup pode ter sido copiado pela metade"

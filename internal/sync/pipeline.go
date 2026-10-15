@@ -131,6 +131,11 @@ type Result struct {
 	// inline), na ordem da varredura.
 	VersionMap  []api.FileEntry
 	FilesFailed int // arquivos que falharam no upload (pulados); usado p/ decidir partial/failed
+	// SoNoDisco: arquivos que faltaram no instantâneo e estão no disco (o
+	// Windows tira da cópia de sombra os de FilesNotToSnapshot). Não foram
+	// copiados nem tratados como removidos; a versão guardada é a anterior.
+	SoNoDisco        int
+	ExemploSoNoDisco string
 	// PrimeiraFalha é o primeiro arquivo que falhou e por quê — exemplo que
 	// vai ao painel numa sessão parcial.
 	PrimeiraFalha string
@@ -668,6 +673,7 @@ func (c *coletor) fecharInventario() error {
 		}
 		foraDaSelecao := !sel.contem(rel)
 		if !foraDaSelecao && c.o.AindaNoDisco != nil && c.o.AindaNoDisco(rel) {
+			c.soNoDisco(rel)
 			return estado.Manter, ent // falta na cópia, mas está no disco
 		}
 		ent.Removida = true
@@ -741,6 +747,7 @@ func (c *coletor) removerOProvado(listadas *pastasListadas) error {
 		case !listadas.saiu(rel):
 			return estado.Manter, ent // não foi lido: não é prova de que saiu
 		case c.o.AindaNoDisco != nil && c.o.AindaNoDisco(rel):
+			c.soNoDisco(rel)
 			return estado.Manter, ent // falta na cópia, mas está no disco
 		}
 		ent.Removida = true
@@ -823,6 +830,16 @@ func (s selecao) excluida(dentro string) bool {
 		}
 	}
 	return false
+}
+
+// soNoDisco conta o arquivo que falta no instantâneo e está no disco: não foi
+// copiado, e a versão guardada dele é a anterior. Sem a conta, isso passava
+// calado para sempre (o .ost do Outlook, que o Windows tira da cópia).
+func (c *coletor) soNoDisco(rel string) {
+	c.result.SoNoDisco++
+	if c.result.ExemploSoNoDisco == "" {
+		c.result.ExemploSoNoDisco = rel
+	}
 }
 
 // erroNoDisco troca a mensagem (caminhos do instantâneo pelos do disco) sem

@@ -158,7 +158,9 @@ func permitirEscrita(dir, escritor string) error {
 	if err != nil {
 		return err
 	}
-	h, err := windows.CreateFile(nome, windows.READ_CONTROL|windows.WRITE_DAC,
+	// As mesmas permissões que o SetNamedSecurityInfo pede ao abrir a pasta:
+	// com a listagem, a DACL nova se propaga aos arquivos que já estão nela.
+	h, err := windows.CreateFile(nome, windows.READ_CONTROL|windows.WRITE_DAC|windows.FILE_LIST_DIRECTORY|windows.SYNCHRONIZE,
 		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil,
 		windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS|windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
 	if err != nil {

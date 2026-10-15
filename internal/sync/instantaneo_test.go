@@ -117,6 +117,9 @@ func TestFaltaNaCopiaMasEstaNoDiscoNaoViraRemocao(t *testing.T) {
 	if !r.InventarioCompleto {
 		t.Fatal("a sessão continua sendo inventário completo")
 	}
+	if r.SoNoDisco != 1 || !strings.HasSuffix(r.ExemploSoNoDisco, "/p01/arquivo-0001.txt") {
+		t.Fatalf("o arquivo fora da cópia tem de ser contado e citado: %d %q", r.SoNoDisco, r.ExemploSoNoDisco)
+	}
 	m.noDisco = func(string) bool { return false }
 	if _, em = m.rodar(); len(chavesDoOp(em, api.OpRemoved)) != 1 {
 		t.Fatalf("fora do disco, a remoção tinha de sair: %+v", em)

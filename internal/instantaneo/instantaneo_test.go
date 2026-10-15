@@ -186,6 +186,18 @@ func TestAindaNoDisco(t *testing.T) {
 	if i.AindaNoDisco("C:/Users/x/a.ost") || pedido != `C:\Users\x\a.ost` {
 		t.Fatalf("caminho conferido %q", pedido)
 	}
+	// Existe, e com o nome escrito igual; renomeado só na caixa, não.
+	velhosNomes := nomesNaPasta
+	t.Cleanup(func() { nomesNaPasta = velhosNomes })
+	lstatNoDisco = func(p string) (os.FileInfo, error) { return nil, nil }
+	var pasta string
+	nomesNaPasta = func(d string) ([]string, error) { pasta = d; return []string{"a.ost", "B.txt"}, nil }
+	if !i.AindaNoDisco("C:/Users/x/a.ost") || pasta != `C:\Users\x\` {
+		t.Fatalf("nome igual tem de contar como existe (pasta %q)", pasta)
+	}
+	if i.AindaNoDisco("C:/Users/x/b.txt") {
+		t.Fatal("renomeado só nas maiúsculas: a chave antiga não existe mais")
+	}
 	lstatNoDisco = func(string) (os.FileInfo, error) { return nil, os.ErrPermission }
 	if !i.AindaNoDisco("C:/Users/x/a.ost") {
 		t.Fatal("erro que não é 'não existe' tem de contar como existe")
