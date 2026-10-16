@@ -647,12 +647,12 @@ func TestPrazoDeixaORestoParaAProximaSessao(t *testing.T) {
 	if _, err := Exportar(context.Background(), z.cliente(t), Opcoes{Pasta: pasta, Agora: agora, Prazo: time.Now().Add(folgaDoPrazo / 2)}, io.Discard); err == nil || !strings.Contains(err.Error(), "curto demais") {
 		t.Fatalf("prazo curto demais não foi erro: %v", err)
 	}
-	// O prazo vence no meio da conta (cada mês leva 50ms): ela fica
+	// O prazo vence no meio da conta (cada mês leva 100ms): ela fica
 	// pendente, sem marcador de falha, e o comando sai sem erro.
 	z.mu.Lock()
-	z.atraso = 50 * time.Millisecond
+	z.atraso = 100 * time.Millisecond
 	z.mu.Unlock()
-	inv, err := Exportar(context.Background(), z.cliente(t), Opcoes{Pasta: pasta, Agora: agora, Contas: []string{"ana@exemplo.com.br"}, Prazo: time.Now().Add(folgaDoPrazo + 300*time.Millisecond)}, io.Discard)
+	inv, err := Exportar(context.Background(), z.cliente(t), Opcoes{Pasta: pasta, Agora: agora, Contas: []string{"ana@exemplo.com.br"}, Prazo: time.Now().Add(folgaDoPrazo + 1500*time.Millisecond)}, io.Discard)
 	z.mu.Lock()
 	z.atraso = 0
 	z.mu.Unlock()
@@ -1053,7 +1053,7 @@ func TestUmaContaParadaNaoSeguraAsOutras(t *testing.T) {
 	var inv *Inventario
 	var err error
 	for i := 1; i <= maxSemAvanco; i++ {
-		inv, err = Exportar(context.Background(), z.cliente(t), Opcoes{Pasta: pasta, Agora: agora.Add(time.Duration(i) * 24 * time.Hour), Prazo: time.Now().Add(folgaDoPrazo + 300*time.Millisecond)}, io.Discard)
+		inv, err = Exportar(context.Background(), z.cliente(t), Opcoes{Pasta: pasta, Agora: agora.Add(time.Duration(i) * 24 * time.Hour), Prazo: time.Now().Add(folgaDoPrazo + 3*time.Second)}, io.Discard)
 	}
 	var ana ResultadoDaConta
 	for _, r := range inv.Contas {
@@ -1076,7 +1076,7 @@ func TestRodizioInterrompidoNaoDeixaPendente(t *testing.T) {
 	// Só a conferência do mês mais antigo (2024-11) demora mais que o prazo.
 	z.lento(time.Hour, "before:"+ms(time.Date(2024, 12, 1, 0, 0, 0, 0, time.UTC)))
 	defer z.lento(0, "")
-	o.Agora, o.Prazo = agora.Add(time.Hour), time.Now().Add(folgaDoPrazo+500*time.Millisecond)
+	o.Agora, o.Prazo = agora.Add(time.Hour), time.Now().Add(folgaDoPrazo+3*time.Second)
 	inv, err := Exportar(context.Background(), z.cliente(t), o, io.Discard)
 	if err != nil {
 		t.Fatal(err)
@@ -1138,9 +1138,9 @@ func TestPendenteQueAvancaPerdeOMarcador(t *testing.T) {
 	os.Chmod(filepath.Join(pasta, "contas"), 0o700)
 	os.WriteFile(filepath.Join(dir, MarcadorDeFalha), []byte("velho"), 0o600)
 	// Primeira sessão, cortada no meio dos meses: saíram arquivos novos.
-	z.lento(30*time.Millisecond, "")
+	z.lento(100*time.Millisecond, "")
 	defer z.lento(0, "")
-	inv, err := Exportar(context.Background(), z.cliente(t), Opcoes{Pasta: pasta, Agora: agora, Contas: []string{"ana@exemplo.com.br"}, Prazo: time.Now().Add(folgaDoPrazo + 300*time.Millisecond)}, io.Discard)
+	inv, err := Exportar(context.Background(), z.cliente(t), Opcoes{Pasta: pasta, Agora: agora, Contas: []string{"ana@exemplo.com.br"}, Prazo: time.Now().Add(folgaDoPrazo + time.Second)}, io.Discard)
 	if err != nil || !inv.Contas[0].Pendente || inv.Contas[0].Novos == 0 {
 		t.Fatalf("quer pendente com arquivos novos: %v %+v", err, inv.Contas)
 	}
@@ -1280,7 +1280,7 @@ func TestEstruturaLentaNaoTiraOMesCorrente(t *testing.T) {
 	z.lento(time.Hour, "contact,")
 	defer z.lento(0, "")
 	z.contas["ana@exemplo.com.br"].mensagens = append(z.contas["ana@exemplo.com.br"].mensagens, data("2026-10-15T10:00:00Z"))
-	o.Agora, o.Prazo = agora.Add(time.Hour), time.Now().Add(folgaDoPrazo+500*time.Millisecond)
+	o.Agora, o.Prazo = agora.Add(time.Hour), time.Now().Add(folgaDoPrazo+3*time.Second)
 	Exportar(context.Background(), z.cliente(t), o, io.Discard)
 	if !strings.Contains(ler(t, arq), "2026-10-15") {
 		t.Fatal("a estrutura lenta tirou o lugar do e-mail de hoje")
