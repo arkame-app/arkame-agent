@@ -509,6 +509,20 @@ func Regravar(ctx context.Context, cfg *config.Config, opts Options) (string, er
 	return regravarPlatform(ctx, cfg, opts)
 }
 
+// ConferirAuxiliar recusa um programa que este processo vai rodar como
+// administrador — o RustFS da cópia local, filho do serviço — se quem não é
+// administrador pode trocá-lo: viraria administrador da máquina no próximo
+// início. Com o processo sem privilégio (o escopo user), não há o que
+// escalar e não confere.
+func ConferirAuxiliar(programa string) error {
+	if EscopoEfetivo("") != ScopeSystem {
+		return nil
+	}
+	return conferirProgramaCom(programa, func(abs, problema string) error {
+		return fmt.Errorf("o agente roda como administrador e chamaria %s, mas %s: quem pode trocar esse arquivo viraria administrador desta máquina. Deixe a pasta do programa só para o administrador e rode de novo o local-storage install", abs, problema)
+	})
+}
+
 // ConferirPrograma recusa registrar no escopo do sistema (root; no Windows,
 // LocalSystem) um programa que outro usuário pode trocar — ver
 // conferirPrograma (programa_unix.go, programa_windows.go). No escopo user não

@@ -79,6 +79,20 @@ var adminDoInstall = func() []string {
 // Confere o programa e cada pasta acima dele, até a raiz do volume, no
 // caminho dado e no real (links resolvidos) — ver problemaDaACL.
 func conferirPrograma(programa string) error {
+	return conferirProgramaCom(programa, mensagemDoAgente)
+}
+
+// mensagemDoAgente: a recusa do programa do próprio agente, com o caminho de instalação certo.
+func mensagemDoAgente(abs, problema string) error {
+	return fmt.Errorf(
+		"o serviço do Windows roda como SYSTEM e chamaria %s, mas %s: quem pode trocar esse arquivo viraria SYSTEM no próximo início do serviço. "+
+			"Instale pelo comando do painel (Windows + R; o setup copia o programa para C:\\Program Files\\Arkame) "+
+			"ou pelo install.ps1 num PowerShell como Administrador",
+		abs, problema)
+}
+
+// conferirProgramaCom é conferirPrograma com a mensagem de recusa dada.
+func conferirProgramaCom(programa string, mensagem func(abs, problema string) error) error {
 	abs, err := filepath.Abs(programa)
 	if err != nil {
 		return fmt.Errorf("conferindo o programa %s: %w", programa, err)
@@ -98,11 +112,7 @@ func conferirPrograma(programa string) error {
 				problema = problemaDaACL(p, papel, a, extras)
 			}
 			if problema != "" {
-				return fmt.Errorf(
-					"o serviço do Windows roda como SYSTEM e chamaria %s, mas %s: quem pode trocar esse arquivo viraria SYSTEM no próximo início do serviço. "+
-						"Instale pelo comando do painel (Windows + R; o setup copia o programa para C:\\Program Files\\Arkame) "+
-						"ou pelo install.ps1 num PowerShell como Administrador",
-					abs, problema)
+				return mensagem(abs, problema)
 			}
 			if filepath.Dir(p) == p {
 				break

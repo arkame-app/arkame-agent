@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"net"
 	"net/http"
@@ -134,13 +135,125 @@ func TestSupervisorSobeDeNovoQuandoCai(t *testing.T) {
 	antes := esperaMinima
 	esperaMinima = 200 * time.Millisecond
 	t.Cleanup(func() { esperaMinima = antes })
-	s := &Supervisor{Programa: script, Dados: pasta, Endereco: portaLivre(t), ArquivoDaChave: "a", ArquivoDoSegredo: "b"}
+	s := &Supervisor{Programa: script, Dados: pasta, Endereco: portaLivre(t), ArquivoDaChave: "a", ArquivoDoSegredo: "b", PastaTLS: tlsDeTeste(t), SHA256: hashDe(t, script)}
 	ctx, cancelar := context.WithTimeout(context.Background(), 1500*time.Millisecond)
 	defer cancelar()
 	s.Rodar(ctx)
 	b, _ := os.ReadFile(contador)
 	if n := strings.Count(string(b), "x"); n < 3 || n > 6 {
 		t.Fatalf("subiu %d vezes em 1,5 s com espera de 200 ms dobrando: esperado 3 a 6", n)
+	}
+}
+
+func tlsDeTeste(t *testing.T) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "tls")
+	if _, err := PrepararTLS(p); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func hashDe(t *testing.T, p string) string {
+	t.Helper()
+	h, err := HashDoArquivo(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return h
+}
+
+// Outro programa na porta (de outro usuário da máquina) não é a cópia local:
+// nem em texto puro, nem com um certificado que não é o dela. Adotá-lo
+// entregaria o backup inteiro a ele.
+func TestServidorAlheioNaPortaNaoEAdotado(t *testing.T) {
+	saude := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
+	for nome, srv := range map[string]*httptest.Server{"http": httptest.NewServer(saude), "https com outro certificado": httptest.NewTLSServer(saude)} {
+		t.Cleanup(srv.Close)
+		s := &Supervisor{Endereco: strings.TrimPrefix(strings.TrimPrefix(srv.URL, "https://"), "http://"), PastaTLS: tlsDeTeste(t)}
+		if s.Responde(context.Background()) {
+			t.Errorf("%s: o supervisor adotou um servidor que não tem a chave da cópia local", nome)
+		}
+	}
+}
+
+// O programa roda como root/SYSTEM: trocado depois da instalação, não sobe.
+func TestProgramaTrocadoNaoSobe(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("o programa falso é um script de shell")
+	}
+	pasta := t.TempDir()
+	script := filepath.Join(pasta, "rustfs")
+	marca := filepath.Join(pasta, "rodou")
+	os.WriteFile(script, []byte("#!/bin/sh\nexit 0\n"), 0o755)
+	s := &Supervisor{Programa: script, Dados: pasta, Endereco: portaLivre(t), PastaTLS: tlsDeTeste(t), SHA256: hashDe(t, script)}
+	os.WriteFile(script, []byte("#!/bin/sh\ntouch "+marca+"\n"), 0o755)
+	err := s.uma(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "mudou desde a instalação") {
+		t.Fatalf("programa trocado aceito: %v", err)
+	}
+	if _, err := os.Stat(marca); err == nil {
+		t.Fatal("o programa trocado chegou a rodar")
+	}
+	s.SHA256 = ""
+	if err := s.uma(context.Background()); err == nil {
+		t.Fatal("sem SHA-256 registrado, subiu assim mesmo")
+	}
+	s.SHA256, s.PastaTLS = hashDe(t, script), ""
+	if err := s.uma(context.Background()); err == nil {
+		t.Fatal("sem TLS, subiu assim mesmo")
+	}
+}
+
+// O log não segue link simbólico (o agente roda como root).
+func TestLogNaoSegueLink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sem O_NOFOLLOW")
+	}
+	pasta := t.TempDir()
+	alvo := filepath.Join(pasta, "do-sistema")
+	os.WriteFile(alvo, []byte("importante"), 0o644)
+	link := filepath.Join(pasta, "rustfs.log")
+	os.Symlink(alvo, link)
+	if f, err := abrirLog(link); err == nil {
+		f.Close()
+		t.Fatal("o log abriu através de um link simbólico")
+	}
+	if b, _ := os.ReadFile(alvo); string(b) != "importante" {
+		t.Fatal("o alvo do link foi mexido")
+	}
+}
+
+// O certificado: vale para 127.0.0.1, e reinstalar mantém o mesmo.
+func TestPrepararTLSMantemOCertificado(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "tls")
+	c1, err := PrepararTLS(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b1, _ := os.ReadFile(c1)
+	c2, err := PrepararTLS(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b2, _ := os.ReadFile(c2); string(b1) != string(b2) {
+		t.Fatal("reinstalar trocou o certificado (o processo da cópia local que está rodando deixaria de confiar)")
+	}
+	// Uma chave que não é a do certificado (queda no meio da gravação): gera outro par.
+	outra := filepath.Join(t.TempDir(), "outra")
+	PrepararTLS(outra)
+	chaveOutra, _ := os.ReadFile(filepath.Join(outra, "rustfs_key.pem"))
+	os.WriteFile(filepath.Join(p, "rustfs_key.pem"), chaveOutra, 0o600)
+	if _, err := PrepararTLS(p); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tls.LoadX509KeyPair(filepath.Join(p, ArquivoDoCertificado), filepath.Join(p, "rustfs_key.pem")); err != nil {
+		t.Fatalf("o par trocado foi mantido: %v", err)
+	}
+	if runtime.GOOS != "windows" {
+		if fi, _ := os.Stat(filepath.Join(p, "rustfs_key.pem")); fi.Mode().Perm() != 0o600 {
+			t.Fatalf("chave TLS com modo %v", fi.Mode().Perm())
+		}
 	}
 }
 
@@ -166,17 +279,42 @@ func TestSupervisorComORustFSDeVerdade(t *testing.T) {
 	os.MkdirAll(filepath.Join(pasta, "dados"), 0o700)
 	os.WriteFile(filepath.Join(pasta, "ak"), []byte("arkametesteak1234567"), 0o600)
 	os.WriteFile(filepath.Join(pasta, "sk"), []byte("segredo-de-teste-da-copia-local-40-carac"), 0o600)
-	s := &Supervisor{Programa: programa, Dados: filepath.Join(pasta, "dados"), Endereco: portaLivre(t), ArquivoDaChave: filepath.Join(pasta, "ak"), ArquivoDoSegredo: filepath.Join(pasta, "sk"), Log: filepath.Join(pasta, "rustfs.log")}
+	pastaTLS := tlsDeTeste(t)
+	s := &Supervisor{Programa: programa, Dados: filepath.Join(pasta, "dados"), Endereco: portaLivre(t), ArquivoDaChave: filepath.Join(pasta, "ak"), ArquivoDoSegredo: filepath.Join(pasta, "sk"), Log: filepath.Join(pasta, "rustfs.log"), PastaTLS: pastaTLS, SHA256: hashDe(t, programa)}
 	ctx, cancelar := context.WithCancel(context.Background())
 	fim := make(chan struct{})
 	go func() { s.Rodar(ctx); close(fim) }()
 	if err := s.Pronto(context.Background(), 30*time.Second); err != nil {
 		t.Fatal(err)
 	}
-	cfg := &config.Config{StorageAccessKey: "arkametesteak1234567", StorageSecretKey: "segredo-de-teste-da-copia-local-40-carac", StorageEndpoint: "http://" + s.Endereco, StorageRegion: "us-east-1"}
+	cfg := &config.Config{StorageAccessKey: "arkametesteak1234567", StorageSecretKey: "segredo-de-teste-da-copia-local-40-carac", StorageEndpoint: "https://" + s.Endereco, StorageCAFile: filepath.Join(pastaTLS, ArquivoDoCertificado), StorageRegion: "us-east-1"}
 	c, err := storage.NewS3Client(context.Background(), cfg)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// O que a segurança da cópia local supõe do RustFS 1.0.1: sem texto puro
+	// na porta, sem console em :9001, e a credencial de fábrica recusada.
+	if res, err := http.Get("http://" + s.Endereco + "/health"); err == nil {
+		res.Body.Close()
+		t.Fatal("o RustFS respondeu em texto puro")
+	}
+	if l, err := net.DialTimeout("tcp", "127.0.0.1:9001", time.Second); err == nil {
+		l.Close()
+		t.Log("aviso: há algo em 127.0.0.1:9001 (conferir se não é o console deste RustFS)")
+	}
+	padrao := *cfg
+	padrao.StorageAccessKey, padrao.StorageSecretKey = "rustfsadmin", "rustfsadmin"
+	if cp, err := storage.NewS3Client(context.Background(), &padrao); err == nil {
+		if _, err := cp.ListBuckets(context.Background(), nil); err == nil {
+			t.Fatal("a credencial de fábrica do RustFS (rustfsadmin) foi aceita")
+		}
+	}
+	semCA := *cfg
+	semCA.StorageCAFile = ""
+	if cs, err := storage.NewS3Client(context.Background(), &semCA); err == nil {
+		if _, err := cs.ListBuckets(context.Background(), nil); err == nil {
+			t.Fatal("um cliente sem o certificado fixado falou com o RustFS (o certificado devia ser só da cópia local)")
+		}
 	}
 	for i := 0; i < 2; i++ { // duas vezes: idempotente
 		if err := PrepararBucket(context.Background(), c, "arkame-local-teste"); err != nil {

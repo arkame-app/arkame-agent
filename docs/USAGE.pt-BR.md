@@ -319,6 +319,21 @@ versionado e instala um segundo serviço do agente, `arkame-agent-local`, com a
 como processo filho e faz os backups e as restaurações da cópia local. O
 principal passa a deixar o bucket local para ele (`SIBLING_BUCKETS`).
 
+O RustFS fala só HTTPS, com um certificado gerado na instalação e guardado ao
+lado da credencial (`rustfs/tls`). O agente confia só nesse certificado: a porta
+em `127.0.0.1` é de todos os usuários da máquina, e quem escutasse nela antes do
+RustFS não tem a chave — a conexão falha em vez de o backup ir para ele. O
+programa do RustFS é conferido pelo SHA-256 antes de cada início, e recusado se
+uma pasta acima dele puder ser trocada por quem não é administrador. As opções
+do principal (proxy, pasta do estado, intervalos) vão para o processo local; a
+atualização automática dele fica desligada (quem troca o programa é o
+principal). O log do RustFS fica em `/var/log/arkame/rustfs.log` no Linux, e ao
+lado da configuração nos outros sistemas.
+
+A pasta dos dados é dedicada: uma pasta nova (criada fechada) ou vazia; uma que
+já tem outros arquivos e que outros usuários leem é recusada. `/tmp` e
+`/var/tmp` não servem (o sistema apaga o que fica velho ali).
+
 Prefira uma pasta noutro disco: a cópia local serve para restaurar rápido; a
 proteção contra um ataque é a cópia na nuvem. Não roda em Docker.
 

@@ -138,7 +138,15 @@ func unitDoServico(cfg *config.Config, opts Options) string {
 	if opts.Scope == ScopeSystem {
 		gravaveis = pastasGravaveis(cfg, opts.BinaryPath)
 	}
-	return textoDaUnit(opts.Scope, opts.Name, opts.BinaryPath, cfg.ConfigPath, gravaveis)
+	texto := textoDaUnit(opts.Scope, opts.Name, opts.BinaryPath, cfg.ConfigPath, gravaveis)
+	// O processo da cópia local para o RustFS só depois de os laços
+	// terminarem (o que ainda grava no bucket local termina antes). Com o
+	// KillMode padrão, o systemd mandava o SIGTERM ao grupo inteiro de uma vez;
+	// com mixed, só ao agente, e o resto leva SIGKILL só se sobrar no fim.
+	if cfg.LocalStoreProgram != "" {
+		texto = strings.Replace(texto, "\nRestart=always\n", "\nRestart=always\nKillMode=mixed\n", 1)
+	}
+	return texto
 }
 
 func installSystemd(ctx context.Context, cfg *config.Config, opts Options) (*Installed, error) {

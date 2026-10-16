@@ -26,6 +26,16 @@ type Supervisor struct {
 	ArquivoDoSegredo string
 	// Log recebe a saída do RustFS (nil: descartada).
 	Log string
+	// PastaTLS tem o certificado e a chave do RustFS (PrepararTLS). Sem ela o
+	// supervisor não sobe nada: em texto puro, quem escutasse na porta antes
+	// do RustFS receberia o backup.
+	PastaTLS string
+	// SHA256 do programa, conferido antes de cada início: ele roda como
+	// root/SYSTEM, e um programa trocado viraria um administrador da máquina.
+	SHA256 string
+	// Conferir, se dado, recusa o programa que quem não é administrador pode
+	// trocar (o dono e a permissão do arquivo e das pastas acima).
+	Conferir func(programa string) error
 }
 
 // Esperas entre tentativas de subir de novo: dobra a cada queda rápida, até 1 minuto.
@@ -39,17 +49,26 @@ var (
 const maxLog = 50 << 20
 
 // URL de saúde do RustFS (200 quando está servindo).
-func (s *Supervisor) urlDeSaude() string { return "http://" + s.Endereco + "/health" }
+func (s *Supervisor) urlDeSaude() string { return "https://" + s.Endereco + "/health" }
 
-// Responde diz se há um RustFS servindo no endereço agora.
+// Responde diz se o NOSSO RustFS está servindo no endereço agora: só conta a
+// resposta de quem apresenta o certificado da pasta TLS. Outro programa na
+// porta (de outro usuário da máquina, ou de outro serviço) não é adotado.
 func (s *Supervisor) Responde(ctx context.Context) bool {
+	if s.PastaTLS == "" {
+		return false
+	}
+	cli, err := clienteFixado(s.PastaTLS)
+	if err != nil {
+		return false
+	}
 	c, cancelar := context.WithTimeout(ctx, 3*time.Second)
 	defer cancelar()
 	req, err := http.NewRequestWithContext(c, http.MethodGet, s.urlDeSaude(), nil)
 	if err != nil {
 		return false
 	}
-	res, err := http.DefaultClient.Do(req)
+	res, err := cli.Do(req)
 	if err != nil {
 		return false
 	}
@@ -81,7 +100,8 @@ func (s *Supervisor) Pronto(ctx context.Context, prazo time.Duration) error {
 // Um RustFS que já responde no endereço antes de subir (um filho que sobrou de
 // um agente morto à força, que segura a porta) é adotado: o supervisor só
 // confere, e sobe o seu quando ele parar de responder. Brigar pela porta
-// deixaria a cópia local em laço de quedas.
+// deixaria a cópia local em laço de quedas. Só é adotado quem apresenta o
+// certificado da cópia local (Responde): a chave dele é só do administrador.
 func (s *Supervisor) Rodar(ctx context.Context) {
 	espera := esperaMinima
 	for ctx.Err() == nil {
@@ -113,10 +133,14 @@ func (s *Supervisor) Rodar(ctx context.Context) {
 
 // uma roda o RustFS até ele sair ou o ctx acabar.
 func (s *Supervisor) uma(ctx context.Context) error {
+	if err := s.conferirPrograma(); err != nil {
+		return err
+	}
 	cmd := exec.CommandContext(ctx, s.Programa, "server",
 		"--address", s.Endereco,
 		"--access-key-file", s.ArquivoDaChave,
 		"--secret-key-file", s.ArquivoDoSegredo,
+		"--tls-path", s.PastaTLS,
 		s.Dados,
 	)
 	cmd.Env = ambienteDoFilho()
@@ -136,8 +160,39 @@ func (s *Supervisor) uma(ctx context.Context) error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("subindo o RustFS: %w", err)
 	}
+	// No Windows o filho vai num Job Object que morre com o agente: sem isso,
+	// um serviço encerrado à força deixava o rustfs.exe rodando sozinho.
+	if solte, err := prenderAoAgente(cmd.Process); err != nil {
+		slog.Warn("a cópia local (RustFS) não ficou presa ao agente; se o serviço for morto à força ela continua de pé", "err", err)
+	} else {
+		defer solte()
+	}
 	slog.Info("cópia local (RustFS) no ar", "endereco", s.Endereco, "pid", cmd.Process.Pid)
 	return cmd.Wait()
+}
+
+// conferirPrograma: antes de cada início, o programa tem de ser o que o
+// install deixou (SHA-256) e só o administrador pode trocá-lo.
+func (s *Supervisor) conferirPrograma() error {
+	if s.PastaTLS == "" {
+		return fmt.Errorf("a cópia local está sem a pasta TLS (ARKAME_LOCAL_STORE_TLS): rode de novo o local-storage install")
+	}
+	if s.SHA256 == "" {
+		return fmt.Errorf("a cópia local está sem o SHA-256 do programa (ARKAME_LOCAL_STORE_PROGRAM_SHA256): rode de novo o local-storage install")
+	}
+	if s.Conferir != nil {
+		if err := s.Conferir(s.Programa); err != nil {
+			return fmt.Errorf("o programa da cópia local foi recusado: %w", err)
+		}
+	}
+	got, err := HashDoArquivo(s.Programa)
+	if err != nil {
+		return err
+	}
+	if got != s.SHA256 {
+		return fmt.Errorf("o programa da cópia local (%s) mudou desde a instalação (SHA-256 %s, esperado %s): recusado; rode de novo o local-storage install", s.Programa, got, s.SHA256)
+	}
+	return nil
 }
 
 // ambienteDoFilho: o mínimo para o programa rodar, e nada das variáveis do
@@ -156,10 +211,21 @@ func ambienteDoFilho() []string {
 	return append(env, "RUSTFS_CONSOLE_ENABLE=false")
 }
 
-// abrirLog abre o log para acrescentar; passou do teto, recomeça vazio.
+// abrirLog abre o log para acrescentar; passou do teto, recomeça vazio. Sem
+// seguir link simbólico: o agente roda como root, e um link plantado no lugar
+// do log o faria truncar ou escrever num arquivo do sistema.
 func abrirLog(caminho string) (*os.File, error) {
-	if fi, err := os.Stat(caminho); err == nil && fi.Size() > maxLog {
-		_ = os.Truncate(caminho, 0)
+	f, err := os.OpenFile(caminho, os.O_CREATE|os.O_WRONLY|os.O_APPEND|semSeguirLink, 0o600)
+	if err != nil {
+		return nil, err
 	}
-	return os.OpenFile(caminho, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	fi, err := f.Stat()
+	if err != nil || !fi.Mode().IsRegular() {
+		f.Close()
+		return nil, fmt.Errorf("o log da cópia local (%s) não é um arquivo comum", caminho)
+	}
+	if fi.Size() > maxLog {
+		_ = f.Truncate(0)
+	}
+	return f, nil
 }

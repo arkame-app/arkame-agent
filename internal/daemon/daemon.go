@@ -63,6 +63,12 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		return fmt.Errorf("api client: %w", err)
 	}
 
+	// A cópia local só em HTTPS com o certificado dela: um env-file de antes
+	// (http://127.0.0.1, sem STORAGE_CA_FILE) mandaria o backup em texto puro
+	// para quem estivesse escutando na porta.
+	if err := conferirCopiaLocal(cfg); err != nil {
+		return err
+	}
 	s3Client, err := storage.NewS3Client(ctx, cfg)
 	if err != nil {
 		return fmt.Errorf("s3 client: %w", err)
@@ -80,12 +86,16 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// A cópia local: este processo atende o bucket local e mantém o RustFS de
 	// pé. Sobe antes dos laços e espera responder — até um minuto; sem
 	// resposta, os laços seguem (o backup local falha com a causa, e o
-	// supervisor continua tentando).
+	// supervisor continua tentando). O RustFS tem contexto próprio, cancelado
+	// só depois de os laços terminarem: o que ainda estiver gravando no
+	// bucket local na saída termina antes de ele parar.
 	var copiaLocal sync.WaitGroup
+	ctxDaCopia, pararCopia := context.WithCancel(context.WithoutCancel(ctx))
 	defer copiaLocal.Wait() // o RustFS para antes de o processo sair
+	defer pararCopia()
 	if sup := supervisorDaCopiaLocal(cfg); sup != nil {
 		copiaLocal.Add(1)
-		go func() { defer copiaLocal.Done(); sup.Rodar(ctx) }()
+		go func() { defer copiaLocal.Done(); sup.Rodar(ctxDaCopia) }()
 		if err := sup.Pronto(ctx, time.Minute); err != nil {
 			slog.Warn("a cópia local ainda não responde; os backups dela esperam", "err", err)
 		}
@@ -98,6 +108,10 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	capacidadesDeclaradas.Store(atl.capacidades())
 
 	var wg sync.WaitGroup
+	if cfg.LocalStoreProgram != "" {
+		wg.Add(1)
+		go func() { defer wg.Done(); seguirOPrograma(ctx, oc, func() { parar(atualizacao.ErrReiniciar) }) }()
+	}
 	wg.Add(10)
 	go func() { defer wg.Done(); heartbeatLoop(ctx, client, cfg, svc, atl) }()
 	go func() { defer wg.Done(); probeLoop(ctx, client, s3Client, cfg) }()
@@ -119,6 +133,17 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	return nil
 }
 
+// conferirCopiaLocal recusa o processo da cópia local sem o TLS fixado.
+func conferirCopiaLocal(cfg *config.Config) error {
+	if cfg.LocalStoreProgram == "" {
+		return nil
+	}
+	if cfg.StorageCAFile == "" || cfg.LocalStoreTLS == "" || !strings.HasPrefix(cfg.StorageEndpoint, "https://") {
+		return fmt.Errorf("a cópia local deste servidor é de uma instalação anterior, sem HTTPS (%s): rode de novo o local-storage install com o comando do painel", cfg.ConfigPath)
+	}
+	return nil
+}
+
 // supervisorDaCopiaLocal: o do RustFS, quando este processo tem cópia local.
 func supervisorDaCopiaLocal(cfg *config.Config) *localstore.Supervisor {
 	if cfg.LocalStoreProgram == "" || cfg.LocalStoreData == "" || cfg.LocalStoreAddress == "" {
@@ -131,6 +156,9 @@ func supervisorDaCopiaLocal(cfg *config.Config) *localstore.Supervisor {
 		ArquivoDaChave:   cfg.LocalStoreAccessFile,
 		ArquivoDoSegredo: cfg.LocalStoreSecretFile,
 		Log:              cfg.LocalStoreLog,
+		PastaTLS:         cfg.LocalStoreTLS,
+		SHA256:           cfg.LocalStoreProgramSHA,
+		Conferir:         func(p string) error { return service.ConferirAuxiliar(p) },
 	}
 }
 
@@ -185,6 +213,12 @@ func enviarHeartbeatCom(ctx context.Context, c *api.Client, cfg *config.Config, 
 		Capabilities:    atl.capacidades(),
 		Update:          atl.relatoDoHeartbeat(),
 		LauncherVersion: versaoDoLancador(),
+	}
+	// O processo da cópia local é o mesmo servidor no painel, mas não é ele
+	// quem diz se o servidor está no ar nem como reiniciá-lo: com o papel, o
+	// painel só registra que a cópia local está viva.
+	if cfg.LocalStoreProgram != "" {
+		hb.Role = api.PapelCopiaLocal
 	}
 	var resp api.HeartbeatResponse
 	if err := c.POST(ctx, "/api/agents/"+cfg.AgentID+"/heartbeat", hb, &resp); err != nil {

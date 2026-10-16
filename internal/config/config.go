@@ -75,9 +75,14 @@ type Config struct {
 	StorageAccessKey string
 	StorageSecretKey string
 	StorageEndpoint  string // para MinIO / S3-compat não-AWS
-	StorageRegion    string
-	StorageBucket    string // nome do bucket; obrigatório para o teste do bucket (probe), a limpeza da retenção e o check-storage. Os caminhos dentro dele vêm do painel no plano
-	StorageID        string // UUID do registro no painel
+	// StorageCAFile (STORAGE_CA_FILE): o certificado em que o cliente S3
+	// confia, e só nele. É o da cópia local (o RustFS em 127.0.0.1 com
+	// certificado próprio): outro processo da máquina que segure a porta não
+	// tem a chave, e o agente não lhe entrega o backup.
+	StorageCAFile string
+	StorageRegion string
+	StorageBucket string // nome do bucket; obrigatório para o teste do bucket (probe), a limpeza da retenção e o check-storage. Os caminhos dentro dele vêm do painel no plano
+	StorageID     string // UUID do registro no painel
 	// Buckets atendidos por OUTROS processos deste mesmo agent no host (um
 	// processo por conjunto de credenciais). Itens de restore desses buckets
 	// são pulados em silêncio (o irmão pega); de buckets desconhecidos, falham
@@ -132,6 +137,11 @@ type Config struct {
 	LocalStoreAccessFile string // ARKAME_LOCAL_STORE_ACCESS_KEY_FILE
 	LocalStoreSecretFile string // ARKAME_LOCAL_STORE_SECRET_KEY_FILE
 	LocalStoreLog        string // ARKAME_LOCAL_STORE_LOG
+	// A pasta com o certificado e a chave TLS do RustFS (rustfs_cert.pem e
+	// rustfs_key.pem), e o SHA-256 do programa: conferido antes de cada vez
+	// que ele sobe (roda como root/SYSTEM).
+	LocalStoreTLS        string // ARKAME_LOCAL_STORE_TLS
+	LocalStoreProgramSHA string // ARKAME_LOCAL_STORE_PROGRAM_SHA256
 }
 
 // Overrides representa valores vindos da CLI que têm precedência sobre env.
@@ -202,6 +212,7 @@ func Load(envFile string, o Overrides) (*Config, error) {
 		StorageAccessKey:       get("STORAGE_ACCESS_KEY"),
 		StorageSecretKey:       get("STORAGE_SECRET_KEY"),
 		StorageEndpoint:        get("STORAGE_ENDPOINT"),
+		StorageCAFile:          get("STORAGE_CA_FILE"),
 		StorageRegion:          firstNonEmpty(get("STORAGE_REGION"), DefaultRegion),
 		StorageBucket:          get("STORAGE_BUCKET"),
 		StorageID:              get("STORAGE_ID"),
@@ -220,6 +231,8 @@ func Load(envFile string, o Overrides) (*Config, error) {
 		LocalStoreAccessFile:   get("ARKAME_LOCAL_STORE_ACCESS_KEY_FILE"),
 		LocalStoreSecretFile:   get("ARKAME_LOCAL_STORE_SECRET_KEY_FILE"),
 		LocalStoreLog:          get("ARKAME_LOCAL_STORE_LOG"),
+		LocalStoreTLS:          get("ARKAME_LOCAL_STORE_TLS"),
+		LocalStoreProgramSHA:   get("ARKAME_LOCAL_STORE_PROGRAM_SHA256"),
 	}
 	modoDoEstado := strings.ToLower(strings.TrimSpace(get("ARKAME_STATE")))
 	switch dir := get("ARKAME_STATE_DIR"); {

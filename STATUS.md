@@ -17,6 +17,15 @@
   órfão que ainda responde na porta em vez de brigar por ela. O `rustfs.exe` não fala com o SCM do Windows:
   por isso não é serviço próprio.
 - Capacidade `local_store` (o painel só oferece a cópia local a quem a declara).
+- Revisão de segurança (16/10), corrigida: o RustFS só em HTTPS com certificado fixado (um servidor falso de
+  outro usuário em 127.0.0.1:9900 era adotado e recebia o backup); programa conferido pelo SHA-256 e pelas
+  pastas acima antes de cada início; pasta dos dados fechada (a que já existia aberta e com outros arquivos é
+  recusada); opções do principal copiadas e atualização automática desligada no processo local; log fora da
+  pasta-mãe dos dados e sem seguir link; RustFS para depois dos laços; Job Object no Windows; heartbeat com
+  `role: local_store` (o painel não deixa o processo local dizer que o servidor está no ar); `/tmp` recusado.
+- O processo local confere o próprio executável a cada minuto e, quando o principal o troca, reinicia junto
+  (com a ocupação reservada, sem cortar backup nem restauração).
+- Pendente: o `uninstall` não remove o RustFS, a credencial nem a pasta dos dados (a pasta é o backup).
 - Teste de ponta a ponta no painel (`test-copia-local-e2e`): install → dois processos → painel aceita o
   armazenamento local → plano local completa → plano da nuvem ligado roda pelo outro processo → arquivos nos
   dois buckets → parar o processo para o RustFS. Defeito plantado acusado.

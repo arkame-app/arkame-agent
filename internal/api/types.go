@@ -131,7 +131,13 @@ type HeartbeatRequest struct {
 	// LauncherVersion: no Docker, a versão do programa da imagem quando quem
 	// roda é o programa baixado para o volume.
 	LauncherVersion string `json:"launcher_version,omitempty"`
+	// Role: vazio no agente principal; PapelCopiaLocal no processo da cópia
+	// local (`local-storage install`), que tem a mesma identidade.
+	Role string `json:"role,omitempty"`
 }
+
+// PapelCopiaLocal é o Role do processo da cópia local no heartbeat.
+const PapelCopiaLocal = "local_store"
 
 // UpdateReport é o relato do agente sobre a atualização do próprio programa.
 type UpdateReport struct {

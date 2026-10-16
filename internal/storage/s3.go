@@ -5,9 +5,11 @@ package storage
 import (
 	"context"
 	"fmt"
+	"net/http"
 
 	"github.com/arkame-app/agent/internal/config"
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -35,6 +37,16 @@ func NewS3Client(ctx context.Context, cfg *config.Config) (*s3.Client, error) {
 			awsconfig.WithRequestChecksumCalculation(aws.RequestChecksumCalculationWhenRequired),
 			awsconfig.WithResponseChecksumValidation(aws.ResponseChecksumValidationWhenRequired),
 		)
+	}
+	// A cópia local: só o certificado dela (ver ConfigTLSFixado).
+	if cfg.StorageCAFile != "" {
+		tc, err := ConfigTLSFixado(cfg.StorageCAFile)
+		if err != nil {
+			return nil, err
+		}
+		loadOpts = append(loadOpts, awsconfig.WithHTTPClient(awshttp.NewBuildableClient().WithTransportOptions(func(tr *http.Transport) {
+			tr.TLSClientConfig = tc
+		})))
 	}
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, loadOpts...)
 	if err != nil {

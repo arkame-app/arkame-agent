@@ -47,6 +47,24 @@ var (
 // gravável por outros nem pelo grupo, salvo o grupo do root (gid 0). Link
 // simbólico não tem permissão própria: vale o dono e a pasta onde está.
 func conferirPrograma(programa string) error {
+	return conferirProgramaCom(programa, mensagemDoAgente)
+}
+
+// mensagemDoAgente: a recusa do programa do próprio agente, com o caminho de instalação certo.
+func mensagemDoAgente(abs, problema string) error {
+	return fmt.Errorf(
+		"o serviço do sistema roda como root e chamaria %s, mas %s: quem pode trocar esse arquivo viraria root no próximo reinício do serviço. "+
+			"Instale o programa numa pasta só do root — o instalador com sudo põe em /usr/local/bin, ou em /opt/arkame/bin "+
+			"quando /usr/local/bin não é só do root, como o do Homebrew "+
+			"(curl -fsSL https://get.arkame.app/install.sh | sudo sh -s -- --token=SEU_CODIGO); "+
+			"outra pasta só do root vai em ARKAME_BIN_DIR "+
+			"(curl -fsSL https://get.arkame.app/install.sh | sudo env ARKAME_BIN_DIR=/opt/arkame/bin sh -s -- --token=SEU_CODIGO) —, "+
+			"ou instale só para o seu usuário, sem sudo (escopo user): %s install --token=SEU_CODIGO",
+		abs, problema, abs)
+}
+
+// conferirProgramaCom é conferirPrograma com a mensagem de recusa dada.
+func conferirProgramaCom(programa string, mensagem func(abs, problema string) error) error {
 	abs, err := filepath.Abs(programa)
 	if err != nil {
 		return fmt.Errorf("conferindo o programa %s: %w", programa, err)
@@ -58,15 +76,7 @@ func conferirPrograma(programa string) error {
 	for _, c := range caminhos {
 		for p := c; ; p = filepath.Dir(p) {
 			if problema := problemaDoCaminho(p); problema != "" {
-				return fmt.Errorf(
-					"o serviço do sistema roda como root e chamaria %s, mas %s: quem pode trocar esse arquivo viraria root no próximo reinício do serviço. "+
-						"Instale o programa numa pasta só do root — o instalador com sudo põe em /usr/local/bin, ou em /opt/arkame/bin "+
-						"quando /usr/local/bin não é só do root, como o do Homebrew "+
-						"(curl -fsSL https://get.arkame.app/install.sh | sudo sh -s -- --token=SEU_CODIGO); "+
-						"outra pasta só do root vai em ARKAME_BIN_DIR "+
-						"(curl -fsSL https://get.arkame.app/install.sh | sudo env ARKAME_BIN_DIR=/opt/arkame/bin sh -s -- --token=SEU_CODIGO) —, "+
-						"ou instale só para o seu usuário, sem sudo (escopo user): %s install --token=SEU_CODIGO",
-					abs, problema, abs)
+				return mensagem(abs, problema)
 			}
 			if d := filepath.Dir(p); d == p {
 				break

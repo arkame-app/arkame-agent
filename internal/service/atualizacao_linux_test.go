@@ -195,3 +195,16 @@ func TestPrepararProgramaNovo(t *testing.T) {
 		t.Fatalf("programa novo só do root recusado: %v", err)
 	}
 }
+
+// A unit da cópia local para só o agente no SIGTERM (KillMode=mixed): o
+// RustFS para depois dos laços. A do principal fica como sempre.
+func TestUnitDaCopiaLocalParaSoOAgente(t *testing.T) {
+	local := unitDoServico(&config.Config{ConfigPath: "/etc/arkame/agent-local.env", LocalStoreProgram: "/opt/arkame/rustfs/rustfs"}, Options{Name: "arkame-agent-local", Scope: ScopeSystem, BinaryPath: "/usr/local/bin/arkame-agent"})
+	if !strings.Contains(local, "\nKillMode=mixed\n") {
+		t.Fatalf("a unit da cópia local sem KillMode=mixed:\n%s", local)
+	}
+	principal := unitDoServico(&config.Config{ConfigPath: "/etc/arkame/agent.env"}, Options{Name: "arkame-agent", Scope: ScopeSystem, BinaryPath: "/usr/local/bin/arkame-agent"})
+	if strings.Contains(principal, "KillMode") {
+		t.Fatal("a unit do principal ganhou KillMode")
+	}
+}

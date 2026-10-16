@@ -56,6 +56,10 @@ var (
 	reBucketLocal = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$`)
 )
 
+// pastasTemporarias: onde o sistema apaga o que fica velho. Variável para os
+// testes, que montam a cópia local dentro da pasta temporária.
+var pastasTemporarias = []string{"/tmp", "/var/tmp"}
+
 // validar confere o que veio do painel e da pessoa, antes de mexer em nada.
 func (o opcoesDaCopiaLocal) validar() error {
 	if !reUUID.MatchString(o.storageID) {
@@ -82,6 +86,13 @@ func (o opcoesDaCopiaLocal) validar() error {
 		if limpa == "/" {
 			return fmt.Errorf("--dir não pode ser a raiz")
 		}
+		// O systemd-tmpfiles apaga o que fica velho ali: a cópia local
+		// perderia as versões antigas, que são justamente as que se restauram.
+		for _, temp := range pastasTemporarias {
+			if limpa == temp || strings.HasPrefix(limpa, temp+"/") {
+				return fmt.Errorf("--dir não pode ficar em %s (o sistema apaga arquivos antigos ali); use outro disco, ou /srv, /var ou /mnt", temp)
+			}
+		}
 	}
 	return nil
 }
@@ -103,7 +114,10 @@ func pastaDoPrograma() string {
 // encadeados — local primeiro, nuvem depois — exigem o mesmo servidor), o
 // bucket local, e os buckets do principal como irmãos (os planos deles ficam
 // para ele).
-func linhasDaCopiaLocal(main *config.Config, o opcoesDaCopiaLocal, chave, segredo, programa, pastaDasChaves string) []string {
+// programaDaCopia é o RustFS que o install deixou: caminho e SHA-256.
+type programaDaCopia struct{ caminho, sha256 string }
+
+func linhasDaCopiaLocal(main *config.Config, o opcoesDaCopiaLocal, chave, segredo string, prog programaDaCopia, pastaDasChaves, pastaTLS, log string) []string {
 	endereco := "127.0.0.1:" + strconv.Itoa(o.porta)
 	irmaos := slices.DeleteFunc(append([]string{main.StorageBucket}, main.SiblingBuckets...), func(b string) bool { return b == "" || b == o.bucket })
 	abs := func(p string) string {
@@ -120,18 +134,97 @@ func linhasDaCopiaLocal(main *config.Config, o opcoesDaCopiaLocal, chave, segred
 		"AGENT_ID_PATH=" + abs(main.AgentIDPath),
 		"STORAGE_ID=" + o.storageID,
 		"STORAGE_BUCKET=" + o.bucket,
-		"STORAGE_ENDPOINT=http://" + endereco,
+		"STORAGE_ENDPOINT=https://" + endereco,
+		"STORAGE_CA_FILE=" + filepath.Join(pastaTLS, localstore.ArquivoDoCertificado),
 		"STORAGE_REGION=" + config.DefaultRegion,
 		"STORAGE_ACCESS_KEY=" + chave,
 		"STORAGE_SECRET_KEY=" + segredo,
 		"SIBLING_BUCKETS=" + strings.Join(irmaos, ","),
-		"ARKAME_LOCAL_STORE_PROGRAM=" + programa,
+		// Quem troca o programa é o agente principal; este processo segue o
+		// principal (reinicia com ele) e não se atualiza sozinho.
+		"ARKAME_AUTO_UPDATE=off",
+		"ARKAME_LOCAL_STORE_PROGRAM=" + prog.caminho,
+		"ARKAME_LOCAL_STORE_PROGRAM_SHA256=" + prog.sha256,
+		"ARKAME_LOCAL_STORE_VERSION=" + localstore.Versao,
+		"ARKAME_LOCAL_STORE_TLS=" + pastaTLS,
 		"ARKAME_LOCAL_STORE_DATA=" + filepath.Clean(o.pasta),
 		"ARKAME_LOCAL_STORE_ADDRESS=" + endereco,
 		"ARKAME_LOCAL_STORE_ACCESS_KEY_FILE=" + filepath.Join(pastaDasChaves, "access.key"),
 		"ARKAME_LOCAL_STORE_SECRET_KEY_FILE=" + filepath.Join(pastaDasChaves, "secret.key"),
-		"ARKAME_LOCAL_STORE_LOG=" + filepath.Join(filepath.Dir(filepath.Clean(o.pasta)), "arkame-rustfs.log"),
+		"ARKAME_LOCAL_STORE_LOG=" + log,
 	}
+}
+
+// chavesSoDoPrincipal não vão do env-file do principal para o da cópia local:
+// a identidade e o armazenamento são escritos de propósito (linhasDaCopiaLocal),
+// e o código de ativação já foi usado.
+var chavesSoDoPrincipal = regexp.MustCompile(`^(AWS_[A-Z_0-9]+|STORAGE_[A-Z_]+|SIBLING_BUCKETS|ARKAME_LOCAL_STORE_[A-Z_0-9]+|ARKAME_AUTO_UPDATE|ENROLLMENT_TOKEN|PANEL_URL|AGENT_ID|AGENT_ID_PATH|TOKEN_PATH|PRIVATE_KEY_PATH|HOST_ROOT)$`)
+
+// opcoesDoPrincipal: o resto do env-file do principal (proxy, pasta do
+// estado, concorrência, intervalos…), que a cópia local tem de seguir — atrás
+// de um proxy obrigatório, sem ele o processo local nunca falaria com o painel.
+func opcoesDoPrincipal(caminho string) ([]string, error) {
+	b, err := os.ReadFile(caminho)
+	if err != nil {
+		return nil, err
+	}
+	var linhas []string
+	for _, l := range strings.Split(strings.ReplaceAll(string(b), "\r\n", "\n"), "\n") {
+		l = strings.TrimSpace(l)
+		k, _, ok := strings.Cut(l, "=")
+		if !ok || strings.HasPrefix(l, "#") || chavesSoDoPrincipal.MatchString(strings.TrimSpace(k)) {
+			continue
+		}
+		linhas = append(linhas, l)
+	}
+	return linhas, nil
+}
+
+// logDaCopiaLocal: no Linux, em /var/log/arkame (o serviço vê /etc só para
+// leitura); nos outros, ao lado da configuração, na pasta só do
+// administrador. Nunca na pasta de cima da dos dados, que pode ser de outro.
+func logDaCopiaLocal(configPath string) string {
+	if runtime.GOOS == "linux" && configPath == config.DefaultPath {
+		return "/var/log/arkame/rustfs.log"
+	}
+	return filepath.Join(filepath.Dir(configPath), "rustfs.log")
+}
+
+// fecharPastaDosDados deixa a pasta dos dados só para o administrador. A pasta
+// é dedicada: a que já existia só é fechada se estiver vazia ou já for da
+// cópia local (só o .rustfs.sys do RustFS e o bucket); com outra coisa dentro, e aberta,
+// é recusada — fechar mudaria o acesso de quem usa aquilo.
+func fecharPastaDosDados(pasta, bucket string) error {
+	if err := segredo.PastaPrivada(pasta); err != nil {
+		return err
+	}
+	aberta, err := pastaAberta(pasta)
+	if err != nil {
+		return err
+	}
+	if !aberta {
+		return nil
+	}
+	entradas, err := os.ReadDir(pasta)
+	if err != nil {
+		return err
+	}
+	for _, e := range entradas {
+		// O que já está ali tem de ser pasta de verdade (nem link, nem
+		// junção) e de dono confiável: numa pasta aberta, um usuário comum
+		// plantava um link com o nome do bucket, e o RustFS (como root)
+		// gravava o backup onde ele lê.
+		fi, err := os.Lstat(filepath.Join(pasta, e.Name()))
+		permitida := e.Name() == ".rustfs.sys" || e.Name() == bucket
+		if permitida && err == nil && fi.Mode().Type() == os.ModeDir && segredo.ConferirDono(filepath.Join(pasta, e.Name())) == nil {
+			continue
+		}
+		if permitida {
+			return fmt.Errorf("%s/%s não é uma pasta da cópia local (é um link, ou de outro usuário): use uma pasta nova ou vazia", pasta, e.Name())
+		}
+		return fmt.Errorf("%s já tem arquivos e outros usuários da máquina podem lê-la: use uma pasta nova ou vazia (por exemplo %s), que o agente cria fechada", pasta, filepath.Join(pasta, "arkame-local"))
+	}
+	return fecharPasta(pasta)
 }
 
 // irmaosDoPrincipal: os buckets que o principal deixa para os irmãos, com o local.
@@ -242,46 +335,52 @@ func instalarCopiaLocal(ctx context.Context, o opcoesDaCopiaLocal, out escritor)
 	}
 	fmt.Fprintf(out, "Cópia local: %s, bucket %s, em 127.0.0.1:%d\n", filepath.Clean(o.pasta), o.bucket, o.porta)
 
+	localCfgPath := filepath.Join(filepath.Dir(o.config), "agent-local.env")
 	// 1. A pasta dos dados, fechada para o administrador.
-	if err := segredo.PastaPrivada(filepath.Clean(o.pasta)); err != nil {
+	if err := fecharPastaDosDados(filepath.Clean(o.pasta), o.bucket); err != nil {
 		return fmt.Errorf("pasta dos dados: %w", err)
 	}
-	// 2. O programa, conferido pelo SHA-256 (só baixa se ainda não está lá).
-	pastaProg := pastaDoPrograma()
-	if o.pastaPrograma != "" {
-		pastaProg = o.pastaPrograma
+	// 2. O programa: roda como root/SYSTEM, então só fica o que o SHA-256
+	// confere e numa pasta que só o administrador troca.
+	prog, err := programaConferido(ctx, o, artefato, localCfgPath, out)
+	if err != nil {
+		return err
 	}
-	programa := filepath.Join(pastaProg, artefato.Programa)
-	if o.programaPronto != "" {
-		programa = o.programaPronto
-	} else if _, err := os.Stat(programa); err != nil {
-		fmt.Fprintf(out, "Baixando o RustFS %s (cerca de 200 MB)…\n", localstore.Versao)
-		if programa, err = localstore.Baixar(ctx, artefato, pastaProg); err != nil {
-			return err
-		}
-	}
-	// 3. A credencial, ao lado da configuração do agente.
+	// 3. A credencial e o certificado TLS, ao lado da configuração do agente.
 	pastaDasChaves := filepath.Join(filepath.Dir(o.config), "rustfs")
 	chave, segredoLocal, err := credencialLocal(pastaDasChaves)
 	if err != nil {
 		return fmt.Errorf("credencial da cópia local: %w", err)
 	}
+	pastaTLS := filepath.Join(pastaDasChaves, "tls")
+	certificado, err := localstore.PrepararTLS(pastaTLS)
+	if err != nil {
+		return fmt.Errorf("certificado da cópia local: %w", err)
+	}
+	log := logDaCopiaLocal(o.config)
+	if err := segredo.PastaPrivada(filepath.Dir(log)); err != nil {
+		return fmt.Errorf("pasta do log da cópia local: %w", err)
+	}
 	// 4. O bucket versionado: sobe o RustFS aqui mesmo, só para criar (se o
 	// serviço da cópia local já está rodando, ele é adotado).
-	linhas := linhasDaCopiaLocal(main, o, chave, segredoLocal, programa, pastaDasChaves)
-	localCfgPath := filepath.Join(filepath.Dir(o.config), "agent-local.env")
+	linhas := linhasDaCopiaLocal(main, o, chave, segredoLocal, prog, pastaDasChaves, pastaTLS, log)
+	if extras, err := opcoesDoPrincipal(o.config); err == nil {
+		linhas = append(extras, linhas...)
+	}
 	sup := &localstore.Supervisor{
-		Programa: programa, Dados: filepath.Clean(o.pasta), Endereco: "127.0.0.1:" + strconv.Itoa(o.porta),
+		Programa: prog.caminho, Dados: filepath.Clean(o.pasta), Endereco: "127.0.0.1:" + strconv.Itoa(o.porta),
 		ArquivoDaChave: filepath.Join(pastaDasChaves, "access.key"), ArquivoDoSegredo: filepath.Join(pastaDasChaves, "secret.key"),
+		PastaTLS: pastaTLS, SHA256: prog.sha256, Log: log,
+		Conferir: func(p string) error { return service.ConferirAuxiliar(p) },
 	}
 	subCtx, parar := context.WithCancel(ctx)
 	fim := make(chan struct{})
 	go func() { sup.Rodar(subCtx); close(fim) }()
 	errBucket := func() error {
 		if err := sup.Pronto(ctx, time.Minute); err != nil {
-			return err
+			return fmt.Errorf("%w (se o serviço %s já está rodando de uma instalação anterior, pare-o e rode o install de novo; o log do RustFS está em %s)", err, o.servico, log)
 		}
-		c, err := storage.NewS3Client(ctx, &config.Config{StorageAccessKey: chave, StorageSecretKey: segredoLocal, StorageEndpoint: "http://" + sup.Endereco, StorageRegion: config.DefaultRegion})
+		c, err := storage.NewS3Client(ctx, &config.Config{StorageAccessKey: chave, StorageSecretKey: segredoLocal, StorageEndpoint: "https://" + sup.Endereco, StorageCAFile: certificado, StorageRegion: config.DefaultRegion})
 		if err != nil {
 			return err
 		}
@@ -321,4 +420,55 @@ func instalarCopiaLocal(ctx context.Context, o opcoesDaCopiaLocal, out escritor)
 	fmt.Fprintf(out, "Pronto. Serviço %s instalado (%s).\n", inst.Name, inst.StatusCmd)
 	fmt.Fprintln(out, "No painel, o armazenamento da cópia local fica disponível em alguns minutos, depois do primeiro teste do bucket.")
 	return nil
+}
+
+// programaConferido devolve o RustFS da cópia local, conferido. O que já está
+// em disco só é reaproveitado se for da mesma versão e tiver o SHA-256 que o
+// install anterior registrou; senão, baixa de novo (conferindo o zip pelo
+// SHA-256 embutido no agente). Nos dois casos, a pasta tem de ser só do
+// administrador: quem a trocasse viraria root/SYSTEM no próximo início.
+func programaConferido(ctx context.Context, o opcoesDaCopiaLocal, artefato localstore.Artefato, localCfgPath string, out escritor) (programaDaCopia, error) {
+	conferir := func(p string) (programaDaCopia, error) {
+		if err := service.ConferirAuxiliar(p); err != nil {
+			return programaDaCopia{}, err
+		}
+		sha, err := localstore.HashDoArquivo(p)
+		if err != nil {
+			return programaDaCopia{}, err
+		}
+		return programaDaCopia{caminho: p, sha256: sha}, nil
+	}
+	if o.programaPronto != "" {
+		return conferir(o.programaPronto)
+	}
+	pastaProg := pastaDoPrograma()
+	if o.pastaPrograma != "" {
+		pastaProg = o.pastaPrograma
+	}
+	programa := filepath.Join(pastaProg, artefato.Programa)
+	if anterior, err := config.Load(localCfgPath, config.Overrides{}); err == nil && anterior.LocalStoreProgram == programa && anterior.LocalStoreProgramSHA != "" && versaoAnterior(localCfgPath) == localstore.Versao {
+		if p, err := conferir(programa); err == nil && p.sha256 == anterior.LocalStoreProgramSHA {
+			return p, nil
+		}
+	}
+	fmt.Fprintf(out, "Baixando o RustFS %s (cerca de 200 MB)…\n", localstore.Versao)
+	baixado, err := localstore.Baixar(ctx, artefato, pastaProg)
+	if err != nil {
+		return programaDaCopia{}, err
+	}
+	return conferir(baixado)
+}
+
+// versaoAnterior: a versão do RustFS que o install anterior deixou.
+func versaoAnterior(localCfgPath string) string {
+	b, err := os.ReadFile(localCfgPath)
+	if err != nil {
+		return ""
+	}
+	for _, l := range strings.Split(string(b), "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(l), "ARKAME_LOCAL_STORE_VERSION="); ok {
+			return v
+		}
+	}
+	return ""
 }
