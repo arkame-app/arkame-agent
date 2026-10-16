@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -93,7 +94,18 @@ func Run(ctx context.Context, comando string, prazo time.Duration) (Result, erro
 	// ARKAME_AGENT: o caminho deste programa, para o comando chamar o próprio
 	// agente (`"%ARKAME_AGENT%" prepare-dump-folder …`) sem depender do PATH
 	// do serviço nem de onde ele foi instalado.
-	cmd.Env = append(os.Environ(), "ARKAME_AGENT="+programaDoAgente())
+	//
+	// Sem as chaves do bucket nem o código de ativação: o serviço carrega o
+	// env-file no próprio ambiente (EnvironmentFile=), e o comando herdava
+	// tudo — inclusive o que ele passa a outro usuário (`runuser -u postgres`,
+	// e daí a quem lê o /proc dele). O comando é do cliente, mas a chave do
+	// bucket não é coisa que um dump precise.
+	//
+	// ARKAME_HOOK_DEADLINE: quando o prazo vence (segundos Unix), para o
+	// comando que sabe parar antes e deixar o resto para a próxima sessão
+	// (`zimbra export`).
+	cmd.Env = append(ambienteDoComando(os.Environ()), "ARKAME_AGENT="+programaDoAgente(),
+		"ARKAME_HOOK_DEADLINE="+strconv.FormatInt(time.Now().Add(prazo).Unix(), 10))
 
 	buf := &bufferSeguro{}
 	cmd.Stdout = buf
@@ -135,6 +147,24 @@ func Run(ctx context.Context, comando string, prazo time.Duration) (Result, erro
 		return r, fmt.Errorf("comando falhou: %w", err)
 	}
 	return r, fmt.Errorf("comando terminou com código %d", r.ExitCode)
+}
+
+// ambienteDoComando: o ambiente do serviço, sem o que é segredo do agente —
+// nem o proxy com usuário e senha (`HTTPS_PROXY=http://u:s@…`), que o
+// env-file do agente pode ter para ele mesmo.
+func ambienteDoComando(env []string) []string {
+	var r []string
+	for _, kv := range env {
+		nome, valor, _ := strings.Cut(kv, "=")
+		if strings.HasPrefix(nome, "STORAGE_") || nome == "ENROLLMENT_TOKEN" || strings.HasPrefix(nome, "AWS_SECRET") || nome == "AWS_SESSION_TOKEN" {
+			continue
+		}
+		if strings.HasSuffix(strings.ToUpper(nome), "_PROXY") && strings.Contains(valor, "@") {
+			continue
+		}
+		r = append(r, kv)
+	}
+	return r
 }
 
 // programaDoAgente é o executável deste processo; vazio se o sistema não diz.

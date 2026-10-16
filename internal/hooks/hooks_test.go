@@ -162,3 +162,28 @@ func TestComandoRecebeOCaminhoDoAgente(t *testing.T) {
 		t.Fatalf("ARKAME_AGENT = %q; queria %q", r.Output, programaDoAgente())
 	}
 }
+
+// O comando não herda as chaves do bucket nem o código de ativação, e recebe
+// o horário-limite do prazo.
+func TestComandoSemOsSegredosDoAgente(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("comando de shell")
+	}
+	t.Setenv("STORAGE_SECRET_KEY", "segredo-do-bucket")
+	t.Setenv("STORAGE_ACCESS_KEY", "chave-do-bucket")
+	t.Setenv("ENROLLMENT_TOKEN", "codigo")
+	t.Setenv("HTTPS_PROXY", "http://proxy:3128")
+	t.Setenv("http_proxy", "http://usuario:senha-do-proxy@proxy:3128")
+	r, err := Run(context.Background(), "env", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, nao := range []string{"segredo-do-bucket", "chave-do-bucket", "ENROLLMENT_TOKEN", "senha-do-proxy"} {
+		if strings.Contains(r.Output, nao) {
+			t.Errorf("o comando do plano herdou %q", nao)
+		}
+	}
+	if !strings.Contains(r.Output, "HTTPS_PROXY=http://proxy:3128") || !strings.Contains(r.Output, "ARKAME_HOOK_DEADLINE=") {
+		t.Errorf("faltou o proxy ou o horário-limite:\n%s", r.Output)
+	}
+}
