@@ -94,8 +94,9 @@ func primeiraQueExiste(p string) string {
 	return p
 }
 
-// acimaDeConfianca confere cada pasta de p até a raiz do volume (fora ela):
-// pasta de verdade, sem link no Windows, e de dono confiável.
+// acimaDeConfianca confere cada pasta de p até a raiz do volume: pasta de
+// verdade, sem link no Windows, de dono confiável (fora a raiz) e sem dar a
+// outra conta o direito de trocá-la de lugar (acl_de_pasta.go).
 func acimaDeConfianca(p string) error {
 	if err := semLinkAcima(p); err != nil {
 		return err
@@ -104,6 +105,9 @@ func acimaDeConfianca(p string) error {
 		if err := ConferirDono(p); err != nil {
 			return err
 		}
+		if err := outrosNaoTrocam(p, false); err != nil {
+			return err
+		}
 	}
-	return nil
+	return outrosNaoTrocam(p, true)
 }

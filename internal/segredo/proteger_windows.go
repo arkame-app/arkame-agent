@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -112,7 +113,7 @@ func criarPastaFechada(p string) error {
 	if err != nil {
 		return err
 	}
-	nome, err := windows.UTF16PtrFromString(p)
+	nome, err := windows.UTF16PtrFromString(comPrefixoLongo(p))
 	if err != nil {
 		return err
 	}
@@ -140,9 +141,6 @@ func semLinkAcima(p string) error {
 	}
 }
 
-// sidDoTrustedInstaller é o dono das pastas do próprio Windows.
-const sidDoTrustedInstaller = "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464"
-
 // permitirEscrita refaz a DACL da pasta: Administradores e SYSTEM com
 // controle total, e escritor com modificar (0x1301bf), herdado por arquivos e
 // subpastas, sem herdar nada de cima. Por SID: vale em Windows de qualquer
@@ -162,7 +160,7 @@ func permitirEscrita(dir, escritor string) error {
 	if err != nil {
 		return err
 	}
-	nome, err := windows.UTF16PtrFromString(dir)
+	nome, err := windows.UTF16PtrFromString(comPrefixoLongo(dir))
 	if err != nil {
 		return err
 	}
@@ -187,4 +185,66 @@ func permitirEscrita(dir, escritor string) error {
 		return fmt.Errorf("protegendo %s: %w", dir, err)
 	}
 	return nil
+}
+
+// outrosNaoTrocam lê a DACL da pasta e recusa a que deixa uma conta fora das
+// confiáveis trocá-la de lugar (aceQueEntrega). Pelo caminho: quem chama já
+// recusou junção e link em todo o caminho (semLinkAcima).
+func outrosNaoTrocam(p string, raiz bool) error {
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return err
+	}
+	sd, err := windows.GetNamedSecurityInfo(abs, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		return fmt.Errorf("lendo a permissão de %s: %w", abs, err)
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil {
+		return fmt.Errorf("lendo a permissão de %s: %w", abs, err)
+	}
+	if dacl == nil {
+		// DACL nula: todo mundo pode tudo.
+		return fmt.Errorf("%w: %s não tem permissão nenhuma definida (qualquer conta pode tudo nela)", ErrDonoNaoConfiavel, abs)
+	}
+	eu := ""
+	if u, uerr := windows.GetCurrentProcessToken().GetTokenUser(); uerr == nil {
+		eu = u.User.Sid.String()
+	}
+	confiavel := func(sid string) bool { return sidsConfiaveisFixos[sid] || (eu != "" && sid == eu) }
+	for i := uint32(0); i < uint32(dacl.AceCount); i++ {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		if err := windows.GetAce(dacl, i, &ace); err != nil {
+			return fmt.Errorf("lendo a permissão de %s: %w", abs, err)
+		}
+		a := aceLida{Tipo: ace.Header.AceType, Marcas: ace.Header.AceFlags, Mascara: uint32(ace.Mask)}
+		if a.Tipo == aceDePermitir || a.Tipo == aceDePermitirCondicao {
+			a.SID = (*windows.SID)(unsafe.Pointer(&ace.SidStart)).String()
+		}
+		entrega, err := aceQueEntrega(a, raiz, confiavel)
+		if err != nil {
+			return fmt.Errorf("%w: %s: %v", ErrDonoNaoConfiavel, abs, err)
+		}
+		if entrega {
+			return fmt.Errorf("%w: %s deixa a conta %s renomeá-la ou mudar a permissão dela — tire dessa conta o direito de modificar a pasta, ou use a pasta padrão (C:\\ProgramData\\Arkame\\dumps)", ErrDonoNaoConfiavel, abs, nomeDaConta(a.SID))
+		}
+	}
+	runtime.KeepAlive(sd)
+	return nil
+}
+
+// nomeDaConta: o nome, para a mensagem (Usuários Autenticados), ou o SID.
+func nomeDaConta(s string) string {
+	sid, err := windows.StringToSid(s)
+	if err != nil {
+		return s
+	}
+	conta, dominio, _, err := sid.LookupAccount("")
+	if err != nil {
+		return s
+	}
+	if dominio != "" {
+		return dominio + `\` + conta
+	}
+	return conta
 }

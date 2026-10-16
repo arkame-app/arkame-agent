@@ -55,3 +55,17 @@ func criarPastaFechada(p string) error { return os.Mkdir(p, 0o700) }
 // semLinkAcima: fora do Windows um link no caminho é escolha do
 // administrador (o estado em outro disco), e o dono conferido é o do destino.
 func semLinkAcima(string) error { return nil }
+
+// outrosNaoTrocam recusa a pasta em que outro usuário pode criar e apagar
+// (escrita para o grupo ou para todos, sem o sticky bit do /tmp): ele
+// renomearia a pasta de baixo e poria a sua no lugar.
+func outrosNaoTrocam(p string, _ bool) error {
+	fi, err := os.Stat(p)
+	if err != nil {
+		return err
+	}
+	if fi.Mode().Perm()&0o022 != 0 && fi.Mode()&os.ModeSticky == 0 {
+		return fmt.Errorf("%w: %s pode ser alterada por outros usuários (modo %v) — tire a escrita do grupo e dos outros (chmod go-w)", ErrDonoNaoConfiavel, p, fi.Mode().Perm())
+	}
+	return nil
+}
