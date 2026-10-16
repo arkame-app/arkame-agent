@@ -60,6 +60,7 @@ func garantirCredencial(ctx context.Context, cfg *config.Config, caminho string)
 			}
 			return linhas, nil
 		}
+		setup.RelatarFalha(ctx, cfg.PanelURL, cfg.EnrollmentToken, alvo.StorageID, err)
 		t, terr := abrirTerminal()
 		if terr != nil || storage.Classe(err) != "chave" {
 			// Sem terminal, ou problema que outra chave não resolve.
@@ -78,6 +79,7 @@ func garantirCredencial(ctx context.Context, cfg *config.Config, caminho string)
 		fmt.Fprintf(os.Stderr, "\n  ✗ A chave de %s não funciona no bucket %s: %s.\n", caminho, alvo.StorageBucket, storage.Causa(err))
 		ak, sk, err := setup.PerguntarETestar(ctx, t, alvo)
 		if err != nil {
+			relatarSeForDoBucket(ctx, cfg, alvo.StorageID, err)
 			return nil, err
 		}
 		return append(linhas, setup.Chaves(ak, sk)...), nil
@@ -103,10 +105,20 @@ func garantirCredencial(ctx context.Context, cfg *config.Config, caminho string)
 
 	ak, sk, err := setup.PerguntarETestar(ctx, t, setup.NaConfig(p, cfg))
 	if err != nil {
+		relatarSeForDoBucket(ctx, cfg, p.Armazenamento.ID, err)
 		return nil, err
 	}
 	fmt.Fprintln(os.Stderr, "  ✓ Vai para", caminho, "com a aprovação")
 	return append(setup.Linhas(p, cfg.PanelURL), setup.Chaves(ak, sk)...), nil
+}
+
+// relatarSeForDoBucket manda ao painel a recusa do bucket que veio do teste
+// interativo (setup.ErrDoBucket); a chave recusada cinco vezes não vai.
+func relatarSeForDoBucket(ctx context.Context, cfg *config.Config, storageID string, err error) {
+	var doBucket *setup.ErrDoBucket
+	if errors.As(err, &doBucket) {
+		setup.RelatarFalha(ctx, cfg.PanelURL, cfg.EnrollmentToken, storageID, doBucket.Err)
+	}
 }
 
 // abrirTerminal é o terminal.Open; os testes o trocam.

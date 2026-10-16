@@ -140,6 +140,38 @@ func NaConfig(p *DoPainel, cfg *config.Config) *config.Config {
 	return &c
 }
 
+// ErrDoBucket é a recusa que outra chave não resolve (bucket, rede): a
+// mensagem é a causa em português, e o erro do SDK fica por baixo, para o
+// relato ao painel (RelatarFalha).
+type ErrDoBucket struct{ Err error }
+
+func (e *ErrDoBucket) Error() string { return storage.Causa(e.Err) }
+func (e *ErrDoBucket) Unwrap() error { return e.Err }
+
+// RelatarFalha conta ao painel, pelo código de instalação, que o teste do
+// bucket falhou antes do registro — o bucket apagado, o endereço errado, a
+// rede. Sem isto, o erro só aparecia no terminal de quem instalava; o painel
+// seguia mostrando o armazenamento como se nada houvesse (teste do fundador,
+// 16/10). A chave recusada não vai: é digitação, e se corrige ali mesmo.
+//
+// Melhor esforço: o painel fora do ar não muda o que a instalação diz.
+func RelatarFalha(ctx context.Context, panelURL, codigo, storageID string, falha error) {
+	if panelURL == "" || codigo == "" || storageID == "" || falha == nil || storage.Classe(falha) == "chave" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	c, err := api.New(api.Options{BaseURL: strings.TrimRight(panelURL, "/"), Timeout: 10 * time.Second})
+	if err != nil {
+		return
+	}
+	msg := falha.Error()
+	if len(msg) > 500 {
+		msg = msg[:500]
+	}
+	_ = c.POST(ctx, "/api/agents/install-check", map[string]string{"token": codigo, "storage_id": storageID, "error": msg}, nil)
+}
+
 // MaxTentativas antes de desistir: quem errou cinco vezes precisa conferir a
 // chave no provedor, não digitar de novo.
 const MaxTentativas = 5
@@ -174,7 +206,7 @@ func PerguntarETestar(ctx context.Context, t *terminal.Terminal, base *config.Co
 		if err := storage.Check(ctx, &c); err != nil {
 			fmt.Fprintf(out, "  ✗ %s.\n    (%s)\n\n", storage.Causa(err), resumo(err))
 			if storage.Classe(err) != "chave" {
-				return "", "", fmt.Errorf("%s", storage.Causa(err))
+				return "", "", &ErrDoBucket{Err: err}
 			}
 			if tentativa < MaxTentativas {
 				fmt.Fprintln(out, "  Digite de novo (sem a chave? deixe em branco e aperte Enter para sair):")

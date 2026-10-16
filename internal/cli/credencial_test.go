@@ -156,3 +156,58 @@ func TestMesmoArmazenamentoNaoReescreve(t *testing.T) {
 		t.Fatalf("o arquivo mudou:\n%s", b)
 	}
 }
+
+// O bucket apagado: a instalação para com a causa e conta ao painel, pelo
+// código, para o armazenamento aparecer como inacessível lá (teste do
+// fundador, 16/10: o erro só aparecia no terminal). A chave recusada não vai.
+func TestFalhaDoBucketVaiAoPainel(t *testing.T) {
+	for _, caso := range []struct {
+		nome, codigo string
+		status       int
+		relata       bool
+	}{
+		{"bucket apagado", "NoSuchBucket", http.StatusNotFound, true},
+		{"chave recusada", "AccessDenied", http.StatusForbidden, false},
+	} {
+		t.Run(caso.nome, func(t *testing.T) {
+			isolarAWS(t)
+			semTerminal(t)
+			s3 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/xml")
+				w.WriteHeader(caso.status)
+				_, _ = io.WriteString(w, `<?xml version="1.0" encoding="UTF-8"?><Error><Code>`+caso.codigo+`</Code><Message>x</Message></Error>`)
+			}))
+			t.Cleanup(s3.Close)
+			var relato string
+			painel := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/api/agents/install-config":
+					_, _ = io.WriteString(w, fmt.Sprintf(`{"agent_id":"ag","display_name":"Srv","storage":{"id":"st","display_name":"B","bucket":"sumiu","region":null,"endpoint":%q}}`, s3.URL))
+				case "/api/agents/install-check":
+					b, _ := io.ReadAll(r.Body)
+					relato = string(b)
+					_, _ = io.WriteString(w, `{"ok":true}`)
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			t.Cleanup(painel.Close)
+			arquivo := arquivoDeConfig(t, fmt.Sprintf("STORAGE_ID=st\nSTORAGE_BUCKET=sumiu\nSTORAGE_ENDPOINT=%s\nSTORAGE_ACCESS_KEY=ak\nSTORAGE_SECRET_KEY=sk\n", s3.URL))
+
+			if _, err := garantirCredencial(context.Background(), carregarCfg(t, arquivo, painel.URL), arquivo); err == nil {
+				t.Fatal("a instalação seguiu com o bucket recusando")
+			}
+			if !caso.relata {
+				if relato != "" {
+					t.Fatalf("a chave recusada foi ao painel: %s", relato)
+				}
+				return
+			}
+			for _, quer := range []string{`"token":"atk_x"`, `"storage_id":"st"`, caso.codigo} {
+				if !strings.Contains(relato, quer) {
+					t.Fatalf("o relato ao painel não tem %s: %q", quer, relato)
+				}
+			}
+		})
+	}
+}
