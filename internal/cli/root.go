@@ -41,6 +41,7 @@ func newRootCmd() *cobra.Command {
 		newCheckSnapshotCmd(),
 		newPrepareDumpFolderCmd(),
 		newLocalStorageCmd(),
+		newZimbraCmd(),
 		newSetStorageKeysCmd(),
 		newUninstallCmd(),
 		newSetupCmd(),

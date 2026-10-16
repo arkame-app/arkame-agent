@@ -585,6 +585,11 @@ const CapacidadePastaDeDump = "dump_folder"
 // quem a declara.
 const CapacidadeCopiaLocal = "local_store"
 
+// CapacidadeZimbra: o agente tem `zimbra export/restore` e o servidor tem o
+// Zimbra instalado (/opt/zimbra). O painel só oferece a receita do Zimbra
+// a quem a declara — é como ela aparece só no servidor de e-mail.
+const CapacidadeZimbra = "zimbra"
+
 // InventoryItem é uma versão que o catálogo do painel diz existir.
 type InventoryItem struct {
 	Key       string `json:"key"`

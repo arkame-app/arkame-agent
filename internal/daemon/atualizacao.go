@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/arkame-app/agent/internal/localstore"
 	"github.com/arkame-app/agent/internal/service"
 	"github.com/arkame-app/agent/internal/storage"
+	"github.com/arkame-app/agent/internal/zimbra"
 	"github.com/arkame-app/agent/pkg/version"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
@@ -239,8 +241,16 @@ func capacidadesDoIndice() []string {
 	if _, err := localstore.ArtefatoDaPlataforma(); err == nil {
 		caps = append(caps, api.CapacidadeCopiaLocal)
 	}
+	// O Zimbra: só no servidor Linux que o tem (no Docker, /opt/zimbra seria
+	// a do contêiner do agente, e a porta de administração não é a dele).
+	if runtime.GOOS == "linux" && temZimbra() {
+		caps = append(caps, api.CapacidadeZimbra)
+	}
 	return caps
 }
+
+// temZimbra: o Zimbra no lugar padrão. Variável para os testes.
+var temZimbra = func() bool { return zimbra.Instalado("") == nil }
 
 // relatoDoHeartbeat monta o `update` do heartbeat: a tentativa em curso (ou a
 // última, se falhou), senão o que o registro da troca diz (em prova,
