@@ -32,14 +32,16 @@ num prompt de administrador, e um backup de pasta com um `.pst` aberto.
   dentro ou de mudar a permissão ou o dono (a DACL de cada uma, até a raiz; `acl_de_pasta.go`). A pasta criada
   pelo Explorer na raiz do C: herda "Modificar" para Usuários Autenticados e é recusada: o usuário comum a
   renomearia e poria a sua no lugar entre o `prepare-dump-folder` e o `BACKUP DATABASE` (7ª passada). Fora do
-  Windows, a pasta acima gravável pelo grupo ou por todos sem sticky bit. Comandos do plano recebem
+  Windows, a pasta acima gravável pelo grupo ou por todos sem sticky bit. Sem `--writer`, a própria pasta do dump
+  que já existia também passa pela regra; o dono da raiz é conferido (8ª passada). Caminho acima de 260
+  caracteres ainda é recusado na leitura da permissão (sem brecha: recusa). Comandos do plano recebem
   `ARKAME_AGENT`. Capacidade `dump_folder`.
 - **Remoção com instantâneo:** "não existe" na cópia é falha; antes de declarar removido, confere o disco vivo
   com o nome exato (FilesNotToSnapshot, cópia que some, troca só de maiúscula); os que faltam na cópia e estão
   no disco viram o aviso `vss_excluded_files`. Escritor que falha: `vss_writer_failed`.
 - **Restrições conhecidas:** volume montado em pasta não entra no instantâneo; uma pasta acima da pasta do
   dump que seja ponto de montagem de volume é recusada como junção; link absoluto dentro da cópia é seguido
-  para o disco vivo. Revisão em 7 passadas. **No teste em Windows:** `prepare-dump-folder` na pasta padrão
+  para o disco vivo. Revisão em 8 passadas. **No teste em Windows:** `prepare-dump-folder` na pasta padrão
   (`C:\ProgramData\Arkame\dumps\sqlserver`) tem de passar, e numa `C:\Dumps` criada pelo Explorer tem de ser
   recusada com o nome da conta (Usuários Autenticados) — a regra da DACL só foi exercitada em teste puro.
 - **Revisão de ABI** independente (vtable contra o vsbackup.h, GUID por valor no x64 e no

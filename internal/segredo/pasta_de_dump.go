@@ -51,7 +51,11 @@ func PastaDeDump(dir, escritor string) error {
 		return err
 	}
 	if escritor == "" {
-		return nil
+		// Sem escritor a permissão da pasta não é refeita: a que já existia
+		// tem de ser, ela mesma, à prova de outra conta (8ª passada) — a pasta
+		// criada pelo Explorer herda Modificar para Usuários Autenticados, e
+		// no Linux uma 0777 deixa outro usuário pôr um link no lugar do dump.
+		return outrosNaoTrocam(dir, false)
 	}
 	if err := permitirEscrita(dir, escritor); err != nil {
 		return err
@@ -95,8 +99,8 @@ func primeiraQueExiste(p string) string {
 }
 
 // acimaDeConfianca confere cada pasta de p até a raiz do volume: pasta de
-// verdade, sem link no Windows, de dono confiável (fora a raiz) e sem dar a
-// outra conta o direito de trocá-la de lugar (acl_de_pasta.go).
+// verdade, sem link no Windows, de dono confiável e sem dar a outra conta o
+// direito de trocá-la de lugar (acl_de_pasta.go).
 func acimaDeConfianca(p string) error {
 	if err := semLinkAcima(p); err != nil {
 		return err
@@ -108,6 +112,11 @@ func acimaDeConfianca(p string) error {
 		if err := outrosNaoTrocam(p, false); err != nil {
 			return err
 		}
+	}
+	// A raiz também: o dono dela sempre pode mudar a permissão, e se dar o
+	// direito de renomear o que está dentro.
+	if err := ConferirDono(p); err != nil {
+		return err
 	}
 	return outrosNaoTrocam(p, true)
 }

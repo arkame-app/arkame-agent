@@ -110,11 +110,45 @@ func TestComPrefixoLongo(t *testing.T) {
 		`C:\ProgramData\Arkame\dumps\sqlserver`: `\\?\C:\ProgramData\Arkame\dumps\sqlserver`,
 		`\\srv\share\dumps`:                     `\\?\UNC\srv\share\dumps`,
 		`\\?\C:\x`:                              `\\?\C:\x`,
+		`\\.\C:\x`:                              `\\?\C:\x`,
 		`relativo\x`:                            `relativo\x`,
 	}
 	for in, quer := range casos {
 		if got := comPrefixoLongo(in); got != quer {
 			t.Errorf("comPrefixoLongo(%q) = %q; quer %q", in, got, quer)
 		}
+	}
+}
+
+// A própria pasta do dump, quando já existe e o comando vem sem --writer (a
+// permissão dela não é refeita): aberta para outros, é recusada (8ª passada).
+func TestPastaDeDumpRecusaAPropriaPastaAbertaSemEscritor(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no Windows a regra é a da DACL (TestAceQueEntrega)")
+	}
+	dir := filepath.Join(t.TempDir(), "sql")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := PastaDeDump(dir, ""); !errors.Is(err, ErrDonoNaoConfiavel) {
+		t.Fatalf("pasta do dump aberta para todos aceita: %v", err)
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := PastaDeDump(dir, ""); err != nil {
+		t.Fatalf("a mesma pasta, fechada: %v", err)
+	}
+}
+
+// O dono da raiz também é conferido: ele sempre pode mudar a permissão dela.
+func TestPastaDeDumpConfereODonoDaRaiz(t *testing.T) {
+	raiz := filepath.VolumeName(t.TempDir()) + string(filepath.Separator)
+	donoFalso(t, raiz)
+	if err := PastaDeDump(filepath.Join(t.TempDir(), "sql"), ""); !errors.Is(err, ErrDonoNaoConfiavel) {
+		t.Fatalf("raiz de outro dono aceita: %v", err)
 	}
 }

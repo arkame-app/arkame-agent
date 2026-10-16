@@ -82,13 +82,16 @@ func aceQueEntrega(a aceLida, raiz bool, confiavel func(sid string) bool) (bool,
 
 // comPrefixoLongo põe o prefixo `\\?\` num caminho absoluto do Windows, para
 // a chamada direta à API aceitar mais de 260 caracteres (o pacote os faz isso
-// sozinho; CreateDirectory e CreateFile, não): `C:\x` vira `\\?\C:\x` e
-// `\\srv\share\x` vira `\\?\UNC\srv\share\x`. Com o prefixo o Windows não
-// normaliza mais nada — quem chama passa o caminho já limpo (filepath.Clean).
+// sozinho; CreateDirectory e CreateFile, não): `C:\x` vira `\\?\C:\x`,
+// `\\srv\share\x` vira `\\?\UNC\srv\share\x` e `\\.\C:\x` vira `\\?\C:\x`.
+// Com o prefixo o Windows não normaliza mais nada — quem chama passa o
+// caminho já limpo (filepath.Clean).
 func comPrefixoLongo(p string) string {
 	switch {
 	case len(p) >= 4 && p[:4] == `\\?\`:
 		return p
+	case len(p) >= 4 && p[:4] == `\\.\`:
+		return `\\?\` + p[4:]
 	case len(p) >= 2 && p[:2] == `\\`:
 		return `\\?\UNC\` + p[2:]
 	case len(p) >= 3 && p[1] == ':' && p[2] == '\\':
