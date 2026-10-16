@@ -20,6 +20,7 @@ import (
 	"github.com/arkame-app/agent/internal/api"
 	"github.com/arkame-app/agent/internal/atualizacao"
 	"github.com/arkame-app/agent/internal/config"
+	"github.com/arkame-app/agent/internal/localstore"
 	"github.com/arkame-app/agent/internal/service"
 	"github.com/arkame-app/agent/pkg/version"
 )
@@ -279,9 +280,16 @@ func TestHeartbeatDeclaraCapacidadesEEntregaOPedido(t *testing.T) {
 
 	enviado := corpo()
 	caps, ok := enviado["capabilities"].([]any)
-	if !ok || len(caps) != 5 || !slices.Contains(caps, any(atualizacao.Capacidade)) ||
+	// A cópia local só é declarada onde há RustFS para a plataforma.
+	_, temCopiaLocal := localstore.ArtefatoDaPlataforma()
+	esperadas := 5
+	if temCopiaLocal == nil {
+		esperadas = 6
+	}
+	if !ok || len(caps) != esperadas || !slices.Contains(caps, any(atualizacao.Capacidade)) ||
 		!slices.Contains(caps, any(api.CapacidadeIndiceEmLotes)) || !slices.Contains(caps, any(api.CapacidadeIndiceDelta)) ||
-		!slices.Contains(caps, any(api.CapacidadeRemovidosEmParcial)) || !slices.Contains(caps, any(api.CapacidadePastaDeDump)) {
+		!slices.Contains(caps, any(api.CapacidadeRemovidosEmParcial)) || !slices.Contains(caps, any(api.CapacidadePastaDeDump)) ||
+		(temCopiaLocal == nil) != slices.Contains(caps, any(api.CapacidadeCopiaLocal)) {
 		t.Fatalf("capabilities = %#v", enviado["capabilities"])
 	}
 	relato, _ := enviado["update"].(map[string]any)

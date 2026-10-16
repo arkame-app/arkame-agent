@@ -574,6 +574,11 @@ const CapacidadeInstantaneoDoVolume = "volume_snapshot"
 // painel depende dos dois.
 const CapacidadePastaDeDump = "dump_folder"
 
+// CapacidadeCopiaLocal: o agente instala e mantém uma cópia local (RustFS em
+// 127.0.0.1, `local-storage install`). O painel só oferece a cópia local a
+// quem a declara.
+const CapacidadeCopiaLocal = "local_store"
+
 // InventoryItem é uma versão que o catálogo do painel diz existir.
 type InventoryItem struct {
 	Key       string `json:"key"`

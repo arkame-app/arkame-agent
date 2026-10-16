@@ -4,6 +4,25 @@
 
 > Trabalho ativo principal está no painel (`~/hugo-projects/arkame/`). Para o status global do produto, ver `~/hugo-projects/arkame/STATUS.md`.
 
+
+## 🗄️ Cópia local (2026-10-16, sprint S16b — vai no 0.5.0)
+
+- `arkame-agent local-storage install --storage-id --bucket --dir [--port 9900]`: baixa o RustFS 1.0.1
+  (SHA-256 embutido por plataforma: Linux x86_64/arm64 musl, Windows x86_64, macOS arm64), pasta dos dados
+  fechada, credencial em arquivos 0600, bucket versionado, e um segundo serviço `arkame-agent-local` com a
+  MESMA identidade (o mesmo servidor no painel; o encadeamento local → nuvem exige o mesmo servidor). O
+  principal ganha o bucket local em `SIBLING_BUCKETS`.
+- O processo local supervisiona o RustFS como filho (`internal/localstore`): ambiente mínimo (sem as chaves
+  do bucket), console desligado, só 127.0.0.1, reinício com espera crescente, parada limpa, e adota um RustFS
+  órfão que ainda responde na porta em vez de brigar por ela. O `rustfs.exe` não fala com o SCM do Windows:
+  por isso não é serviço próprio.
+- Capacidade `local_store` (o painel só oferece a cópia local a quem a declara).
+- Teste de ponta a ponta no painel (`test-copia-local-e2e`): install → dois processos → painel aceita o
+  armazenamento local → plano local completa → plano da nuvem ligado roda pelo outro processo → arquivos nos
+  dois buckets → parar o processo para o RustFS. Defeito plantado acusado.
+- **Não testado:** Windows e macOS (só compilação cruzada); o serviço instalado de verdade (o e2e usa
+  `--no-service`).
+
 ## 📸 Instantâneo do volume no Windows (VSS) (2026-10-15, sprint S14 — `main`, não lançado)
 
 Vai na mesma 0.5.0. **A prova real só existe num Windows**: aqui o código COM compila e passa

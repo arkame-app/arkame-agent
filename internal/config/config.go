@@ -121,6 +121,17 @@ type Config struct {
 	// VerifyDays é o ciclo, em dias, da reconferência rotativa
 	// (ARKAME_VERIFY_DAYS). Zero: 30.
 	VerifyDays int
+
+	// A cópia local (`local-storage install`): o processo que atende o bucket
+	// local também mantém o RustFS de pé. Vazio: este processo não tem cópia
+	// local. O RustFS escuta só em LocalStoreAddress (127.0.0.1:porta), e a
+	// credencial dele fica em arquivos (fora da linha de comando).
+	LocalStoreProgram    string // ARKAME_LOCAL_STORE_PROGRAM
+	LocalStoreData       string // ARKAME_LOCAL_STORE_DATA
+	LocalStoreAddress    string // ARKAME_LOCAL_STORE_ADDRESS
+	LocalStoreAccessFile string // ARKAME_LOCAL_STORE_ACCESS_KEY_FILE
+	LocalStoreSecretFile string // ARKAME_LOCAL_STORE_SECRET_KEY_FILE
+	LocalStoreLog        string // ARKAME_LOCAL_STORE_LOG
 }
 
 // Overrides representa valores vindos da CLI que têm precedência sobre env.
@@ -203,6 +214,12 @@ func Load(envFile string, o Overrides) (*Config, error) {
 		RehashAllOnce:          o.RehashAll,
 		VerifyDays:             naoNegativo(get("ARKAME_VERIFY_DAYS")),
 		RestoreTestIntervalSec: naoNegativo(get("ARKAME_RESTORE_TEST_INTERVAL_SEC")),
+		LocalStoreProgram:      get("ARKAME_LOCAL_STORE_PROGRAM"),
+		LocalStoreData:         get("ARKAME_LOCAL_STORE_DATA"),
+		LocalStoreAddress:      get("ARKAME_LOCAL_STORE_ADDRESS"),
+		LocalStoreAccessFile:   get("ARKAME_LOCAL_STORE_ACCESS_KEY_FILE"),
+		LocalStoreSecretFile:   get("ARKAME_LOCAL_STORE_SECRET_KEY_FILE"),
+		LocalStoreLog:          get("ARKAME_LOCAL_STORE_LOG"),
 	}
 	modoDoEstado := strings.ToLower(strings.TrimSpace(get("ARKAME_STATE")))
 	switch dir := get("ARKAME_STATE_DIR"); {

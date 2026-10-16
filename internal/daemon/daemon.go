@@ -30,6 +30,7 @@ import (
 	"github.com/arkame-app/agent/internal/fsbrowse"
 	"github.com/arkame-app/agent/internal/hooks"
 	"github.com/arkame-app/agent/internal/instantaneo"
+	"github.com/arkame-app/agent/internal/localstore"
 	"github.com/arkame-app/agent/internal/purge"
 	"github.com/arkame-app/agent/internal/restore"
 	"github.com/arkame-app/agent/internal/scheduler"
@@ -76,6 +77,20 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	ctx, parar := context.WithCancelCause(ctx)
 	defer parar(nil)
 
+	// A cópia local: este processo atende o bucket local e mantém o RustFS de
+	// pé. Sobe antes dos laços e espera responder — até um minuto; sem
+	// resposta, os laços seguem (o backup local falha com a causa, e o
+	// supervisor continua tentando).
+	var copiaLocal sync.WaitGroup
+	defer copiaLocal.Wait() // o RustFS para antes de o processo sair
+	if sup := supervisorDaCopiaLocal(cfg); sup != nil {
+		copiaLocal.Add(1)
+		go func() { defer copiaLocal.Done(); sup.Rodar(ctx) }()
+		if err := sup.Pronto(ctx, time.Minute); err != nil {
+			slog.Warn("a cópia local ainda não responde; os backups dela esperam", "err", err)
+		}
+	}
+
 	// Detecta o serviço uma vez (não muda em runtime) para o painel poder
 	// mostrar o comando exato de reinício quando o agent cair.
 	svc := service.Detect()
@@ -102,6 +117,21 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		return atualizacao.ErrReiniciar
 	}
 	return nil
+}
+
+// supervisorDaCopiaLocal: o do RustFS, quando este processo tem cópia local.
+func supervisorDaCopiaLocal(cfg *config.Config) *localstore.Supervisor {
+	if cfg.LocalStoreProgram == "" || cfg.LocalStoreData == "" || cfg.LocalStoreAddress == "" {
+		return nil
+	}
+	return &localstore.Supervisor{
+		Programa:         cfg.LocalStoreProgram,
+		Dados:            cfg.LocalStoreData,
+		Endereco:         cfg.LocalStoreAddress,
+		ArquivoDaChave:   cfg.LocalStoreAccessFile,
+		ArquivoDoSegredo: cfg.LocalStoreSecretFile,
+		Log:              cfg.LocalStoreLog,
+	}
 }
 
 // capacidadesDeclaradas é o que este processo declara ao painel no heartbeat

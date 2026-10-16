@@ -299,6 +299,29 @@ código: se for outro (bucket, região ou endereço), testa a chave nele e grava
 armazenamento novo inteiro; recusada, pergunta outra — sem terminal, para com a
 causa e não mexe no arquivo.
 
+### Cópia local ("local primeiro, nuvem depois")
+
+Um armazenamento nesta máquina, gerido pelo agente: o RustFS (S3 compatível,
+código aberto), escutando só em `127.0.0.1`. O plano local grava nele, na
+velocidade do disco, e um plano ligado ("Depois de outro plano") leva os mesmos
+arquivos à nuvem. O painel mostra o comando com os dados certos
+(Armazenamentos → Cópia local); ele roda como administrador:
+
+```bash
+sudo /usr/local/bin/arkame-agent local-storage install --storage-id <id> --bucket <bucket> --dir /srv/arkame-local
+```
+
+O comando baixa o RustFS fixado nesta versão do agente (conferido pelo SHA-256),
+cria a pasta dos dados fechada para o administrador, gera a credencial (em
+arquivos ao lado da configuração, fora da linha de comando), cria o bucket
+versionado e instala um segundo serviço do agente, `arkame-agent-local`, com a
+**mesma identidade** (é o mesmo servidor no painel): ele mantém o RustFS de pé
+como processo filho e faz os backups e as restaurações da cópia local. O
+principal passa a deixar o bucket local para ele (`SIBLING_BUCKETS`).
+
+Prefira uma pasta noutro disco: a cópia local serve para restaurar rápido; a
+proteção contra um ataque é a cópia na nuvem. Não roda em Docker.
+
 ### Rodar daemon
 
 ```bash

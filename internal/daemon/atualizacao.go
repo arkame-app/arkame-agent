@@ -15,6 +15,7 @@ import (
 	"github.com/arkame-app/agent/internal/atualizacao"
 	"github.com/arkame-app/agent/internal/config"
 	"github.com/arkame-app/agent/internal/instantaneo"
+	"github.com/arkame-app/agent/internal/localstore"
 	"github.com/arkame-app/agent/internal/service"
 	"github.com/arkame-app/agent/internal/storage"
 	"github.com/arkame-app/agent/pkg/version"
@@ -230,10 +231,15 @@ func (a *atualizador) capacidades() []string {
 // em lotes e em delta, e o `removed` com prova positiva em sessão parcial.
 // Não dependem da instalação.
 func capacidadesDoIndice() []string {
-	return []string{api.CapacidadeIndiceEmLotes, api.CapacidadeIndiceDelta, api.CapacidadeRemovidosEmParcial,
+	caps := []string{api.CapacidadeIndiceEmLotes, api.CapacidadeIndiceDelta, api.CapacidadeRemovidosEmParcial,
 		// prepare-dump-folder e ARKAME_AGENT nos comandos: também não
 		// dependem da instalação.
 		api.CapacidadePastaDeDump}
+	// A cópia local: só onde há RustFS para a plataforma.
+	if _, err := localstore.ArtefatoDaPlataforma(); err == nil {
+		caps = append(caps, api.CapacidadeCopiaLocal)
+	}
+	return caps
 }
 
 // relatoDoHeartbeat monta o `update` do heartbeat: a tentativa em curso (ou a
