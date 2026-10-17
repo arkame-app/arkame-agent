@@ -31,7 +31,7 @@ func newLocalStorageCmd() *cobra.Command {
 		Use:   "local-storage",
 		Short: "Cópia local: um armazenamento nesta máquina, gerido pelo agente",
 	}
-	cmd.AddCommand(newLocalStorageInstallCmd())
+	cmd.AddCommand(newLocalStorageInstallCmd(), newLocalStorageMoveCmd())
 	return cmd
 }
 
