@@ -340,6 +340,7 @@ func instalarCopiaLocal(ctx context.Context, o opcoesDaCopiaLocal, out escritor)
 	if err := fecharPastaDosDados(filepath.Clean(o.pasta), o.bucket); err != nil {
 		return fmt.Errorf("pasta dos dados: %w", err)
 	}
+	avisarDoDisco(filepath.Clean(o.pasta), out)
 	// 2. O programa: roda como root/SYSTEM, então só fica o que o SHA-256
 	// confere e numa pasta que só o administrador troca.
 	prog, err := programaConferido(ctx, o, artefato, localCfgPath, out)
