@@ -39,10 +39,12 @@ func nomeNoReleaseDeste() string {
 }
 
 // conferirPrograma baixa o checksums.txt do release da versão e compara o
-// SHA-256 de caminho com a linha de nome.
-func conferirPrograma(ctx context.Context, cliente *http.Client, base, versao, nome, caminho string) error {
+// SHA-256 de caminho com a linha de nome. Devolve o SHA-256 esperado, para a
+// cópia conferir de novo o que de fato gravou (o arquivo pode mudar entre a
+// conferência e a cópia).
+func conferirPrograma(ctx context.Context, cliente *http.Client, base, versao, nome, caminho string) (string, error) {
 	if versao == "" || versao == "dev" {
-		return fmt.Errorf("%w: versão de desenvolvimento (%q), sem release publicado", errSemConferencia, versao)
+		return "", fmt.Errorf("%w: versão de desenvolvimento (%q), sem release publicado", errSemConferencia, versao)
 	}
 	tag := versao
 	if !strings.HasPrefix(tag, "v") {
@@ -51,22 +53,22 @@ func conferirPrograma(ctx context.Context, cliente *http.Client, base, versao, n
 	url := strings.TrimRight(base, "/") + "/" + tag + "/checksums.txt"
 	esperado, err := checksumNoRelease(ctx, cliente, url, nome)
 	if err != nil {
-		return fmt.Errorf("%w: %v", errSemConferencia, err)
+		return "", fmt.Errorf("%w: %v", errSemConferencia, err)
 	}
 	f, err := os.Open(caminho)
 	if err != nil {
-		return fmt.Errorf("%w: %v", errSemConferencia, err)
+		return "", fmt.Errorf("%w: %v", errSemConferencia, err)
 	}
 	defer f.Close()
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {
-		return fmt.Errorf("%w: lendo %s: %v", errSemConferencia, caminho, err)
+		return "", fmt.Errorf("%w: lendo %s: %v", errSemConferencia, caminho, err)
 	}
 	obtido := hex.EncodeToString(h.Sum(nil))
 	if !strings.EqualFold(esperado, obtido) {
-		return fmt.Errorf("%w (%s %s)\n     esperado: %s\n     obtido:   %s", errChecksumDiferente, nome, tag, esperado, obtido)
+		return "", fmt.Errorf("%w (%s %s)\n     esperado: %s\n     obtido:   %s", errChecksumDiferente, nome, tag, esperado, obtido)
 	}
-	return nil
+	return strings.ToLower(esperado), nil
 }
 
 func checksumNoRelease(ctx context.Context, cliente *http.Client, url, nome string) (string, error) {
@@ -97,19 +99,19 @@ func checksumNoRelease(ctx context.Context, cliente *http.Client, url, nome stri
 
 // verificarBaixado é a decisão do setup: checksum diferente aborta sempre;
 // sem como conferir, aborta também, a menos que pular (--skip-checksum).
-func verificarBaixado(ctx context.Context, cliente *http.Client, base, versao, nome, exe string, pular bool, saida io.Writer) error {
-	err := conferirPrograma(ctx, cliente, base, versao, nome, exe)
+func verificarBaixado(ctx context.Context, cliente *http.Client, base, versao, nome, exe string, pular bool, saida io.Writer) (string, error) {
+	esperado, err := conferirPrograma(ctx, cliente, base, versao, nome, exe)
 	switch {
 	case err == nil:
 		fmt.Fprintln(saida, "  ✓ Checksum conferido")
-		return nil
+		return esperado, nil
 	case errors.Is(err, errChecksumDiferente):
-		return fmt.Errorf("%w\n     Não instalei nada: baixe de novo pelo comando do painel", err)
+		return "", fmt.Errorf("%w\n     Não instalei nada: baixe de novo pelo comando do painel", err)
 	case pular:
 		fmt.Fprintf(saida, "  ! seguindo sem conferir o checksum (--skip-checksum): %v\n", err)
-		return nil
+		return "", nil
 	default:
-		return fmt.Errorf("%w\n     Não instalei nada. Confira a conexão com github.com e rode o comando de novo; para instalar sem conferir, acrescente --skip-checksum", err)
+		return "", fmt.Errorf("%w\n     Não instalei nada. Confira a conexão com github.com e rode o comando de novo; para instalar sem conferir, acrescente --skip-checksum", err)
 	}
 }
 

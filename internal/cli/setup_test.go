@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -20,13 +22,13 @@ func TestCopiarPrograma(t *testing.T) {
 	if err := os.WriteFile(de, []byte("novo"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := copiarPrograma(de, para); err != nil {
+	if err := copiarPrograma(de, para, ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(de, []byte("mais novo"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := copiarPrograma(de, para); err != nil {
+	if err := copiarPrograma(de, para, ""); err != nil {
 		t.Fatal(err)
 	}
 	if b, _ := os.ReadFile(para); string(b) != "mais novo" {
@@ -60,7 +62,7 @@ func TestCopiarProgramaComOldEmUso(t *testing.T) {
 		}
 	}
 	ocupar(t, para+".old")
-	if err := copiarPrograma(de, para); err != nil {
+	if err := copiarPrograma(de, para, ""); err != nil {
 		t.Fatalf("a troca falhou com o .old em uso: %v", err)
 	}
 	if b, _ := os.ReadFile(para); string(b) != "novo" {
@@ -89,7 +91,7 @@ func TestCopiarProgramaLimpaOsOldLivres(t *testing.T) {
 	}
 	emUso := para + ".old-c0de"
 	ocupar(t, emUso)
-	if err := copiarPrograma(de, para); err != nil {
+	if err := copiarPrograma(de, para, ""); err != nil {
 		t.Fatal(err)
 	}
 	for _, a := range livres {
@@ -225,5 +227,33 @@ func TestReiniciarQueNaoParouAvisaParado(t *testing.T) {
 	}
 	if comoIniciar("windows") != "services.msc" {
 		t.Fatalf("no Windows, inicia em services.msc: %q", comoIniciar("windows"))
+	}
+}
+
+// O arquivo trocado entre a conferência e a cópia não entra no lugar: o hash
+// é o dos bytes copiados, não o do arquivo conferido antes.
+func TestCopiarProgramaConfereOQueCopiou(t *testing.T) {
+	d := t.TempDir()
+	de, para := filepath.Join(d, "baixado.exe"), filepath.Join(d, "Arkame", "arkame-agent.exe")
+	if err := os.WriteFile(de, []byte("conferido"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	soma := sha256.Sum256([]byte("conferido"))
+	esperado := hex.EncodeToString(soma[:])
+	if err := copiarPrograma(de, para, strings.ToUpper(esperado)); err != nil {
+		t.Fatalf("o próprio conferido: %v", err)
+	}
+	if err := os.WriteFile(de, []byte("trocado depois"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	err := copiarPrograma(de, para, esperado)
+	if !errors.Is(err, errChecksumDiferente) {
+		t.Fatalf("arquivo trocado aceito: %v", err)
+	}
+	if b, _ := os.ReadFile(para); string(b) != "conferido" {
+		t.Fatalf("o programa no lugar virou %q", b)
+	}
+	if _, err := os.Stat(para + ".novo"); !os.IsNotExist(err) {
+		t.Fatalf("sobrou o .novo: %v", err)
 	}
 }

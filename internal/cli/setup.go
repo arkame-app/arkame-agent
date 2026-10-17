@@ -2,6 +2,7 @@ package cli
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -54,8 +55,18 @@ func newSetupCmd() *cobra.Command {
 				pausar = false // a janela elevada segue daqui
 				return nil
 			}
+			// Duplo clique no instalador: o código vem colado na janela.
+			if enrollmentToken == "" {
+				if t, terr := abrirTerminal(); terr == nil {
+					fmt.Fprintln(os.Stderr, "\n  Instalador do agente Arkame")
+					fmt.Fprintln(os.Stderr, "\n  Cole o código de instalação que aparece no painel, em Servidores → Novo servidor.")
+					enrollmentToken, _ = t.Pergunta("Código de instalação (atk_…)")
+					t.Close()
+				}
+			}
+			enrollmentToken = strings.TrimSpace(enrollmentToken)
 			if !strings.HasPrefix(enrollmentToken, "atk_") {
-				return errors.New("código de instalação ausente ou inválido: copie de novo o comando do painel")
+				return errors.New("código de instalação ausente ou inválido: copie de novo o código do painel")
 			}
 
 			fmt.Fprintln(os.Stderr, "\n  Instalador do agente Arkame")
@@ -72,8 +83,9 @@ func newSetupCmd() *cobra.Command {
 				// só entra em Program Files se for o publicado no release
 				// desta versão: confere o SHA-256 dele com o checksums.txt,
 				// como o install.ps1 e o install.sh fazem com o pacote.
-				if err := verificarBaixado(cmd.Context(), clienteDoChecksum, releasesDoAgente,
-					version.Version, nomeNoReleaseDeste(), exe, pularChecksum, os.Stderr); err != nil {
+				esperado, err := verificarBaixado(cmd.Context(), clienteDoChecksum, releasesDoAgente,
+					version.Version, nomeNoReleaseDeste(), exe, pularChecksum, os.Stderr)
+				if err != nil {
 					return err
 				}
 				// O serviço segue rodando o programa antigo até o `install`
@@ -81,7 +93,7 @@ func newSetupCmd() *cobra.Command {
 				// outros que rodam o mesmo exe (um segundo agente) são
 				// anotados antes da troca, para reiniciar depois dela.
 				rodando := service.RodandoOPrograma(destino)
-				if err := copiarPrograma(exe, destino); err != nil {
+				if err := copiarPrograma(exe, destino, esperado); err != nil {
 					return fmt.Errorf("copiando o programa para %s: %w", destino, err)
 				}
 				fmt.Fprintln(os.Stderr, "  ✓ Programa em", destino)
@@ -104,12 +116,12 @@ func newSetupCmd() *cobra.Command {
 			}
 
 			// O install roda do programa instalado, para o serviço apontar para
-			// ele, e não para a cópia baixada na pasta temporária. E este
-			// processo sai logo em seguida, sem esperar: a cópia baixada fica
-			// livre, e rodar o comando de novo com uma janela ainda aberta não
-			// esbarra mais no arquivo em uso — o curl falhava com "(23) … on
-			// write" (fundador, 28/09). A janela segue com o install, que espera
-			// o Enter no fim.
+			// ele, e não para a cópia baixada. Este processo ESPERA o install:
+			// saindo antes, o PowerShell que o chamou voltava ao prompt e
+			// disputava o teclado com ele — a chave do bucket não entrava
+			// (fundador, 17/10). Saía antes por causa do `curl` que baixava por
+			// cima do programa ainda aberto (28/09); o painel não manda mais
+			// baixar e executar na mesma linha.
 			args := []string{"install", "--token=" + enrollmentToken, "--pause"}
 			if reiniciarSeFalhar != "" {
 				args = append(args, "--restart-on-failure="+reiniciarSeFalhar)
@@ -126,8 +138,17 @@ func newSetupCmd() *cobra.Command {
 			if err := c.Start(); err != nil {
 				return fmt.Errorf("iniciando %s: %w", destino, err)
 			}
-			pausar = false
-			return c.Process.Release()
+			pausar = false // o install espera o Enter no fim
+			if err := c.Wait(); err != nil {
+				var saida *exec.ExitError
+				if errors.As(err, &saida) {
+					// O install já disse o que houve e esperou o Enter.
+					os.Exit(saida.ExitCode())
+				}
+				pausar = true // o install não chegou a esperar o Enter
+				return fmt.Errorf("esperando %s: %w", destino, err)
+			}
+			return nil
 		},
 	}
 	cmd.Flags().StringVar(&enrollmentToken, "token", "", "código de instalação gerado no painel (atk_…)")
@@ -226,7 +247,10 @@ func discoDoSistema() string {
 // anterior ainda estiver em uso (um segundo agente roda o mesmo exe, ou a
 // janela foi fechada no meio do setup), o rename não o substitui — volta
 // "Access is denied" —, e o atual sai com um nome único, como no install.ps1.
-func copiarPrograma(de, para string) error {
+// Com esperado (o SHA-256 do release), o hash é calculado sobre os bytes
+// copiados: só entra no lugar o que foi conferido, mesmo que o arquivo de
+// origem tenha sido trocado depois da conferência.
+func copiarPrograma(de, para, esperado string) error {
 	if err := os.MkdirAll(filepath.Dir(para), 0o755); err != nil {
 		return err
 	}
@@ -241,10 +265,16 @@ func copiarPrograma(de, para string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(destino, origem); err != nil {
+	h := sha256.New()
+	if _, err := io.Copy(io.MultiWriter(destino, h), origem); err != nil {
 		destino.Close()
 		_ = os.Remove(tmp)
 		return err
+	}
+	if obtido := hex.EncodeToString(h.Sum(nil)); esperado != "" && !strings.EqualFold(obtido, esperado) {
+		destino.Close()
+		_ = os.Remove(tmp)
+		return fmt.Errorf("%w: o arquivo mudou depois da conferência (esperado %s, copiado %s)", errChecksumDiferente, esperado, obtido)
 	}
 	// No disco antes do rename: um corte de energia logo depois deixaria o
 	// programa com 0 bytes, e o serviço não subiria mais.

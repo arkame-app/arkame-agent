@@ -54,8 +54,19 @@ func newRootCmd() *cobra.Command {
 }
 
 // Execute roda o root command. Chamado por main.
+//
+// Aberto com dois cliques no Windows e sem argumentos, vira o `setup`: ele pede
+// o administrador, pergunta o código de instalação e segue a instalação numa
+// janela própria. Antes o duplo clique mostrava "This is a command line tool"
+// e fechava (teste do fundador, 17/10). O `os.Args` muda junto porque é dele
+// que a elevação monta a linha da cópia reaberta.
 func Execute() error {
-	return newRootCmd().Execute()
+	root := newRootCmd()
+	if len(os.Args) == 1 && abertoPeloExplorer() {
+		os.Args = append(os.Args, "setup")
+		root.SetArgs([]string{"setup"})
+	}
+	return root.Execute()
 }
 
 func setupLogger() {

@@ -44,7 +44,7 @@ func TestConferirProgramaConfere(t *testing.T) {
 	exe, sha := programaBaixado(t, "programa bom")
 	base := releaseFalso(t, strings.Repeat("0", 64)+"  arkame-agent_windows_amd64.zip\n"+sha+"  "+nomeNoRelease+"\n")
 	for _, v := range []string{"1.2.3", "v1.2.3"} {
-		if err := conferirPrograma(context.Background(), http.DefaultClient, base, v, nomeNoRelease, exe); err != nil {
+		if _, err := conferirPrograma(context.Background(), http.DefaultClient, base, v, nomeNoRelease, exe); err != nil {
 			t.Fatalf("versão %s: %v", v, err)
 		}
 	}
@@ -55,7 +55,7 @@ func TestConferirProgramaDiferente(t *testing.T) {
 	exe, _ := programaBaixado(t, "programa adulterado")
 	_, outro := programaBaixado(t, "programa bom")
 	base := releaseFalso(t, outro+"  "+nomeNoRelease+"\n")
-	err := conferirPrograma(context.Background(), http.DefaultClient, base, "1.2.3", nomeNoRelease, exe)
+	_, err := conferirPrograma(context.Background(), http.DefaultClient, base, "1.2.3", nomeNoRelease, exe)
 	if !errors.Is(err, errChecksumDiferente) {
 		t.Fatalf("esperava errChecksumDiferente, veio %v", err)
 	}
@@ -75,7 +75,7 @@ func TestConferirProgramaSemConferencia(t *testing.T) {
 		"desenvolvimento":     {base, "dev"},
 	}
 	for nome, c := range casos {
-		err := conferirPrograma(context.Background(), http.DefaultClient, c.base, c.versao, nomeNoRelease, exe)
+		_, err := conferirPrograma(context.Background(), http.DefaultClient, c.base, c.versao, nomeNoRelease, exe)
 		if !errors.Is(err, errSemConferencia) {
 			t.Fatalf("%s: esperava errSemConferencia, veio %v", nome, err)
 		}
@@ -94,7 +94,8 @@ func TestVerificarBaixado(t *testing.T) {
 
 	var saida bytes.Buffer
 	verificar := func(base string, pular bool) error {
-		return verificarBaixado(context.Background(), http.DefaultClient, base, "1.2.3", nomeNoRelease, exe, pular, &saida)
+		_, err := verificarBaixado(context.Background(), http.DefaultClient, base, "1.2.3", nomeNoRelease, exe, pular, &saida)
+		return err
 	}
 	if err := verificar(bom, false); err != nil {
 		t.Fatalf("checksum certo: %v", err)
