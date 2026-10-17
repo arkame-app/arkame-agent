@@ -131,6 +131,9 @@ type Result struct {
 	// inline), na ordem da varredura.
 	VersionMap  []api.FileEntry
 	FilesFailed int // arquivos que falharam no upload (pulados); usado p/ decidir partial/failed
+	// NuvemNaLeitura: arquivos que o provedor de nuvem recusou entregar na
+	// leitura ("Access to the cloud file is denied"); somam ao CloudOnlySkipped.
+	NuvemNaLeitura int
 	// SoNoDisco: arquivos que faltaram no instantâneo e estão no disco (o
 	// Windows tira da cópia de sombra os de FilesNotToSnapshot). Não foram
 	// copiados nem tratados como removidos; a versão guardada é a anterior.
@@ -377,7 +380,7 @@ func Run(ctx context.Context, o EngineOptions) (*Result, error) {
 			walkErr = errors.Join(perda, walkErr)
 		}
 	}
-	result.CloudOnlySkipped = pulados.SoNaNuvem
+	result.CloudOnlySkipped = pulados.SoNaNuvem + result.NuvemNaLeitura
 	result.ReparseSkipped = pulados.Reparse
 	result.NaoPermitido = result.NaoPermitido || pulados.NaoPermitido
 	c.ordenarMapa()
@@ -390,7 +393,7 @@ func Run(ctx context.Context, o EngineOptions) (*Result, error) {
 		return result, err
 	}
 	result.InventarioCompleto = walkErr == nil && result.FilesFailed == 0 &&
-		pulados.SoNaNuvem == 0 && pulados.Reparse == 0
+		result.CloudOnlySkipped == 0 && pulados.Reparse == 0
 	if result.InventarioCompleto {
 		if err := c.fecharInventario(); err != nil {
 			return result, err
@@ -554,6 +557,12 @@ func (c *coletor) receber(ctx context.Context, t tratado) {
 		}
 		if ctx.Err() != nil && errors.Is(t.err, context.Canceled) {
 			return // o serviço parando no meio do envio não é falha do arquivo
+		}
+		if erroDeArquivoDeNuvem(t.err) {
+			// Só na nuvem, e o provedor não o entrega ao serviço: fica de fora
+			// como os outros arquivos só na nuvem, e não deixa o backup parcial.
+			r.NuvemNaLeitura++
+			return
 		}
 		slog.Warn("arquivo falhou, pulando", "path", t.fi.RelativePath, "err", t.err)
 		r.FilesFailed++
@@ -775,12 +784,14 @@ func (c *coletor) removerOProvado(listadas *pastasListadas) error {
 // selecao responde se uma chave (relativa ao prefixo do plano) está dentro
 // das pastas e fora das exclusões do plano — a mesma regra da varredura.
 type selecao struct {
-	raizes []string // chave de cada pasta do plano, sem barra no fim
-	globs  []string
+	raizes    []string // chave de cada pasta do plano, sem barra no fim
+	globs     []string
+	absolutas []string // exclusões pelo caminho inteiro, no formato da chave
 }
 
 func novaSelecao(hostRoot string, sourcePaths, excludeGlobs []string) selecao {
 	s := selecao{globs: prepararExclusoes(excludeGlobs)}
+	s.absolutas = exclusoesAbsolutas(hostRoot, s.globs)
 	for _, sp := range sourcePaths {
 		k := caminho.NaChave(hostRoot, caminho.NoDisco(hostRoot, sp))
 		if k == "." {
@@ -792,6 +803,9 @@ func novaSelecao(hostRoot string, sourcePaths, excludeGlobs []string) selecao {
 }
 
 func (s selecao) contem(rel string) bool {
+	if naExclusaoAbsoluta(caminho.Windows, rel, s.absolutas) {
+		return false
+	}
 	for _, raiz := range s.raizes {
 		dentro := rel
 		if raiz != "" {

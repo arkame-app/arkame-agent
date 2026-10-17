@@ -94,10 +94,38 @@ func classificarReparse(atributos, tag uint32) classeReparse {
 		}
 		return reparsePulado
 	}
-	if atributos&(attrRecallOnDataAccess|attrRecallOnOpen|attrOffline) != 0 {
+	// Com a tag de nuvem, OFFLINE também conta: é o provedor quem o marca.
+	if atributosSoNaNuvem(atributos) || atributos&attrOffline != 0 {
 		return reparseSoNaNuvem
 	}
 	return reparseCopiar
+}
+
+// atributosSoNaNuvem: o conteúdo do arquivo está só no provedor (OneDrive,
+// Dropbox, Google Drive — todos pelo Cloud Files API do Windows). Ler baixaria o
+// arquivo; e o serviço, que roda como Sistema, nem consegue: o Dropbox recusa
+// com "Access to the cloud file is denied" (teste do fundador, 17/10). Só os
+// RECALL_*: OFFLINE sozinho num arquivo comum é um atributo que qualquer um
+// marca (attrib +o) e que esconderia o arquivo do backup.
+func atributosSoNaNuvem(atributos uint32) bool {
+	return atributos&(attrRecallOnDataAccess|attrRecallOnOpen) != 0
+}
+
+// errosDeNuvem são os ERROR_CLOUD_FILE_* do winerror.h. Lista explícita, e não
+// a faixa com "cloud" no texto: num Windows sem as mensagens em inglês o texto
+// vem traduzido. Ficam de fora os da faixa que não são do provedor (368, 373…)
+// e ERROR_NOT_A_CLOUD_FILE (376) e ERROR_NOT_A_CLOUD_SYNC_ROOT (390).
+var errosDeNuvem = map[uint32]bool{
+	358: true, 362: true, 363: true, 364: true, 365: true, 366: true,
+	374: true, 375: true, 377: true, 378: true, 379: true, 380: true,
+	381: true, 382: true, 383: true, 386: true, 387: true, 388: true,
+	389: true, 391: true, 392: true, 393: true, 394: true, 395: true,
+	396: true, 397: true, 398: true, 404: true,
+}
+
+// codigoDeNuvem: o erro do Windows é um dos ERROR_CLOUD_FILE_*.
+func codigoDeNuvem(codigo uint32) bool {
+	return errosDeNuvem[codigo]
 }
 
 // lerReparse devolve os atributos e a tag do reparse point em path, sem

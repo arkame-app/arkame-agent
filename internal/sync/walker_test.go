@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"syscall"
 	"testing"
@@ -436,5 +437,78 @@ func TestLinkSemAlvo(t *testing.T) {
 		if got := linkSemAlvo(c.err); got != c.quer {
 			t.Errorf("linkSemAlvo(%v) = %v, quer %v", c.err, got, c.quer)
 		}
+	}
+}
+
+// Dropbox (17/10): o serviço, como Sistema, lê um arquivo só na nuvem e o
+// provedor recusa. Os códigos do Cloud Files API ficam de fora como "só na
+// nuvem"; os outros códigos da mesma faixa, não.
+func TestCodigoDeNuvem(t *testing.T) {
+	casos := []struct {
+		codigo uint32
+		quer   bool
+	}{
+		{395, true}, // ERROR_CLOUD_FILE_ACCESS_DENIED, em qualquer idioma
+		{362, true}, // ERROR_CLOUD_FILE_PROVIDER_NOT_RUNNING
+		{404, true}, // ERROR_CLOUD_FILE_PROVIDER_TERMINATED
+		{368, false},
+		{376, false}, // ERROR_NOT_A_CLOUD_FILE
+		{5, false},
+		{1920, false},
+	}
+	for _, c := range casos {
+		if got := codigoDeNuvem(c.codigo); got != c.quer {
+			t.Errorf("codigoDeNuvem(%d) = %v, quer %v", c.codigo, got, c.quer)
+		}
+	}
+	if !atributosSoNaNuvem(attrRecallOnDataAccess) || !atributosSoNaNuvem(attrRecallOnOpen) || atributosSoNaNuvem(0x20) {
+		t.Fatal("atributos de nuvem mal classificados")
+	}
+	// OFFLINE sozinho num arquivo comum não o esconde do backup; com a tag de
+	// nuvem, sim.
+	if atributosSoNaNuvem(attrOffline) {
+		t.Fatal("OFFLINE sozinho virou só na nuvem")
+	}
+	if classificarReparse(attrOffline, ioReparseTagCloud) != reparseSoNaNuvem {
+		t.Fatal("arquivo de nuvem OFFLINE deixou de ser só na nuvem")
+	}
+}
+
+// A subpasta desmarcada na árvore do plano vira exclusão pelo caminho inteiro
+// (17/10): fica de fora com tudo o que tem dentro, também com host-root (o
+// Docker), e a seleção do índice não a conta — senão o que já tinha subido
+// pareceria removido. A irmã de nome parecido continua.
+func TestExclusaoPeloCaminhoInteiro(t *testing.T) {
+	raiz := t.TempDir()
+	for _, d := range []string{"home/hugo/plans/artefatos/sub", "home/hugo/plans/artefatos-2", "home/hugo/plans/outra"} {
+		if err := os.MkdirAll(filepath.Join(raiz, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, f := range []string{"home/hugo/plans/artefatos/a.txt", "home/hugo/plans/artefatos/sub/b.txt", "home/hugo/plans/artefatos-2/c.txt", "home/hugo/plans/outra/d.txt"} {
+		if err := os.WriteFile(filepath.Join(raiz, f), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exclusoes := []string{"/home/hugo/plans/artefatos", "*.tmp"}
+	arquivos, erros := Walk(context.Background(), raiz, []string{"/home/hugo/plans"}, exclusoes)
+	var chaves []string
+	for f := range arquivos {
+		chaves = append(chaves, f.RelativePath)
+	}
+	if err := <-erros; err != nil {
+		t.Fatal(err)
+	}
+	sort.Strings(chaves)
+	if strings.Join(chaves, ",") != "home/hugo/plans/artefatos-2/c.txt,home/hugo/plans/outra/d.txt" {
+		t.Fatalf("chaves = %v", chaves)
+	}
+	// A raiz nunca vale como exclusão: o backup não fica vazio em silêncio.
+	if len(exclusoesAbsolutas(raiz, prepararExclusoes([]string{"/", `\`}))) != 0 {
+		t.Fatalf("a raiz virou exclusão: %q", exclusoesAbsolutas(raiz, prepararExclusoes([]string{"/", `\`})))
+	}
+	s := novaSelecao(raiz, []string{"/home/hugo/plans"}, exclusoes)
+	if s.contem("home/hugo/plans/artefatos/sub/b.txt") || !s.contem("home/hugo/plans/artefatos-2/c.txt") {
+		t.Fatal("a seleção do índice não segue a exclusão pelo caminho inteiro")
 	}
 }

@@ -3,6 +3,9 @@
 package sync
 
 import (
+	"errors"
+	"io/fs"
+	"syscall"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -57,4 +60,21 @@ func lerReparseDoSistema(path string) (atributos, tag uint32, err error) {
 		return 0, 0, err
 	}
 	return info.FileAttributes, info.ReparseTag, nil
+}
+
+// atributosDoArquivo: os atributos que o Windows já devolveu na listagem da
+// pasta. O Go entrega o arquivo de nuvem como regular, e sem isto o
+// "só na nuvem" nunca era visto antes de tentar ler.
+func atributosDoArquivo(info fs.FileInfo) (uint32, bool) {
+	if d, ok := info.Sys().(*syscall.Win32FileAttributeData); ok && d != nil {
+		return d.FileAttributes, true
+	}
+	return 0, false
+}
+
+// erroDeArquivoDeNuvem: a leitura esbarrou no provedor de nuvem (arquivo só na
+// nuvem que escapou dos atributos, ou provedor que recusa o Sistema).
+func erroDeArquivoDeNuvem(err error) bool {
+	var e syscall.Errno
+	return errors.As(err, &e) && codigoDeNuvem(uint32(e))
 }

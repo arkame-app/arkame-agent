@@ -109,6 +109,7 @@ func walkSem(ctx context.Context, hostRoot string, sourcePaths []string, exclude
 		defer close(errs)
 
 		excludeGlobs := prepararExclusoes(excludeGlobs)
+		absolutas := exclusoesAbsolutas(hostRoot, excludeGlobs)
 		// Pasta do plano que não abre é falha dela, não do plano: as outras
 		// seguem, e o erro vai no fim (o daemon trata como backup parcial).
 		var ilegiveis []string
@@ -184,7 +185,7 @@ func walkSem(ctx context.Context, hostRoot string, sourcePaths []string, exclude
 					}
 					// O que está excluído do plano não entra na conta: não ia
 					// para o backup de qualquer jeito.
-					if excluido(caminho.Windows, root, path, excludeGlobs) {
+					if excluido(caminho.Windows, root, path, excludeGlobs) || naExclusaoAbsoluta(caminho.Windows, chave(path), absolutas) {
 						if d != nil && d.IsDir() {
 							return filepath.SkipDir
 						}
@@ -207,7 +208,7 @@ func walkSem(ctx context.Context, hostRoot string, sourcePaths []string, exclude
 				// dentro deixava todo backup "parcial". Mesma regra dos
 				// arquivos (nome ou segmento do caminho dentro da pasta do
 				// plano); a pasta do plano em si nunca é pulada.
-				if excluido(caminho.Windows, root, path, excludeGlobs) {
+				if excluido(caminho.Windows, root, path, excludeGlobs) || naExclusaoAbsoluta(caminho.Windows, chave(path), absolutas) {
 					if d.IsDir() {
 						return filepath.SkipDir
 					}
@@ -275,6 +276,13 @@ func walkSem(ctx context.Context, hostRoot string, sourcePaths []string, exclude
 					// Socket, pipe, dispositivo: não há conteúdo a guardar, e
 					// abrir um pipe trava o backup.
 					return nil
+				} else if a, ok := atributosDoArquivo(info); ok && atributosSoNaNuvem(a) {
+					// Arquivo de nuvem que o Go entrega como regular (Dropbox).
+					soNaNuvem++
+					if exemploNuvem == "" {
+						exemploNuvem = path
+					}
+					return nil
 				}
 				select {
 				case <-ctx.Done():
@@ -298,7 +306,7 @@ func walkSem(ctx context.Context, hostRoot string, sourcePaths []string, exclude
 			}
 		}
 		if soNaNuvem > 0 {
-			slog.Info("arquivos só na nuvem (OneDrive) ficaram de fora do backup",
+			slog.Info("arquivos só na nuvem (OneDrive, Dropbox) ficaram de fora do backup",
 				"quantidade", soNaNuvem, "exemplo", exemploNuvem)
 		}
 		if reparse > 0 {
@@ -448,6 +456,60 @@ func prepararExclusoes(globs []string) []string {
 	return out
 }
 
+// exclusoesAbsolutas devolve, no formato da chave, os padrões que são um
+// caminho inteiro (`/home/ana/pasta`, `C:\Users\ana\pasta`): a subpasta que a
+// pessoa desmarcou na árvore do plano (painel, 17/10). Eles não passam pelo
+// `excluido` (que olha só o caminho relativo à pasta do plano, e onde nunca
+// casavam): valem para a pasta e tudo dentro dela, no disco, no Docker e no
+// instantâneo — a comparação é pela chave, igual nos três.
+func exclusoesAbsolutas(hostRoot string, globs []string) []string {
+	var out []string
+	for _, g := range globs {
+		if !padraoAbsoluto(g) {
+			continue
+		}
+		k := strings.Trim(caminho.NaChave(hostRoot, caminho.NoDisco(hostRoot, g)), "/")
+		if caminho.Windows {
+			k = strings.ToLower(k)
+		}
+		// A raiz (`/`, ou um disco inteiro — `C:`, que é onde `/` cai no
+		// Windows) não é exclusão que se aceite: tiraria tudo do backup em
+		// silêncio. O painel recusa ao gravar; aqui é a segunda camada.
+		if k == "" || k == "." || (len(k) == 2 && k[1] == ':') {
+			continue
+		}
+		out = append(out, k)
+	}
+	return out
+}
+
+// padraoAbsoluto: `/x` em qualquer sistema; no Windows também `\x` (a raiz
+// do disco do sistema), `\\servidor\x` e `C:\x`. Fora do Windows, `\` é o
+// escape do curinga, não caminho.
+func padraoAbsoluto(g string) bool {
+	if strings.HasPrefix(g, "/") {
+		return true
+	}
+	return caminho.Windows && (strings.HasPrefix(g, `\`) || (len(g) >= 3 && g[1] == ':' && (g[2] == '\\' || g[2] == '/')))
+}
+
+// naExclusaoAbsoluta: a chave é uma das exclusões absolutas, ou está dentro dela.
+func naExclusaoAbsoluta(windows bool, chave string, absolutas []string) bool {
+	if len(absolutas) == 0 {
+		return false
+	}
+	k := strings.Trim(chave, "/")
+	if windows {
+		k = strings.ToLower(k)
+	}
+	for _, a := range absolutas {
+		if k == a || strings.HasPrefix(k, a+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 // excluido diz se p, dentro da pasta do plano raiz, casa com algum padrão de
 // exclusão: pelo nome (*.tmp) ou por um segmento do caminho (node_modules).
 //
@@ -478,6 +540,9 @@ func excluido(windows bool, raiz, p string, globs []string) bool {
 	base := rel[strings.LastIndex(rel, sep)+1:]
 	comSep := sep + rel
 	for _, g := range globs {
+		if padraoAbsoluto(g) {
+			continue // `naExclusaoAbsoluta`, pela chave
+		}
 		// path.Match trata `\` como escape: no Windows, um padrão com `\` é
 		// de vários segmentos e nunca casa com um nome só.
 		if !windows || !strings.Contains(g, `\`) {
