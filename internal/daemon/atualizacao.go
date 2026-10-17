@@ -237,8 +237,10 @@ func capacidadesDoIndice() []string {
 		// prepare-dump-folder e ARKAME_AGENT nos comandos: também não
 		// dependem da instalação.
 		api.CapacidadePastaDeDump}
-	// A cópia local: só onde há RustFS para a plataforma.
-	if _, err := localstore.ArtefatoDaPlataforma(); err == nil {
+	// A cópia local: só onde há RustFS para a plataforma, e fora de contêiner —
+	// o `local-storage install` recusa no Docker, e anunciar a capacidade fazia
+	// o painel oferecer uma cópia local que não tinha como ser criada.
+	if _, err := localstore.ArtefatoDaPlataforma(); err == nil && !emConteiner() {
 		caps = append(caps, api.CapacidadeCopiaLocal)
 	}
 	// O Zimbra: só no servidor Linux que o tem (no Docker, /opt/zimbra seria
@@ -248,6 +250,14 @@ func capacidadesDoIndice() []string {
 	}
 	return caps
 }
+
+// emConteiner: o agente roda com HOST_ROOT (o Docker), o mesmo critério com
+// que o `local-storage install` recusa. Não olha /.dockerenv nem a variável
+// `container`: o agente nativo num LXC (container=lxc) cria a cópia local, e o
+// teste num toolbox não muda de resultado. O Run grava; variável nos testes.
+var emConteiner = func() bool { return comHostRoot.Load() }
+
+var comHostRoot atomic.Bool
 
 // temZimbra: o Zimbra no lugar padrão. Variável para os testes.
 var temZimbra = func() bool { return zimbra.Instalado("") == nil }

@@ -104,6 +104,7 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// Detecta o serviço uma vez (não muda em runtime) para o painel poder
 	// mostrar o comando exato de reinício quando o agent cair.
 	svc := service.Detect()
+	comHostRoot.Store(cfg.HostRoot != "" && cfg.HostRoot != "/")
 	atl := novoAtualizador(cfg, svc, s3Client, oc, func() { parar(atualizacao.ErrReiniciar) })
 	capacidadesDeclaradas.Store(atl.capacidades())
 
@@ -112,11 +113,12 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		wg.Add(1)
 		go func() { defer wg.Done(); seguirOPrograma(ctx, oc, func() { parar(atualizacao.ErrReiniciar) }) }()
 	}
-	wg.Add(10)
+	wg.Add(11)
 	go func() { defer wg.Done(); heartbeatLoop(ctx, client, cfg, svc, atl) }()
 	go func() { defer wg.Done(); probeLoop(ctx, client, s3Client, cfg) }()
 	go func() { defer wg.Done(); planLoop(ctx, client, s3Client, cfg, trava) }()
 	go func() { defer wg.Done(); restoreLoop(ctx, client, s3Client, cfg, oc) }()
+	go func() { defer wg.Done(); posAcaoLoop(ctx, client, cfg, oc) }()
 	go func() { defer wg.Done(); fsBrowseLoop(ctx, client, cfg) }()
 	go func() { defer wg.Done(); purgeLoop(ctx, client, s3Client, cfg, trava) }()
 	go func() { defer wg.Done(); verifyLoop(ctx, client, s3Client, cfg, trava) }()

@@ -698,3 +698,14 @@ func TestPastasDoAgente(t *testing.T) {
 		t.Errorf("a raiz entrou como pasta do agente: %v", pastas)
 	}
 }
+
+// No contêiner o `local-storage install` recusa: o agente não anuncia a cópia
+// local (o painel a oferecia ao servidor Docker, e a criação não tinha saída).
+func TestCopiaLocalForaDoConteiner(t *testing.T) {
+	antes := emConteiner
+	t.Cleanup(func() { emConteiner = antes })
+	emConteiner = func() bool { return true }
+	if slices.Contains(capacidadesDoIndice(), api.CapacidadeCopiaLocal) {
+		t.Fatal("em contêiner, o agente anunciou a cópia local")
+	}
+}
