@@ -117,7 +117,8 @@ automática, aviso de mensagem nova) só volta com --with-forwarding.
 
 --resolve diz o que fazer com o item que já está na caixa: skip (padrão, não
 mexe no que está lá), modify, replace, ou reset (APAGA a caixa antes de
-importar). --to restaura as mensagens noutra conta, que já tem de existir.`,
+importar). --to restaura as mensagens noutra conta; se ela não existe, é criada
+vazia, com uma senha aleatória (sem a configuração da original).`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if !filepath.IsAbs(r.De) {
 				return fmt.Errorf("--from tem de ser um caminho absoluto")

@@ -948,8 +948,20 @@ func TestRestaurarEmOutraConta(t *testing.T) {
 	z := servidorDeExemplo(t)
 	dir := exportarAna(t, z)
 	z.limpar()
-	if err := Restaurar(context.Background(), z.cliente(t), OpcoesDeRestauracao{De: dir, Para: "nova@exemplo.com.br"}, io.Discard); err == nil || !strings.Contains(err.Error(), "não existe") {
-		t.Fatalf("restaurou numa conta que não existe sem recriá-la como a original: %v", err)
+	// Outra conta que não existe: criada vazia (sem a configuração da
+	// original) só para receber as mensagens.
+	var log bytes.Buffer
+	if err := Restaurar(context.Background(), z.cliente(t), OpcoesDeRestauracao{De: dir, Para: "nova@exemplo.com.br"}, &log); err != nil {
+		t.Fatalf("outra conta que não existe não foi criada: %v", err)
+	}
+	z.mu.Lock()
+	criada := z.contas["nova@exemplo.com.br"]
+	z.mu.Unlock()
+	if criada == nil || z.contar("POST nova@exemplo.com.br") == 0 || !strings.Contains(log.String(), "criada para receber") {
+		t.Fatalf("a conta nova não recebeu as mensagens: %v %q", criada, log.String())
+	}
+	if len(criada.at) > 0 {
+		t.Fatalf("a conta nova levou a configuração da original: %v", criada.at)
 	}
 	z.conta("bruno@exemplo.com.br", &contaFalsa{})
 	if err := Restaurar(context.Background(), z.cliente(t), OpcoesDeRestauracao{De: dir, Para: "bruno@exemplo.com.br", Configuracao: true}, io.Discard); err == nil {

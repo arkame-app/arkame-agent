@@ -157,7 +157,12 @@ func Restaurar(ctx context.Context, c *Cliente, o OpcoesDeRestauracao, log io.Wr
 	}
 	switch {
 	case id == "" && !mesma:
-		return fmt.Errorf("a conta %s não existe: crie-a antes de restaurar nela as mensagens de %s", o.Para, origem)
+		// Outra conta que não existe: criada só para receber as mensagens,
+		// sem a configuração nem os encaminhamentos da original (a tela
+		// promete isso; antes o agente recusava — Hugo, 17/10).
+		if id, err = criarDestino(ctx, c, o.Para, origem, log); err != nil {
+			return err
+		}
 	case id == "":
 		if id, err = recriar(ctx, c, o, cfg, log); err != nil {
 			return err
@@ -210,6 +215,36 @@ func idDaClasse(ctx context.Context, c *Cliente, nome string) string {
 	return cos.Cos[0].ID
 }
 
+// senhaAleatoria: a senha de uma conta criada pela restauração. Ninguém a
+// conhece: quem administra define outra no console do Zimbra.
+func senhaAleatoria() (string, error) {
+	b := make([]byte, 24)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+// criarDestino cria a conta que vai receber as mensagens de outra, vazia e
+// com uma senha aleatória.
+func criarDestino(ctx context.Context, c *Cliente, para, origem string, log io.Writer) (string, error) {
+	senha, err := senhaAleatoria()
+	if err != nil {
+		return "", err
+	}
+	var resp struct {
+		Account []contaDoDiretorio `json:"account"`
+	}
+	if err := c.admin(ctx, "CreateAccountRequest", map[string]any{"name": para, "password": senha}, &resp); err != nil {
+		return "", fmt.Errorf("criando a conta %s: %w", para, err)
+	}
+	if len(resp.Account) != 1 || resp.Account[0].ID == "" {
+		return "", fmt.Errorf("criando a conta %s: o Zimbra não devolveu o id", para)
+	}
+	fmt.Fprintf(log, "conta %s criada para receber as mensagens de %s, com uma senha aleatória: defina a senha dela no console de administração do Zimbra\n", para, origem)
+	return resp.Account[0].ID, nil
+}
+
 // recriar cria a conta que sumiu, com a configuração de antes e uma senha
 // aleatória: a de antes não foi para o backup.
 func recriar(ctx context.Context, c *Cliente, o OpcoesDeRestauracao, cfg configuracaoDaConta, log io.Writer) (string, error) {
@@ -219,14 +254,14 @@ func recriar(ctx context.Context, c *Cliente, o OpcoesDeRestauracao, cfg configu
 	} else if cfg.Classe != "" {
 		fmt.Fprintf(log, "a classe de serviço %q não existe neste servidor: a conta fica na padrão\n", cfg.Classe)
 	}
-	senha := make([]byte, 24)
-	if _, err := rand.Read(senha); err != nil {
+	senha, err := senhaAleatoria()
+	if err != nil {
 		return "", err
 	}
 	var resp struct {
 		Account []contaDoDiretorio `json:"account"`
 	}
-	if err := c.admin(ctx, "CreateAccountRequest", map[string]any{"name": o.Para, "password": hex.EncodeToString(senha), "a": as}, &resp); err != nil {
+	if err := c.admin(ctx, "CreateAccountRequest", map[string]any{"name": o.Para, "password": senha, "a": as}, &resp); err != nil {
 		return "", fmt.Errorf("recriando a conta %s: %w", o.Para, err)
 	}
 	if len(resp.Account) != 1 || resp.Account[0].ID == "" {
