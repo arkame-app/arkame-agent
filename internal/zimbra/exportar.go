@@ -100,6 +100,35 @@ type Inventario struct {
 	Contas    []ResultadoDaConta `json:"contas"`
 	Falhas    int                `json:"falhas"`
 	Pendentes int                `json:"pendentes,omitempty"`
+	// SessoesSemDisco: sessões seguidas em que o disco não deixou exportar
+	// nada. Com a exportação anterior na pasta, o backup segue com ela; depois
+	// de maxSemAvanco, o comando falha (senão o plano ficaria verde para
+	// sempre com e-mail velho).
+	SessoesSemDisco int `json:"sessoes_sem_disco,omitempty"`
+}
+
+// jaExportou: alguma conta já teve exportação completa nesta pasta. É o que
+// separa "o backup leva a anterior" de "o plano subiria vazio".
+func jaExportou(anterior map[string]ResultadoDaConta) bool {
+	for _, c := range anterior {
+		if !c.UltimoSucesso.IsZero() {
+			return true
+		}
+	}
+	return false
+}
+
+// semDiscoDeNovo conta mais uma sessão sem exportar por falta de disco, grava
+// e devolve o erro quando já são maxSemAvanco seguidas.
+func semDiscoDeNovo(pasta string, inv *Inventario, motivo string) error {
+	inv.SessoesSemDisco = inventarioAnteriorOuVazio(pasta).SessoesSemDisco + 1
+	if err := gravarJSON(filepath.Join(pasta, "inventario.json"), inv); err != nil {
+		return err
+	}
+	if inv.SessoesSemDisco >= maxSemAvanco {
+		return fmt.Errorf("há %d sessões o disco não deixa exportar o Zimbra: %s", inv.SessoesSemDisco, motivo)
+	}
+	return nil
 }
 
 // mes é o primeiro instante (UTC) de um mês.
@@ -174,9 +203,21 @@ func Exportar(ctx context.Context, c *Cliente, o Opcoes, log io.Writer) (*Invent
 		return nil, err
 	}
 	defer soltar()
-	guarda, err := novaGuarda(o.Pasta)
-	if err != nil {
-		return nil, err
+	guarda, semEspacoNoComeco := novaGuarda(o.Pasta)
+	if semEspacoNoComeco != "" {
+		// Sem a exportação de hoje, o backup do que já estava exportado
+		// segue: falhar aqui derrubaria o plano todo, todo dia. Sem nenhuma
+		// exportação completa ainda, é erro (o plano subiria vazio), e
+		// depois de algumas sessões seguidas, também.
+		if !jaExportou(inventarioAnterior(o.Pasta)) {
+			return nil, errors.New(semEspacoNoComeco)
+		}
+		fmt.Fprintf(log, "NÃO EXPORTEI: %s. O backup leva a exportação anterior.\n", semEspacoNoComeco)
+		inv := inventarioAnteriorOuVazio(o.Pasta)
+		if err := semDiscoDeNovo(o.Pasta, inv, semEspacoNoComeco); err != nil {
+			return inv, err
+		}
+		return inv, nil
 	}
 	listadas, err := c.ListarContas(ctx)
 	if err != nil {
@@ -236,13 +277,28 @@ func Exportar(ctx context.Context, c *Cliente, o Opcoes, log io.Writer) (*Invent
 		if trabalho.Err() == nil {
 			r.UltimaTentativa = o.Agora.UTC()
 			r = exportarConta(trabalho, c, o, l.Nome, r)
-			if r.Novos > 0 {
+			// Avançou: terminou a conta, ou exportou um arquivo que a pasta
+			// não tinha (`Novos`). O mês corrente reexportado (`Exportado`)
+			// não conta: numa caixa que recebe e-mail ele muda todo dia, e um
+			// mês antigo que nunca cabe ficaria pendente para sempre, com o
+			// backup verde (revisão, 17/10). É o critério do prazo.
+			if r.Novos > 0 || (!r.interrompida && r.Erro == "") {
 				avancou = true
 			}
 			if r.interrompida && r.Erro == "" && ctx.Err() == nil && guarda.parou() {
-				// Parada pelo disco: pendência, sem contar como sessão sem
-				// avanço (a mensagem dessa é sobre o prazo).
+				// Parada pelo disco: pendência; a conta que nunca cabe vira
+				// falha depois de algumas sessões, como a do prazo.
 				r.Pendente = true
+				if r.Novos > 0 {
+					r.SemAvanco = 0
+					os.Remove(filepath.Join(o.Pasta, "contas", l.Nome, MarcadorDeFalha))
+				} else {
+					if r.SemAvanco++; r.SemAvanco >= maxSemAvanco {
+						r.Pendente = false
+						r.Erro = fmt.Sprintf("há %d sessões a conta não cabe no disco de %s: libere espaço ou use --dir num disco maior", r.SemAvanco, o.Pasta)
+						_ = segredo.Gravar(filepath.Join(o.Pasta, "contas", l.Nome, MarcadorDeFalha), []byte(r.Erro+"\n"), 0o600)
+					}
+				}
 			} else if r.interrompida && r.Erro == "" && ctx.Err() == nil {
 				// O prazo do comando venceu no meio: não é falha, a não ser
 				// que a conta não avance há várias sessões.
@@ -272,6 +328,9 @@ func Exportar(ctx context.Context, c *Cliente, o Opcoes, log io.Writer) (*Invent
 		}
 		inv.Contas = append(inv.Contas, r)
 	}
+	// A guarda parou no laço das contas? (No rodízio, que é opcional, ela só
+	// encurta a conferência: não é erro.)
+	paradaNasContas := guarda.parou()
 	// O rodízio (opcional) é uma segunda passada, com o tempo que sobrou: a
 	// conferência de um arquivo grande de uma conta não pode tirar o mês
 	// corrente das contas que vêm depois.
@@ -297,6 +356,7 @@ func Exportar(ctx context.Context, c *Cliente, o Opcoes, log io.Writer) (*Invent
 		}
 		sort.Slice(inv.Contas, func(i, j int) bool { return inv.Contas[i].Conta < inv.Contas[j].Conta })
 	}
+	pararDeVigiar()
 	marcarForaDoBackup(o.Pasta, levadas, existentes, o.Excluir)
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
@@ -305,8 +365,16 @@ func Exportar(ctx context.Context, c *Cliente, o Opcoes, log io.Writer) (*Invent
 	if guarda.parou() {
 		fmt.Fprintf(log, "PAROU para não encher o disco de %s (%s livres; a exportação deixa %s e metade do resto para o backup): o que faltou fica para a próxima sessão\n",
 			o.Pasta, bytesLegiveis(guarda.livreNaParada.Load()), bytesLegiveis(guarda.reserva))
-		if !avancou {
-			semEspaco = fmt.Errorf("a exportação do Zimbra não coube no disco de %s: nenhuma conta avançou nesta sessão. Libere espaço ou use --dir numa pasta de um disco maior (e ponha essa pasta no plano)", o.Pasta)
+		// Erro só quando nunca houve exportação (o plano subiria vazio): com
+		// a anterior na pasta, o backup a leva, e o que faltou fica para a
+		// próxima sessão. Falhar aqui derrubaria o backup do dia.
+		if paradaNasContas && !avancou {
+			motivo := fmt.Sprintf("a exportação do Zimbra não coube no disco de %s: nenhuma conta avançou nesta sessão. Libere espaço ou use --dir numa pasta de um disco maior (e ponha essa pasta no plano)", o.Pasta)
+			if !jaExportou(anterior) {
+				semEspaco = errors.New(motivo)
+			} else if inv.SessoesSemDisco = inventarioAnteriorOuVazio(o.Pasta).SessoesSemDisco + 1; inv.SessoesSemDisco >= maxSemAvanco {
+				semEspaco = fmt.Errorf("há %d sessões %s", inv.SessoesSemDisco, motivo)
+			}
 		}
 	}
 	if err := gravarJSON(filepath.Join(o.Pasta, "inventario.json"), inv); err != nil {
@@ -363,6 +431,16 @@ func filtrar(contas []ContaListada, so, menos []string) []ContaListada {
 		r = append(r, c)
 	}
 	return r
+}
+
+// inventarioAnteriorOuVazio: o inventário que já está na pasta, para a sessão
+// que não exportou nada (sem espaço) devolver o estado de antes.
+func inventarioAnteriorOuVazio(pasta string) *Inventario {
+	inv := &Inventario{}
+	if b, err := os.ReadFile(filepath.Join(pasta, "inventario.json")); err == nil {
+		_ = json.Unmarshal(b, inv)
+	}
+	return inv
 }
 
 // inventarioAnterior: o que a sessão passada disse de cada conta.

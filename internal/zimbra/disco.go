@@ -29,29 +29,37 @@ type guardaDoDisco struct {
 	livreNaParada atomic.Uint64
 }
 
-// reservaDoDisco: 10% do disco, e nunca menos de 5 GiB.
+// reservaDoDisco: 10% do disco, entre 5 e 20 GiB. Sem o teto, um disco de
+// 2 TB com 150 GB livres não exportaria nada (o Bavail já desconta os 5% do
+// root no ext4).
 func reservaDoDisco(total uint64) uint64 {
-	const minimo = 5 << 30
-	if r := total / 10; r > minimo {
-		return r
+	const minimo, maximo = 5 << 30, 20 << 30
+	r := total / 10
+	if r < minimo {
+		return minimo
 	}
-	return minimo
+	if r > maximo {
+		return maximo
+	}
+	return r
 }
 
 // novaGuarda mede o disco da pasta. Sem medida (outro sistema, erro do
-// statfs), devolve nil: a exportação segue sem guarda, como antes.
-func novaGuarda(pasta string) (*guardaDoDisco, error) {
+// statfs), devolve nil: a exportação segue sem guarda, como antes. Sem espaço
+// já no começo, `semEspaco` diz quanto há: a exportação não começa, mas o
+// backup do que já foi exportado segue (Exportar decide).
+func novaGuarda(pasta string) (g *guardaDoDisco, semEspaco string) {
 	livre, total, err := espacoNoDisco(pasta)
 	if err != nil {
-		return nil, nil
+		return nil, ""
 	}
-	g := &guardaDoDisco{pasta: pasta, livreNoComeco: livre, reserva: reservaDoDisco(total)}
+	g = &guardaDoDisco{pasta: pasta, livreNoComeco: livre, reserva: reservaDoDisco(total)}
 	if livre <= g.reserva {
-		return nil, fmt.Errorf("sem espaço para exportar o Zimbra em %s: %s livres, e a exportação deixa pelo menos %s no disco. Libere espaço ou use --dir numa pasta de um disco com espaço (e ponha essa pasta no plano)",
+		return nil, fmt.Sprintf("sem espaço para exportar o Zimbra em %s: %s livres, e a exportação deixa pelo menos %s no disco. Libere espaço ou use --dir numa pasta de um disco com espaço (e ponha essa pasta no plano)",
 			pasta, bytesLegiveis(livre), bytesLegiveis(g.reserva))
 	}
 	g.limite = (livre - g.reserva) / 2
-	return g, nil
+	return g, ""
 }
 
 // vigiar cancela o contexto devolvido quando a exportação passa do limite.
