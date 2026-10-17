@@ -1,3 +1,5 @@
+//go:build !windows
+
 package daemon
 
 import (
@@ -24,10 +26,11 @@ import (
 // ou não), não apaga o que recusou, e relata cada uma ao painel. Pede as de
 // todos os armazenamentos: a do plano na cópia local também é do principal.
 func TestPosAcoesDoZimbra(t *testing.T) {
-	base := t.TempDir()
-	antes := pastaDasRestauracoesDoZimbra
-	pastaDasRestauracoesDoZimbra = base
-	t.Cleanup(func() { pastaDasRestauracoesDoZimbra = antes })
+	base := filepath.Join(t.TempDir(), nomeDaPastaDeRestauracao)
+	if err := os.Mkdir(base, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	soAPropria(t)
 
 	pasta := func(job, conta string) string {
 		p := filepath.Join(base, job, conta)
@@ -44,7 +47,17 @@ func TestPosAcoesDoZimbra(t *testing.T) {
 	if err := os.MkdirAll(fora, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	// Pasta das restaurações aberta para outros usuários: recusada, e nada apagado.
+	aberta := filepath.Join(t.TempDir(), nomeDaPastaDeRestauracao)
+	if err := os.MkdirAll(filepath.Join(aberta, "j5", "rui@empresa.com.br"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(aberta, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	daAberta := filepath.Join(aberta, "j5", "rui@empresa.com.br")
 	acoes := []posAcao{
+		{JobID: "j5", Type: "zimbra_restore", Path: daAberta, Account: "rui@empresa.com.br"},
 		{JobID: "j1", Type: "zimbra_restore", Path: boa, Account: "maria@empresa.com.br"},
 		{JobID: "j2", Type: "zimbra_restore", Path: fora, Account: "maria@empresa.com.br"},
 		{JobID: "j3", Type: "zimbra_restore", Path: ruim, Account: "jose@empresa.com.br"},
@@ -89,7 +102,7 @@ func TestPosAcoesDoZimbra(t *testing.T) {
 	if strings.Join(importadas, ",") != "j1,j3" {
 		t.Fatalf("importou %v: só as de dentro da pasta, do tipo certo", importadas)
 	}
-	for job, ok := range map[string]bool{"j1": true, "j2": false, "j3": false, "j4": false} {
+	for job, ok := range map[string]bool{"j1": true, "j2": false, "j3": false, "j4": false, "j5": false} {
 		r := relatos[job]
 		if r == nil || r["ok"] != ok {
 			t.Fatalf("relato de %s = %v, quer ok=%v", job, r, ok)
@@ -107,6 +120,9 @@ func TestPosAcoesDoZimbra(t *testing.T) {
 	if _, err := os.Stat(fora); err != nil {
 		t.Fatal("a pasta de fora foi apagada")
 	}
+	if _, err := os.Stat(daAberta); err != nil {
+		t.Fatal("a pasta da restauração numa base aberta foi apagada")
+	}
 	if !strings.Contains(fmt.Sprint(relatos["j1"]["log"]), "importando") {
 		t.Fatal("o log não foi ao painel")
 	}
@@ -115,10 +131,11 @@ func TestPosAcoesDoZimbra(t *testing.T) {
 // O serviço parado no meio da importação: a pasta fica e nada é relatado, para
 // o próximo processo encontrar a pendência e importar de novo.
 func TestPosAcaoInterrompidaNaoApagaNemRelata(t *testing.T) {
-	base := t.TempDir()
-	antes := pastaDasRestauracoesDoZimbra
-	pastaDasRestauracoesDoZimbra = base
-	t.Cleanup(func() { pastaDasRestauracoesDoZimbra = antes })
+	base := filepath.Join(t.TempDir(), nomeDaPastaDeRestauracao)
+	if err := os.Mkdir(base, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	soAPropria(t)
 	p := filepath.Join(base, "j1", "maria@empresa.com.br")
 	if err := os.MkdirAll(p, 0o700); err != nil {
 		t.Fatal(err)
@@ -142,5 +159,29 @@ func TestPosAcaoInterrompidaNaoApagaNemRelata(t *testing.T) {
 	}
 	if relatos != 0 {
 		t.Fatalf("relatou %d vez(es) a importação interrompida", relatos)
+	}
+}
+
+// soAPropria: o teste roda em /tmp (gravável por todos), que a conferência
+// das pastas de cima recusa — e ela tem o próprio teste. Aqui, só a base.
+func soAPropria(t *testing.T) {
+	t.Helper()
+	antes := pastaFechada
+	pastaFechada = func(dir string) error { return donaEFechada(dir, true) }
+	t.Cleanup(func() { pastaFechada = antes })
+}
+
+// As pastas de cima da base também: uma gravável por outros (como o /tmp)
+// deixaria trocar a base por um link durante a importação (revisão, 17/10).
+func TestPastaFechadaConfereAsDeCima(t *testing.T) {
+	base := filepath.Join(t.TempDir(), nomeDaPastaDeRestauracao)
+	if err := os.Mkdir(base, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := pastaFechada(base); err == nil {
+		t.Fatal("aceitou uma base dentro do /tmp, que todos gravam")
+	}
+	if err := donaEFechada(base, true); err != nil {
+		t.Fatalf("a própria base está certa: %v", err)
 	}
 }

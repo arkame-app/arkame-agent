@@ -221,6 +221,10 @@ func enviarHeartbeatCom(ctx context.Context, c *api.Client, cfg *config.Config, 
 	// painel só registra que a cópia local está viva.
 	if cfg.LocalStoreProgram != "" {
 		hb.Role = api.PapelCopiaLocal
+		hb.LocalStoreData = cfg.LocalStoreData
+		if livre, total, ok := espacoDoDisco(cfg.LocalStoreData); ok {
+			hb.LocalStoreFreeBytes, hb.LocalStoreTotalBytes = livre, total
+		}
 	}
 	var resp api.HeartbeatResponse
 	if err := c.POST(ctx, "/api/agents/"+cfg.AgentID+"/heartbeat", hb, &resp); err != nil {

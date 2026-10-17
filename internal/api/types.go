@@ -134,6 +134,11 @@ type HeartbeatRequest struct {
 	// Role: vazio no agente principal; PapelCopiaLocal no processo da cópia
 	// local (`local-storage install`), que tem a mesma identidade.
 	Role string `json:"role,omitempty"`
+	// Só no processo da cópia local: a pasta dos dados (a real, para o painel
+	// mostrar e gerar o comando de mudança) e o espaço do disco dela.
+	LocalStoreData       string `json:"local_store_data,omitempty"`
+	LocalStoreFreeBytes  uint64 `json:"local_store_free_bytes,omitempty"`
+	LocalStoreTotalBytes uint64 `json:"local_store_total_bytes,omitempty"`
 }
 
 // PapelCopiaLocal é o Role do processo da cópia local no heartbeat.
@@ -589,6 +594,13 @@ const CapacidadeCopiaLocal = "local_store"
 // Zimbra instalado (/opt/zimbra). O painel só oferece a receita do Zimbra
 // a quem a declara — é como ela aparece só no servidor de e-mail.
 const CapacidadeZimbra = "zimbra"
+
+// CapacidadeZimbraPastaDaRestauracao: o agente (0.5.2+) importa a conta de uma
+// pasta "zimbra-restauracao" ao lado da exportação (não só de
+// /var/backups/arkame/zimbra-restauracao) e cria a conta de destino que não
+// existe. Sem ela, o painel usa a pasta fixa e avisa que a conta de destino
+// precisa existir.
+const CapacidadeZimbraPastaDaRestauracao = "zimbra_restore_dir"
 
 // InventoryItem é uma versão que o catálogo do painel diz existir.
 type InventoryItem struct {

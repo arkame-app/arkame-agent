@@ -17,9 +17,14 @@ import (
 	"github.com/arkame-app/agent/internal/zimbra"
 )
 
-// pastaDasRestauracoesDoZimbra é onde o painel restaura a conta que vai ser
-// importada (`restauracao-do-zimbra.ts`). O agente só importa de dentro dela.
-var pastaDasRestauracoesDoZimbra = "/var/backups/arkame/zimbra-restauracao"
+// nomeDaPastaDeRestauracao: o painel restaura a conta que vai ser importada em
+// <pasta da exportação>/../zimbra-restauracao/<job>/<conta>
+// (`restauracao-do-zimbra.ts`): ao lado da exportação, no mesmo disco que o
+// cliente escolheu para ela (antes era fixa em /var/backups, no disco do
+// sistema; Hugo, 17/10). O agente só importa de dentro de uma pasta com este
+// nome, que seja dele (do root) e fechada para os outros: é ela que o
+// RemoveAll do fim limpa.
+const nomeDaPastaDeRestauracao = "zimbra-restauracao"
 
 // posAcao: o que fazer depois de uma restauração concluída, como o painel manda
 // em GET /api/agents/<id>/post-actions.
@@ -125,8 +130,12 @@ func conferirPosAcao(a posAcao) error {
 		return fmt.Errorf("conta inválida")
 	}
 	p := filepath.Clean(a.Path)
-	if !filepath.IsAbs(p) || filepath.Base(p) != a.Account || filepath.Dir(filepath.Dir(p)) != pastaDasRestauracoesDoZimbra {
+	base := filepath.Dir(filepath.Dir(p))
+	if !filepath.IsAbs(p) || filepath.Base(p) != a.Account || filepath.Base(base) != nomeDaPastaDeRestauracao || filepath.Dir(p) == base {
 		return fmt.Errorf("pasta fora das restaurações do Zimbra: %s", a.Path)
+	}
+	if err := pastaFechada(base); err != nil {
+		return fmt.Errorf("a pasta das restaurações do Zimbra %s não é segura: %w", base, err)
 	}
 	st, err := os.Lstat(p)
 	if err != nil {
