@@ -68,8 +68,11 @@ func (g *guardaDoDisco) vigiar(ctx context.Context) (context.Context, context.Ca
 	if g == nil {
 		return trabalho, cancelar
 	}
+	// Lidas aqui, antes da goroutine: ela pode seguir viva um instante
+	// depois da exportação, e as variáveis são dos testes.
+	intervalo, medir := intervaloDaGuarda, espacoNoDisco
 	go func() {
-		t := time.NewTicker(intervaloDaGuarda)
+		t := time.NewTicker(intervalo)
 		defer t.Stop()
 		for {
 			select {
@@ -77,7 +80,7 @@ func (g *guardaDoDisco) vigiar(ctx context.Context) (context.Context, context.Ca
 				return
 			case <-t.C:
 			}
-			livre, _, err := espacoNoDisco(g.pasta)
+			livre, _, err := medir(g.pasta)
 			if err != nil {
 				continue
 			}
