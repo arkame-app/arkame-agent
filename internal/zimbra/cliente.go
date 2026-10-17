@@ -82,31 +82,31 @@ func localconfig(pasta string, chaves ...string) (map[string]string, error) {
 	return r, nil
 }
 
-// certificadoFixado: a conexão só aceita um certificado que esteja no arquivo.
-func certificadoFixado(arquivo string) (*tls.Config, error) {
+// certificadoFixado: a conexão só aceita um certificado que esteja num dos
+// arquivos: o autoassinado da instalação (obrigatório) e o comercial que o
+// `zmcertmgr deploycrt comm` instala, quando há. Um Zimbra com Let's Encrypt
+// apresenta o comercial na porta de administração, e só o autoassinado fazia a
+// exportação falhar logo na entrada (Zimbra Adubos, 17/10). Os dois arquivos
+// são do Zimbra, na mesma pasta protegida.
+func certificadoFixado(arquivo string, opcionais ...string) (*tls.Config, error) {
 	b, err := os.ReadFile(arquivo)
 	if err != nil {
 		return nil, fmt.Errorf("lendo o certificado do Zimbra: %w", err)
 	}
-	var aceitos [][]byte
-	for {
-		var bloco *pem.Block
-		bloco, b = pem.Decode(b)
-		if bloco == nil {
-			break
-		}
-		if bloco.Type == "CERTIFICATE" {
-			aceitos = append(aceitos, bloco.Bytes)
-		}
-	}
+	aceitos := certificadosDoPEM(b)
 	if len(aceitos) == 0 {
 		return nil, fmt.Errorf("%s não tem certificado", arquivo)
+	}
+	for _, o := range opcionais {
+		if b, err := os.ReadFile(o); err == nil {
+			aceitos = append(aceitos, certificadosDoPEM(b)...)
+		}
 	}
 	return &tls.Config{
 		MinVersion: tls.VersionTLS12,
 		// O nome no certificado é o do servidor, e a conexão é em 127.0.0.1:
 		// em vez da cadeia e do nome, o certificado apresentado tem de ser
-		// exatamente o do arquivo.
+		// exatamente o de um dos arquivos.
 		InsecureSkipVerify: true,
 		VerifyPeerCertificate: func(brutos [][]byte, _ [][]*x509.Certificate) error {
 			if len(brutos) == 0 {
@@ -117,9 +117,23 @@ func certificadoFixado(arquivo string) (*tls.Config, error) {
 					return nil
 				}
 			}
-			return errors.New("o certificado na porta de administração não é o do Zimbra deste servidor")
+			return errors.New("o certificado na porta de administração não é o do Zimbra deste servidor (nem o autoassinado, nem o comercial instalado)")
 		},
 	}, nil
+}
+
+func certificadosDoPEM(b []byte) [][]byte {
+	var aceitos [][]byte
+	for {
+		var bloco *pem.Block
+		bloco, b = pem.Decode(b)
+		if bloco == nil {
+			return aceitos
+		}
+		if bloco.Type == "CERTIFICATE" {
+			aceitos = append(aceitos, bloco.Bytes)
+		}
+	}
 }
 
 // Conectar autentica como o administrador das ferramentas do Zimbra.
@@ -132,7 +146,8 @@ func Conectar(ctx context.Context, pasta string) (*Cliente, error) {
 		return nil, err
 	}
 	porta := lc["zimbra_admin_service_port"]
-	tc, err := certificadoFixado(filepath.Join(pasta, "ssl", "zimbra", "server", "server.crt"))
+	tc, err := certificadoFixado(filepath.Join(pasta, "ssl", "zimbra", "server", "server.crt"),
+		filepath.Join(pasta, "ssl", "zimbra", "commercial", "commercial.crt"))
 	if err != nil {
 		return nil, err
 	}

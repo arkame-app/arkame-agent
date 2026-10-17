@@ -174,6 +174,10 @@ func Exportar(ctx context.Context, c *Cliente, o Opcoes, log io.Writer) (*Invent
 		return nil, err
 	}
 	defer soltar()
+	guarda, err := novaGuarda(o.Pasta)
+	if err != nil {
+		return nil, err
+	}
 	listadas, err := c.ListarContas(ctx)
 	if err != nil {
 		return nil, err
@@ -206,6 +210,9 @@ func Exportar(ctx context.Context, c *Cliente, o Opcoes, log io.Writer) (*Invent
 		trabalho, cancelar = context.WithDeadline(ctx, o.Prazo.Add(-folgaDoPrazo))
 		defer cancelar()
 	}
+	trabalho, pararDeVigiar := guarda.vigiar(trabalho)
+	defer pararDeVigiar()
+	avancou := false
 	inv := &Inventario{GeradoEm: o.Agora.UTC(), Anos: o.Anos}
 	levadas, vistas := map[string]bool{}, map[string]bool{}
 	for _, l := range listadas {
@@ -229,7 +236,14 @@ func Exportar(ctx context.Context, c *Cliente, o Opcoes, log io.Writer) (*Invent
 		if trabalho.Err() == nil {
 			r.UltimaTentativa = o.Agora.UTC()
 			r = exportarConta(trabalho, c, o, l.Nome, r)
-			if r.interrompida && r.Erro == "" && ctx.Err() == nil {
+			if r.Novos > 0 {
+				avancou = true
+			}
+			if r.interrompida && r.Erro == "" && ctx.Err() == nil && guarda.parou() {
+				// Parada pelo disco: pendência, sem contar como sessão sem
+				// avanço (a mensagem dessa é sobre o prazo).
+				r.Pendente = true
+			} else if r.interrompida && r.Erro == "" && ctx.Err() == nil {
 				// O prazo do comando venceu no meio: não é falha, a não ser
 				// que a conta não avance há várias sessões.
 				r.Pendente = true
@@ -287,6 +301,14 @@ func Exportar(ctx context.Context, c *Cliente, o Opcoes, log io.Writer) (*Invent
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
+	var semEspaco error
+	if guarda.parou() {
+		fmt.Fprintf(log, "PAROU para não encher o disco de %s (%s livres; a exportação deixa %s e metade do resto para o backup): o que faltou fica para a próxima sessão\n",
+			o.Pasta, bytesLegiveis(guarda.livreNaParada.Load()), bytesLegiveis(guarda.reserva))
+		if !avancou {
+			semEspaco = fmt.Errorf("a exportação do Zimbra não coube no disco de %s: nenhuma conta avançou nesta sessão. Libere espaço ou use --dir numa pasta de um disco maior (e ponha essa pasta no plano)", o.Pasta)
+		}
+	}
 	if err := gravarJSON(filepath.Join(o.Pasta, "inventario.json"), inv); err != nil {
 		return nil, err
 	}
@@ -300,7 +322,7 @@ func Exportar(ctx context.Context, c *Cliente, o Opcoes, log io.Writer) (*Invent
 		}
 	}
 	fmt.Fprintf(log, "Zimbra: %d conta(s) exportada(s), %d com falha (%s)\n", ok, inv.Falhas, descricaoDoModo(o.Anos))
-	if inv.Pendentes > 0 {
+	if inv.Pendentes > 0 && !guarda.parou() {
 		fmt.Fprintf(log, "o prazo do comando acabou: %d conta(s) continuam na próxima sessão (aumente o prazo no plano se for sempre assim)\n", inv.Pendentes)
 	}
 	// Erro (que aborta o backup) só quando nada saiu: uma conta com falha não
@@ -308,6 +330,9 @@ func Exportar(ctx context.Context, c *Cliente, o Opcoes, log io.Writer) (*Invent
 	// no marcador da conta, que o painel mostra.
 	if ok == 0 && inv.Pendentes == 0 && saiu == 0 {
 		return inv, fmt.Errorf("nenhuma conta foi exportada")
+	}
+	if semEspaco != nil {
+		return inv, semEspaco
 	}
 	return inv, nil
 }
