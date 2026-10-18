@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strconv"
@@ -109,7 +110,10 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	capacidadesDeclaradas.Store(atl.capacidades())
 
 	var wg sync.WaitGroup
-	if cfg.LocalStoreProgram != "" {
+	// Os processos irmãos (a cópia local, a cópia da rede do `join`) não se
+	// atualizam sozinhos: quem troca o programa é o principal, e eles
+	// reiniciam quando ele muda. Sem isto, o da rede ficava na versão antiga.
+	if cfg.LocalStoreProgram != "" || strings.EqualFold(strings.TrimSpace(cfg.AutoUpdate), "off") {
 		wg.Add(1)
 		go func() { defer wg.Done(); seguirOPrograma(ctx, oc, func() { parar(atualizacao.ErrReiniciar) }) }()
 	}
@@ -146,6 +150,18 @@ func conferirCopiaLocal(cfg *config.Config) error {
 	return nil
 }
 
+// pastaNoServidor tira a raiz do host (/host, no contêiner) da frente de um
+// caminho visto de dentro do contêiner.
+func pastaNoServidor(raiz, p string) string {
+	if raiz == "" || raiz == "/" {
+		return p
+	}
+	if rel, err := filepath.Rel(raiz, p); err == nil && !strings.HasPrefix(rel, "..") {
+		return "/" + filepath.ToSlash(rel)
+	}
+	return p
+}
+
 // supervisorDaCopiaLocal: o do RustFS, quando este processo tem cópia local.
 func supervisorDaCopiaLocal(cfg *config.Config) *localstore.Supervisor {
 	if cfg.LocalStoreProgram == "" || cfg.LocalStoreData == "" || cfg.LocalStoreAddress == "" {
@@ -155,6 +171,7 @@ func supervisorDaCopiaLocal(cfg *config.Config) *localstore.Supervisor {
 		Programa:         cfg.LocalStoreProgram,
 		Dados:            cfg.LocalStoreData,
 		Endereco:         cfg.LocalStoreAddress,
+		Escuta:           cfg.LocalStoreListen,
 		ArquivoDaChave:   cfg.LocalStoreAccessFile,
 		ArquivoDoSegredo: cfg.LocalStoreSecretFile,
 		Log:              cfg.LocalStoreLog,
@@ -221,7 +238,10 @@ func enviarHeartbeatCom(ctx context.Context, c *api.Client, cfg *config.Config, 
 	// painel só registra que a cópia local está viva.
 	if cfg.LocalStoreProgram != "" {
 		hb.Role = api.PapelCopiaLocal
-		hb.LocalStoreData = cfg.LocalStoreData
+		// A pasta como o servidor a vê: no contêiner, sem a raiz montada na frente.
+		hb.LocalStoreData = pastaNoServidor(cfg.HostRoot, cfg.LocalStoreData)
+		hb.LocalStoreListen = cfg.LocalStoreListen
+		hb.LocalStoreNames = localstore.NomesDoCertificado(cfg.LocalStoreTLS)
 		if livre, total, ok := espacoDoDisco(cfg.LocalStoreData); ok {
 			hb.LocalStoreFreeBytes, hb.LocalStoreTotalBytes = livre, total
 		}

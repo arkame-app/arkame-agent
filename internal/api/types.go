@@ -139,6 +139,10 @@ type HeartbeatRequest struct {
 	LocalStoreData       string `json:"local_store_data,omitempty"`
 	LocalStoreFreeBytes  uint64 `json:"local_store_free_bytes,omitempty"`
 	LocalStoreTotalBytes uint64 `json:"local_store_total_bytes,omitempty"`
+	// Recebendo backups da rede (0.5.3): onde escuta e os endereços que o
+	// certificado cobre (os que os outros servidores usam).
+	LocalStoreListen string   `json:"local_store_listen,omitempty"`
+	LocalStoreNames  []string `json:"local_store_names,omitempty"`
 }
 
 // PapelCopiaLocal é o Role do processo da cópia local no heartbeat.
@@ -589,6 +593,12 @@ const CapacidadePastaDeDump = "dump_folder"
 // 127.0.0.1, `local-storage install`). O painel só oferece a cópia local a
 // quem a declara.
 const CapacidadeCopiaLocal = "local_store"
+
+// CapacidadeCopiaLocalNaRede: o agente (0.5.3+) tem `local-storage share`
+// (a cópia local recebe backups de outros servidores da rede, com uma chave
+// que não apaga) e `local-storage join` (este servidor grava na cópia local
+// de outro), e monta a cópia local também no contêiner (Docker).
+const CapacidadeCopiaLocalNaRede = "local_store_share"
 
 // CapacidadeZimbra: o agente tem `zimbra export/restore` e o servidor tem o
 // Zimbra instalado (/opt/zimbra). O painel só oferece a receita do Zimbra

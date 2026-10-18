@@ -237,11 +237,12 @@ func capacidadesDoIndice() []string {
 		// prepare-dump-folder e ARKAME_AGENT nos comandos: também não
 		// dependem da instalação.
 		api.CapacidadePastaDeDump}
-	// A cópia local: só onde há RustFS para a plataforma, e fora de contêiner —
-	// o `local-storage install` recusa no Docker, e anunciar a capacidade fazia
-	// o painel oferecer uma cópia local que não tinha como ser criada.
-	if _, err := localstore.ArtefatoDaPlataforma(); err == nil && !emConteiner() {
-		caps = append(caps, api.CapacidadeCopiaLocal)
+	// A cópia local: só onde há RustFS para a plataforma. No contêiner (0.5.3)
+	// também: o `local-storage install` roda de dentro dele e a cópia local é
+	// um segundo contêiner. Junto, o share e o join (receber backups de outros
+	// servidores da rede, e gravar na cópia local de outro).
+	if _, err := localstore.ArtefatoDaPlataforma(); err == nil {
+		caps = append(caps, api.CapacidadeCopiaLocal, api.CapacidadeCopiaLocalNaRede)
 	}
 	// O Zimbra: só no servidor Linux que o tem (no Docker, /opt/zimbra seria
 	// a do contêiner do agente, e a porta de administração não é a dele).

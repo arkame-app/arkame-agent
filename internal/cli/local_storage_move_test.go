@@ -53,7 +53,7 @@ func TestMoverCopiaLocal(t *testing.T) {
 	}
 	mover := func(nova string) (string, error) {
 		var out bytes.Buffer
-		err := moverCopiaLocal(context.Background(), nova, principal, "arkame-agent-local", "arkame-agent", &out)
+		err := moverCopiaLocal(context.Background(), nova, principal, "arkame-agent-local", "arkame-agent", "", &out)
 		return out.String(), err
 	}
 

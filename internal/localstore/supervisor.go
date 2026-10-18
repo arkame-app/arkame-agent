@@ -18,8 +18,12 @@ type Supervisor struct {
 	Programa string
 	// Dados é a pasta onde o RustFS guarda os objetos.
 	Dados string
-	// Endereco é onde ele escuta: sempre 127.0.0.1:porta.
+	// Endereco é onde ele responde a este agente: sempre 127.0.0.1:porta.
 	Endereco string
+	// Escuta, se dado, é onde o RustFS se prende (0.0.0.0:porta, para receber
+	// backups da rede; `local-storage share`). A saúde continua conferida pelo
+	// Endereco. Vazio: só no Endereco.
+	Escuta string
 	// ArquivoDaChave e ArquivoDoSegredo têm a credencial (fora da linha de
 	// comando, que outro usuário da máquina leria na lista de processos).
 	ArquivoDaChave   string
@@ -47,6 +51,14 @@ var (
 )
 
 const maxLog = 50 << 20
+
+// enderecoDeEscuta: onde o RustFS se prende.
+func (s *Supervisor) enderecoDeEscuta() string {
+	if s.Escuta != "" {
+		return s.Escuta
+	}
+	return s.Endereco
+}
 
 // URL de saúde do RustFS (200 quando está servindo).
 func (s *Supervisor) urlDeSaude() string { return "https://" + s.Endereco + "/health" }
@@ -137,7 +149,7 @@ func (s *Supervisor) uma(ctx context.Context) error {
 		return err
 	}
 	cmd := exec.CommandContext(ctx, s.Programa, "server",
-		"--address", s.Endereco,
+		"--address", s.enderecoDeEscuta(),
 		"--access-key-file", s.ArquivoDaChave,
 		"--secret-key-file", s.ArquivoDoSegredo,
 		"--tls-path", s.PastaTLS,
@@ -167,7 +179,7 @@ func (s *Supervisor) uma(ctx context.Context) error {
 	} else {
 		defer solte()
 	}
-	slog.Info("cópia local (RustFS) no ar", "endereco", s.Endereco, "pid", cmd.Process.Pid)
+	slog.Info("cópia local (RustFS) no ar", "endereco", s.enderecoDeEscuta(), "pid", cmd.Process.Pid)
 	return cmd.Wait()
 }
 

@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -31,7 +30,7 @@ func newLocalStorageCmd() *cobra.Command {
 		Use:   "local-storage",
 		Short: "Cópia local: um armazenamento nesta máquina, gerido pelo agente",
 	}
-	cmd.AddCommand(newLocalStorageInstallCmd(), newLocalStorageMoveCmd())
+	cmd.AddCommand(newLocalStorageInstallCmd(), newLocalStorageMoveCmd(), newLocalStorageShareCmd(), newLocalStorageJoinCmd())
 	return cmd
 }
 
@@ -49,6 +48,45 @@ type opcoesDaCopiaLocal struct {
 	semServico     bool
 	programaPronto string
 	pastaPrograma  string
+	// raizDoHost: no agente em contêiner (Docker), onde a raiz do servidor
+	// está montada (/host). A pasta dos dados (--dir) é a do servidor; o
+	// programa, as chaves e o log ficam no volume da configuração, e quem
+	// roda a cópia local é um segundo contêiner (o painel mostra o comando).
+	raizDoHost string
+}
+
+// emConteiner: a cópia local montada de dentro do contêiner do agente.
+func (o opcoesDaCopiaLocal) emConteiner() bool { return o.raizDoHost != "" && o.raizDoHost != "/" }
+
+// pastaReal: a pasta dos dados como este processo a vê (com a raiz do host
+// na frente, no contêiner).
+func (o opcoesDaCopiaLocal) pastaReal() string {
+	if o.emConteiner() {
+		return filepath.Join(o.raizDoHost, filepath.Clean(o.pasta))
+	}
+	return filepath.Clean(o.pasta)
+}
+
+// raizDoHostPadrao: a do contêiner do agente (a imagem marca
+// ARKAME_INSTALL_METHOD=docker e monta a raiz do servidor em /host).
+func raizDoHostPadrao() string {
+	if v := os.Getenv("HOST_ROOT"); v != "" {
+		return v
+	}
+	if os.Getenv("ARKAME_INSTALL_METHOD") == "docker" {
+		return "/host"
+	}
+	return ""
+}
+
+// ImagemDoAgente é a imagem publicada do agente (para os comandos de Docker).
+const imagemDoAgente = "ghcr.io/arkame-app/arkame-agent:latest"
+
+// comandoDoConteinerIrmao: o docker run do contêiner de um processo irmão
+// (a cópia local, uma cópia da rede), com a rede do host: a cópia local
+// escuta em 127.0.0.1 (e na rede, com o share) como no agente nativo.
+func comandoDoConteinerIrmao(nome, configPath string) string {
+	return fmt.Sprintf("sudo docker run -d --name %s --restart always --stop-timeout 150 --user 0 --security-opt label=disable --network host -v /:/host -v /etc/arkame:/etc/arkame %s run --host-root /host --config %s", nome, imagemDoAgente, configPath)
 }
 
 var (
@@ -147,12 +185,21 @@ func linhasDaCopiaLocal(main *config.Config, o opcoesDaCopiaLocal, chave, segred
 		"ARKAME_LOCAL_STORE_PROGRAM_SHA256=" + prog.sha256,
 		"ARKAME_LOCAL_STORE_VERSION=" + localstore.Versao,
 		"ARKAME_LOCAL_STORE_TLS=" + pastaTLS,
-		"ARKAME_LOCAL_STORE_DATA=" + filepath.Clean(o.pasta),
+		"ARKAME_LOCAL_STORE_DATA=" + o.pastaReal(),
 		"ARKAME_LOCAL_STORE_ADDRESS=" + endereco,
 		"ARKAME_LOCAL_STORE_ACCESS_KEY_FILE=" + filepath.Join(pastaDasChaves, "access.key"),
 		"ARKAME_LOCAL_STORE_SECRET_KEY_FILE=" + filepath.Join(pastaDasChaves, "secret.key"),
 		"ARKAME_LOCAL_STORE_LOG=" + log,
+		// No contêiner, as pastas do plano são lidas pela raiz montada.
+		"HOST_ROOT=" + o.raizDoHostOuBarra(),
 	}
+}
+
+func (o opcoesDaCopiaLocal) raizDoHostOuBarra() string {
+	if o.emConteiner() {
+		return o.raizDoHost
+	}
+	return "/"
 }
 
 // chavesSoDoPrincipal não vão do env-file do principal para o da cópia local:
@@ -280,7 +327,8 @@ func newLocalStorageInstallCmd() *cobra.Command {
 cria a pasta dos dados fechada para o administrador, gera a credencial, cria o
 bucket versionado e instala um segundo serviço do agente (o mesmo servidor no
 painel) que mantém o RustFS de pé e faz os backups locais. O RustFS escuta só
-em 127.0.0.1: a cópia local não é um serviço da rede.
+em 127.0.0.1; para receber backups de outros servidores da rede, veja
+"local-storage share".
 
 Prefira uma pasta noutro disco que não o dos dados: a cópia local serve para
 restaurar rápido; a proteção contra um ataque é a cópia na nuvem.`,
@@ -295,6 +343,7 @@ restaurar rápido; a proteção contra um ataque é a cópia na nuvem.`,
 	cmd.Flags().StringVar(&o.config, "config", "", "env-file do agente principal (padrão: o da instalação)")
 	cmd.Flags().StringVar(&o.servico, "service-name", "arkame-agent-local", "nome do serviço da cópia local")
 	cmd.Flags().StringVar(&o.servicoMain, "main-service-name", service.DefaultName, "nome do serviço do agente principal")
+	cmd.Flags().StringVar(&o.raizDoHost, "host-root", raizDoHostPadrao(), "no contêiner do agente: onde a raiz do servidor está montada (padrão: /host na imagem do agente)")
 	cmd.Flags().BoolVar(&o.semServico, "no-service", false, "")
 	cmd.Flags().StringVar(&o.programaPronto, "rustfs-program", "", "")
 	cmd.Flags().StringVar(&o.pastaPrograma, "program-dir", "", "")
@@ -323,9 +372,6 @@ func instalarCopiaLocal(ctx context.Context, o opcoesDaCopiaLocal, out escritor)
 	if main.AgentID == "" || main.StorageBucket == "" {
 		return fmt.Errorf("o agente principal ainda não está instalado e aprovado (%s sem AGENT_ID ou STORAGE_BUCKET)", o.config)
 	}
-	if main.HostRoot != "/" && main.HostRoot != "" {
-		return fmt.Errorf("a cópia local não roda em contêiner (HOST_ROOT=%s): instale o agente direto no servidor", main.HostRoot)
-	}
 	if o.bucket == main.StorageBucket {
 		return fmt.Errorf("o bucket da cópia local não pode ser o mesmo do agente principal (%s)", o.bucket)
 	}
@@ -334,13 +380,23 @@ func instalarCopiaLocal(ctx context.Context, o opcoesDaCopiaLocal, out escritor)
 		return err
 	}
 	fmt.Fprintf(out, "Cópia local: %s, bucket %s, em 127.0.0.1:%d\n", filepath.Clean(o.pasta), o.bucket, o.porta)
+	if o.emConteiner() {
+		// O programa no volume da configuração: o /opt do contêiner some
+		// quando ele é recriado.
+		if o.pastaPrograma == "" {
+			o.pastaPrograma = filepath.Join(filepath.Dir(o.config), "rustfs-bin")
+		}
+		if _, err := os.Stat(o.raizDoHost); err != nil {
+			return fmt.Errorf("a raiz do servidor não está montada em %s: rode o contêiner com -v /:%s", o.raizDoHost, o.raizDoHost)
+		}
+	}
 
 	localCfgPath := filepath.Join(filepath.Dir(o.config), "agent-local.env")
 	// 1. A pasta dos dados, fechada para o administrador.
-	if err := fecharPastaDosDados(filepath.Clean(o.pasta), o.bucket); err != nil {
+	if err := fecharPastaDosDados(o.pastaReal(), o.bucket); err != nil {
 		return fmt.Errorf("pasta dos dados: %w", err)
 	}
-	avisarDoDisco(filepath.Clean(o.pasta), out)
+	avisarDoDisco(o.pastaReal(), out)
 	// 2. O programa: roda como root/SYSTEM, então só fica o que o SHA-256
 	// confere e numa pasta que só o administrador troca.
 	prog, err := programaConferido(ctx, o, artefato, localCfgPath, out)
@@ -359,6 +415,9 @@ func instalarCopiaLocal(ctx context.Context, o opcoesDaCopiaLocal, out escritor)
 		return fmt.Errorf("certificado da cópia local: %w", err)
 	}
 	log := logDaCopiaLocal(o.config)
+	if o.emConteiner() {
+		log = filepath.Join(filepath.Dir(o.config), "rustfs.log")
+	}
 	if err := segredo.PastaPrivada(filepath.Dir(log)); err != nil {
 		return fmt.Errorf("pasta do log da cópia local: %w", err)
 	}
@@ -369,7 +428,7 @@ func instalarCopiaLocal(ctx context.Context, o opcoesDaCopiaLocal, out escritor)
 		linhas = append(extras, linhas...)
 	}
 	sup := &localstore.Supervisor{
-		Programa: prog.caminho, Dados: filepath.Clean(o.pasta), Endereco: "127.0.0.1:" + strconv.Itoa(o.porta),
+		Programa: prog.caminho, Dados: o.pastaReal(), Endereco: "127.0.0.1:" + strconv.Itoa(o.porta),
 		ArquivoDaChave: filepath.Join(pastaDasChaves, "access.key"), ArquivoDoSegredo: filepath.Join(pastaDasChaves, "secret.key"),
 		PastaTLS: pastaTLS, SHA256: prog.sha256, Log: log,
 		Conferir: func(p string) error { return service.ConferirAuxiliar(p) },
@@ -400,6 +459,22 @@ func instalarCopiaLocal(ctx context.Context, o opcoesDaCopiaLocal, out escritor)
 	if err := setup.Gravar(o.config, []string{"SIBLING_BUCKETS=" + irmaosDoPrincipal(main, o.bucket)}); err != nil {
 		return err
 	}
+	// As cópias da rede (`join`) deste agente também deixam o bucket local
+	// para o processo dele.
+	for _, irmao := range irmaosNaPasta(filepath.Dir(o.config), main.AgentID, localCfgPath) {
+		if c, err := config.Load(irmao, config.Overrides{}); err == nil && !slices.Contains(c.SiblingBuckets, o.bucket) {
+			if err := setup.Gravar(irmao, []string{"SIBLING_BUCKETS=" + irmaosDoPrincipal(c, o.bucket)}); err != nil {
+				return err
+			}
+		}
+	}
+	if o.emConteiner() {
+		// No Docker, o processo da cópia local é um segundo contêiner, e o
+		// principal precisa reiniciar para deixar o bucket local para ele.
+		fmt.Fprintf(out, "Configuração gravada em %s.\n\nSuba o contêiner da cópia local e reinicie os do agente:\n\n  sudo docker rm -f %s >/dev/null 2>&1; %s\n  sudo docker restart %s\n",
+			localCfgPath, o.servico, comandoDoConteinerIrmao(o.servico, localCfgPath), strings.Join(append([]string{"arkame-agent"}, servicosDosIrmaos(filepath.Dir(o.config), main.AgentID, localCfgPath)...), " "))
+		return nil
+	}
 	if o.semServico {
 		fmt.Fprintf(out, "Configuração gravada em %s (sem serviço: rode `run --config` nela).\n", localCfgPath)
 		return nil
@@ -413,11 +488,7 @@ func instalarCopiaLocal(ctx context.Context, o opcoesDaCopiaLocal, out escritor)
 	if err != nil {
 		return fmt.Errorf("instalando o serviço da cópia local: %w", err)
 	}
-	if args := service.RestartArgs(o.servicoMain, service.ScopeSystem); len(args) > 0 {
-		if saida, err := exec.CommandContext(ctx, args[0], args[1:]...).CombinedOutput(); err != nil {
-			fmt.Fprintf(out, "Aviso: reinicie o serviço %s para ele deixar o bucket local para a cópia local (%v: %s)\n", o.servicoMain, err, strings.TrimSpace(string(saida)))
-		}
-	}
+	reiniciarServicos(ctx, append([]string{o.servicoMain}, servicosDosIrmaos(filepath.Dir(o.config), main.AgentID, localCfgPath)...), o.bucket, out)
 	fmt.Fprintf(out, "Pronto. Serviço %s instalado (%s).\n", inst.Name, inst.StatusCmd)
 	fmt.Fprintln(out, "No painel, o armazenamento da cópia local fica disponível em alguns minutos, depois do primeiro teste do bucket.")
 	return nil

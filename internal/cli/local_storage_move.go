@@ -29,6 +29,7 @@ func newLocalStorageMoveCmd() *cobra.Command {
 		cfgPath     string
 		servico     string
 		servicoMain string
+		raiz        string
 	)
 	cmd := &cobra.Command{
 		Use:   "move",
@@ -41,13 +42,14 @@ conferir no painel, apague-a.
 A pasta nova não pode existir com conteúdo, nem ficar dentro da antiga (ou a
 antiga dentro dela), e o disco dela precisa ter espaço para os dados.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return moverCopiaLocal(cmd.Context(), nova, cfgPath, servico, servicoMain, cmd.OutOrStdout())
+			return moverCopiaLocal(cmd.Context(), nova, cfgPath, servico, servicoMain, raiz, cmd.OutOrStdout())
 		},
 	}
 	cmd.Flags().StringVar(&nova, "dir", "", "a pasta nova dos dados da cópia local")
 	cmd.Flags().StringVar(&cfgPath, "config", "", "env-file do agente principal (padrão: o da instalação)")
 	cmd.Flags().StringVar(&servico, "service-name", "arkame-agent-local", "nome do serviço da cópia local")
 	cmd.Flags().StringVar(&servicoMain, "main-service-name", service.DefaultName, "nome do serviço do agente principal")
+	cmd.Flags().StringVar(&raiz, "host-root", raizDoHostPadrao(), "no contêiner do agente: onde a raiz do servidor está montada")
 	_ = cmd.MarkFlagRequired("dir")
 	return cmd
 }
@@ -59,7 +61,7 @@ var (
 	instalarParaMover     = instalarCopiaLocal
 )
 
-func moverCopiaLocal(ctx context.Context, nova, cfgPath, servico, servicoMain string, out io.Writer) error {
+func moverCopiaLocal(ctx context.Context, nova, cfgPath, servico, servicoMain, raiz string, out io.Writer) error {
 	if cfgPath == "" {
 		cfgPath = config.DefaultPath
 	}
@@ -78,11 +80,18 @@ func moverCopiaLocal(ctx context.Context, nova, cfgPath, servico, servicoMain st
 			porta = n
 		}
 	}
-	o := opcoesDaCopiaLocal{storageID: atual.StorageID, bucket: atual.StorageBucket, pasta: nova, porta: porta, config: cfgPath, servico: servico, servicoMain: servicoMain}
+	o := opcoesDaCopiaLocal{storageID: atual.StorageID, bucket: atual.StorageBucket, pasta: nova, porta: porta, config: cfgPath, servico: servico, servicoMain: servicoMain, raizDoHost: raiz}
 	if err := o.validar(); err != nil {
 		return err
 	}
-	nova = filepath.Clean(nova)
+	// No contêiner, a pasta nova é a do servidor; aqui dentro, sob a raiz
+	// montada. O contêiner da cópia local tem de estar parado antes (o painel
+	// mostra o comando inteiro), e quem religa é a pessoa.
+	conteiner := o.emConteiner()
+	nova = o.pastaReal()
+	if conteiner {
+		o.semServico = true
+	}
 	if mesmaPasta(nova, antiga) {
 		return fmt.Errorf("a cópia local já está em %s", antiga)
 	}
@@ -115,11 +124,17 @@ func moverCopiaLocal(ctx context.Context, nova, cfgPath, servico, servicoMain st
 
 	// Parado, o RustFS não grava enquanto a cópia anda: a pasta nova sai
 	// igual à antiga, com as versões.
-	if err := pararServicoDaCopia(servico); err != nil {
-		return fmt.Errorf("parando o serviço %s: %w", servico, err)
+	if !conteiner {
+		if err := pararServicoDaCopia(servico); err != nil {
+			return fmt.Errorf("parando o serviço %s: %w", servico, err)
+		}
+		fmt.Fprintln(out, "  ✓ Serviço da cópia local parado")
 	}
-	fmt.Fprintln(out, "  ✓ Serviço da cópia local parado")
 	religarAntiga := func() {
+		if conteiner {
+			fmt.Fprintf(out, "  ! religue o contêiner da cópia local: sudo docker start %s\n", servico)
+			return
+		}
 		if err := religarServicoDaCopia(servico); err != nil {
 			fmt.Fprintf(out, "  ! não consegui religar o serviço %s na pasta antiga: %v\n", servico, err)
 		}
@@ -137,6 +152,15 @@ func moverCopiaLocal(ctx context.Context, nova, cfgPath, servico, servicoMain st
 	if err := instalarParaMover(ctx, o, out); err != nil {
 		religarAntiga()
 		return fmt.Errorf("reinstalando a cópia local em %s: %w (os dados antigos seguem em %s; confira em %s qual pasta ficou configurada antes de rodar de novo)", nova, err, antiga, localCfg)
+	}
+	antigaNoServidor := antiga
+	if conteiner {
+		if rel, err := filepath.Rel(o.raizDoHost, antiga); err == nil && !strings.HasPrefix(rel, "..") {
+			antigaNoServidor = "/" + rel
+		}
+		fmt.Fprintf(out, "\nReligue o contêiner da cópia local: sudo docker start %s\n", servico)
+		fmt.Fprintf(out, "A pasta antiga ficou em %s. Depois de conferir no painel, apague-a:\n  sudo rm -rf %s\n", antigaNoServidor, antigaNoServidor)
+		return nil
 	}
 	if runtime.GOOS == "windows" {
 		fmt.Fprintf(out, "\nA pasta antiga ficou em %s. Depois de conferir no painel, apague-a:\n  Remove-Item -Recurse -Force '%s'\n", antiga, antiga)

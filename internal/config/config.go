@@ -142,6 +142,11 @@ type Config struct {
 	// que ele sobe (roda como root/SYSTEM).
 	LocalStoreTLS        string // ARKAME_LOCAL_STORE_TLS
 	LocalStoreProgramSHA string // ARKAME_LOCAL_STORE_PROGRAM_SHA256
+	// Onde o RustFS escuta quando recebe backups de outros servidores da rede
+	// (`local-storage share`, 0.5.3): 0.0.0.0:porta. Vazio: só em
+	// LocalStoreAddress. O agente desta máquina continua falando pelo
+	// 127.0.0.1; os outros servidores usam uma chave que não apaga.
+	LocalStoreListen string // ARKAME_LOCAL_STORE_LISTEN
 }
 
 // Overrides representa valores vindos da CLI que têm precedência sobre env.
@@ -232,6 +237,7 @@ func Load(envFile string, o Overrides) (*Config, error) {
 		LocalStoreSecretFile:   get("ARKAME_LOCAL_STORE_SECRET_KEY_FILE"),
 		LocalStoreLog:          get("ARKAME_LOCAL_STORE_LOG"),
 		LocalStoreTLS:          get("ARKAME_LOCAL_STORE_TLS"),
+		LocalStoreListen:       get("ARKAME_LOCAL_STORE_LISTEN"),
 		LocalStoreProgramSHA:   get("ARKAME_LOCAL_STORE_PROGRAM_SHA256"),
 	}
 	modoDoEstado := strings.ToLower(strings.TrimSpace(get("ARKAME_STATE")))

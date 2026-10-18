@@ -284,12 +284,13 @@ func TestHeartbeatDeclaraCapacidadesEEntregaOPedido(t *testing.T) {
 	_, temCopiaLocal := localstore.ArtefatoDaPlataforma()
 	esperadas := 5
 	if temCopiaLocal == nil {
-		esperadas = 6
+		esperadas = 7 // local_store e local_store_share
 	}
 	if !ok || len(caps) != esperadas || !slices.Contains(caps, any(atualizacao.Capacidade)) ||
 		!slices.Contains(caps, any(api.CapacidadeIndiceEmLotes)) || !slices.Contains(caps, any(api.CapacidadeIndiceDelta)) ||
 		!slices.Contains(caps, any(api.CapacidadeRemovidosEmParcial)) || !slices.Contains(caps, any(api.CapacidadePastaDeDump)) ||
-		(temCopiaLocal == nil) != slices.Contains(caps, any(api.CapacidadeCopiaLocal)) {
+		(temCopiaLocal == nil) != slices.Contains(caps, any(api.CapacidadeCopiaLocal)) ||
+		(temCopiaLocal == nil) != slices.Contains(caps, any(api.CapacidadeCopiaLocalNaRede)) {
 		t.Fatalf("capabilities = %#v", enviado["capabilities"])
 	}
 	relato, _ := enviado["update"].(map[string]any)
@@ -699,13 +700,18 @@ func TestPastasDoAgente(t *testing.T) {
 	}
 }
 
-// No contêiner o `local-storage install` recusa: o agente não anuncia a cópia
-// local (o painel a oferecia ao servidor Docker, e a criação não tinha saída).
-func TestCopiaLocalForaDoConteiner(t *testing.T) {
+// Desde a 0.5.3 a cópia local também roda no contêiner (o install de dentro
+// dele, e a cópia local num segundo contêiner): o agente a anuncia ali também,
+// com o share e o join.
+func TestCopiaLocalTambemNoConteiner(t *testing.T) {
+	if _, err := localstore.ArtefatoDaPlataforma(); err != nil {
+		t.Skip("sem RustFS para esta plataforma")
+	}
 	antes := emConteiner
 	t.Cleanup(func() { emConteiner = antes })
 	emConteiner = func() bool { return true }
-	if slices.Contains(capacidadesDoIndice(), api.CapacidadeCopiaLocal) {
-		t.Fatal("em contêiner, o agente anunciou a cópia local")
+	caps := capacidadesDoIndice()
+	if !slices.Contains(caps, api.CapacidadeCopiaLocal) || !slices.Contains(caps, api.CapacidadeCopiaLocalNaRede) {
+		t.Fatalf("em contêiner, o agente não anunciou a cópia local: %v", caps)
 	}
 }

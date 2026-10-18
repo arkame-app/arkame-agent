@@ -238,6 +238,42 @@ and releases it — the same thing every backup does before reading).
 Docker: `sudo docker logs --tail 50 arkame-agent`, and always restart or stop
 with `-t 150`. Removing the agent leaves your backups in the bucket.
 
+### Local copy, and a local copy for the whole network
+
+The panel's **Local copy** tab (server page) gives the exact commands. In short:
+
+```bash
+# A local copy on this machine: RustFS (open source, S3 compatible) that the
+# agent installs, keeps running and writes to, at disk speed.
+sudo arkame-agent local-storage install --storage-id <ID> --bucket <BUCKET> --dir /srv/arkame-local
+sudo arkame-agent local-storage move --dir /mnt/new-disk/arkame-local   # new disk: moves data and versions
+
+# Let another server on the same network back up to this local copy (0.5.3+).
+# Prints the "join" command for that server and its key, once. The key only
+# reads and writes that server's own folder in the bucket.
+sudo arkame-agent local-storage share --server erp-01 --agent-id <SERVER-ID>
+sudo arkame-agent local-storage share --list            # client keys
+sudo arkame-agent local-storage share --revoke <KEY>    # remove a server's access
+sudo arkame-agent local-storage share --off             # listen on this machine only again
+
+# On the other server: checks the certificate fingerprint, tests the key and
+# installs the service that writes there.
+sudo arkame-agent local-storage join --storage-id <ID> --bucket <BUCKET> \
+  --endpoint https://192.168.0.10:9900 --fingerprint <SHA256>
+```
+
+Each network server gets its own RustFS user whose policy can list, read and
+write only its own folder in that bucket (`arkame/data/<server id>/`), and
+cannot delete objects or versions, change versioning or touch the bucket: a
+compromised client can neither erase nor read the backups of the other
+servers kept on the storage server. Only the storage server's own process, with the RustFS root
+credential, purges by the retention policy. Open the port (9900 by default) to
+the internal network only.
+
+On Docker (0.5.3+) the same commands run from a one-off container, and the
+local copy is a second container (`arkame-agent-local`, host network); the
+panel shows each command ready to paste.
+
 ### Configuration
 
 The agent reads `/etc/arkame/agent.env` (`C:\etc\arkame\agent.env` on Windows;
