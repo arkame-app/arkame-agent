@@ -259,10 +259,12 @@ func Load(envFile string, o Overrides) (*Config, error) {
 	// programa do principal (revisão, 18/10).
 	base := filepath.Base(cfg.ConfigPath)
 	daRede := strings.HasPrefix(base, "agent-rede-") && strings.HasSuffix(base, ".env")
-	if cfg.Role == "" && daRede {
-		cfg.Role = "network_copy"
-	}
+	// Só no formato que a 0.5.3 gravava (off): um principal que por algum
+	// motivo tenha esse nome, com a atualização ligada, segue principal.
 	if (daRede || base == "agent-local.env") && strings.EqualFold(strings.TrimSpace(cfg.AutoUpdate), "off") {
+		if cfg.Role == "" && daRede {
+			cfg.Role = "network_copy"
+		}
 		cfg.AutoUpdate = "follow"
 	}
 

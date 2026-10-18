@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/arkame-app/agent/internal/api"
 	"github.com/arkame-app/agent/internal/atualizacao"
 	"github.com/arkame-app/agent/internal/config"
 	"github.com/arkame-app/agent/internal/daemon"
@@ -80,7 +81,10 @@ func newRunCmd() *cobra.Command {
 			// que para antes disso é de um agente que não subiria com programa
 			// nenhum (o vizinho mal configurado, um `run` com o arquivo
 			// errado), e contá-la desfazia a troca de quem está bem.
-			if registrarArranque(service.ProgramaAtual(), version.Version, configFile) {
+			// O irmão (cópia local, cópia da rede) não conta partida: quem decide
+			// a volta é o principal, e três quedas do irmão desfaziam a troca dele.
+			irmao := cfg.LocalStoreProgram != "" || cfg.Role == api.PapelCopiaDaRede || atualizacao.Segue(cfg.AutoUpdate)
+			if !irmao && registrarArranque(service.ProgramaAtual(), version.Version, configFile) {
 				// Sob o SCM do Windows, sai já com o serviço no ar: o processo
 				// que morre antes de se apresentar ao SCM é uma partida que
 				// falhou, e não um serviço que caiu — e só o segundo é religado.
