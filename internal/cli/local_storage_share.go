@@ -244,7 +244,7 @@ func compartilharCopiaLocal(ctx context.Context, o opcoesDoShare, out io.Writer)
 		}
 		fmt.Fprintf(out, "  ✓ Cópia local escutando na rede (porta %s)\n", porta)
 		if impressao != certAntes && certAntes != "" {
-			fmt.Fprintln(out, "  ! O certificado mudou: servidores clientes que já existiam precisam rodar o \"join\" de novo.")
+			fmt.Fprintln(out, "  ✓ Certificado refeito com a mesma chave: os servidores que já gravam aqui continuam; os novos usam a impressão abaixo.")
 		}
 	}
 	// 2. A chave do cliente: grava e lê, não apaga.

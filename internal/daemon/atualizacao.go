@@ -247,7 +247,7 @@ func capacidadesDoIndice() []string {
 	// O Zimbra: só no servidor Linux que o tem (no Docker, /opt/zimbra seria
 	// a do contêiner do agente, e a porta de administração não é a dele).
 	if runtime.GOOS == "linux" && temZimbra() {
-		caps = append(caps, api.CapacidadeZimbra, api.CapacidadeZimbraPastaDaRestauracao)
+		caps = append(caps, api.CapacidadeZimbra, api.CapacidadeZimbraPastaDaRestauracao, api.CapacidadeZimbraLimpeza)
 	}
 	return caps
 }

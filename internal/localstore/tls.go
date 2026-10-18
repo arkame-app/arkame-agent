@@ -78,9 +78,15 @@ func PrepararTLS(pasta string, nomes ...string) (string, error) {
 	if err := segredo.CriarPasta(pasta); err != nil {
 		return "", err
 	}
-	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	// A chave que já existe continua: o certificado novo, com a mesma chave e o
+	// mesmo nome, é validado pelo antigo que os clientes da rede guardaram
+	// (`join`). Sem isto, um IP novo na máquina derrubava todos eles.
+	k, err := chaveExistente(chave)
 	if err != nil {
-		return "", err
+		k, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			return "", err
+		}
 	}
 	serie, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 127))
 	if err != nil {
@@ -210,4 +216,25 @@ func HashDoArquivo(caminho string) (string, error) {
 		return "", fmt.Errorf("lendo %s: %w", caminho, err)
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// chaveExistente lê a chave ECDSA do RustFS, se há uma válida.
+func chaveExistente(caminho string) (*ecdsa.PrivateKey, error) {
+	b, err := os.ReadFile(caminho)
+	if err != nil {
+		return nil, err
+	}
+	bloco, _ := pem.Decode(b)
+	if bloco == nil {
+		return nil, fmt.Errorf("%s não é um PEM", caminho)
+	}
+	k, err := x509.ParsePKCS8PrivateKey(bloco.Bytes)
+	if err != nil {
+		return nil, err
+	}
+	ec, ok := k.(*ecdsa.PrivateKey)
+	if !ok {
+		return nil, fmt.Errorf("%s não é uma chave ECDSA", caminho)
+	}
+	return ec, nil
 }

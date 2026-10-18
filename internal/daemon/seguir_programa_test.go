@@ -25,7 +25,7 @@ func TestSeguirOProgramaReiniciaQuandoOArquivoMuda(t *testing.T) {
 	reiniciou := make(chan struct{})
 	ctx, cancelar := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancelar()
-	go seguirOPrograma(ctx, oc, func() { close(reiniciou) })
+	go seguirOPrograma(ctx, oc, func() { close(reiniciou) }, nil)
 
 	time.Sleep(150 * time.Millisecond)
 	select {

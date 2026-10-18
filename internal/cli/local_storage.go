@@ -191,6 +191,9 @@ func linhasDaCopiaLocal(main *config.Config, o opcoesDaCopiaLocal, chave, segred
 		"ARKAME_LOCAL_STORE_ACCESS_KEY_FILE=" + filepath.Join(pastaDasChaves, "access.key"),
 		"ARKAME_LOCAL_STORE_SECRET_KEY_FILE=" + filepath.Join(pastaDasChaves, "secret.key"),
 		"ARKAME_LOCAL_STORE_LOG=" + log,
+		// O nome do serviço (ou do contêiner) deste processo: o join e o
+		// install reiniciam os irmãos por ele, mesmo com --service-name.
+		"ARKAME_SERVICE_NAME=" + o.servico,
 		// No contêiner, as pastas do plano são lidas pela raiz montada.
 		"HOST_ROOT=" + o.raizDoHostOuBarra(),
 	}
@@ -206,7 +209,7 @@ func (o opcoesDaCopiaLocal) raizDoHostOuBarra() string {
 // chavesSoDoPrincipal não vão do env-file do principal para o da cópia local:
 // a identidade e o armazenamento são escritos de propósito (linhasDaCopiaLocal),
 // e o código de ativação já foi usado.
-var chavesSoDoPrincipal = regexp.MustCompile(`^(AWS_[A-Z_0-9]+|STORAGE_[A-Z_]+|SIBLING_BUCKETS|ARKAME_LOCAL_STORE_[A-Z_0-9]+|ARKAME_AUTO_UPDATE|ENROLLMENT_TOKEN|PANEL_URL|AGENT_ID|AGENT_ID_PATH|TOKEN_PATH|PRIVATE_KEY_PATH|HOST_ROOT|ARKAME_ROLE)$`)
+var chavesSoDoPrincipal = regexp.MustCompile(`^(AWS_[A-Z_0-9]+|STORAGE_[A-Z_]+|SIBLING_BUCKETS|ARKAME_LOCAL_STORE_[A-Z_0-9]+|ARKAME_AUTO_UPDATE|ENROLLMENT_TOKEN|PANEL_URL|AGENT_ID|AGENT_ID_PATH|TOKEN_PATH|PRIVATE_KEY_PATH|HOST_ROOT|ARKAME_ROLE|ARKAME_SERVICE_NAME)$`)
 
 // opcoesDoPrincipal: o resto do env-file do principal (proxy, pasta do
 // estado, concorrência, intervalos…), que a cópia local tem de seguir — atrás

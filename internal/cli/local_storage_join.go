@@ -74,6 +74,9 @@ type opcoesDoJoin struct {
 
 var reImpressao = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
+// reNomeDeServico: o nome que vai para systemctl/docker, sem nada que o shell interprete.
+var reNomeDeServico = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.@-]{0,99}$`)
+
 func (o *opcoesDoJoin) validar() (*url.URL, error) {
 	if !reUUID.MatchString(o.storageID) {
 		return nil, fmt.Errorf("--storage-id tem de ser o id do armazenamento no painel (um UUID)")
@@ -260,6 +263,7 @@ func linhasDoJoin(main *config.Config, o opcoesDoJoin, chave, segredo, caFile st
 		"ARKAME_AUTO_UPDATE=" + atualizacao.ValorSegue,
 		// O painel não toma este processo pelo servidor.
 		"ARKAME_ROLE=" + api.PapelCopiaDaRede,
+		"ARKAME_SERVICE_NAME=" + o.servico,
 	}
 }
 
@@ -289,8 +293,16 @@ func arquivoDoIrmao(configPath, bucket string) string {
 	return ""
 }
 
-// servicoDoIrmao: o serviço (ou contêiner) de um env-file de processo irmão.
+// servicoDoIrmao: o serviço (ou contêiner) de um env-file de processo irmão:
+// o que ele grava (ARKAME_SERVICE_NAME, 0.5.5) ou, sem isso, o nome padrão.
 func servicoDoIrmao(arquivo string) string {
+	if b, err := os.ReadFile(arquivo); err == nil {
+		for _, l := range strings.Split(strings.ReplaceAll(string(b), "\r\n", "\n"), "\n") {
+			if v, ok := strings.CutPrefix(strings.TrimSpace(l), "ARKAME_SERVICE_NAME="); ok && reNomeDeServico.MatchString(v) {
+				return v
+			}
+		}
+	}
 	base := filepath.Base(arquivo)
 	switch {
 	case base == "agent-local.env":

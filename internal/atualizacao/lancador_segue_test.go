@@ -39,3 +39,19 @@ func TestIrmaoSoExecutaAVersaoConfirmada(t *testing.T) {
 	}
 	_ = aberto.Close()
 }
+
+// O irmão no Docker só vê versão nova quando o principal a confirma.
+func TestVersaoConfirmadaNoVolume(t *testing.T) {
+	b := noVolume(t)
+	if v := VersaoConfirmadaNoVolume(b.lugar.Atual); v != "" {
+		t.Fatalf("em prova, já deu a versão %q", v)
+	}
+	e := b.estado()
+	e.Situacao = SituacaoConfirmada
+	if err := b.lugar.gravarEstado(e); err != nil {
+		t.Fatal(err)
+	}
+	if v := VersaoConfirmadaNoVolume(b.lugar.Atual); v == "" || v != e.Versao {
+		t.Fatalf("confirmada, deu %q (queria %q)", v, e.Versao)
+	}
+}

@@ -1,6 +1,8 @@
 package localstore
 
 import (
+	"crypto/x509"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -51,5 +53,33 @@ func TestCertificadoNovoMantemOsEnderecosAntigos(t *testing.T) {
 	}
 	if !cobreTodos(filepath.Join(dir, ArquivoDoCertificado), []string{"192.168.1.10", "10.0.0.5", "127.0.0.1"}) {
 		t.Fatalf("o certificado novo perdeu um endereço antigo: %v", NomesDoCertificado(dir))
+	}
+}
+
+// O certificado refeito com um endereço novo continua valendo para o cliente
+// que guardou o antigo: mesma chave, mesmo nome, e o antigo valida o novo.
+func TestCertificadoNovoValeParaQuemGuardouOAntigo(t *testing.T) {
+	dir := t.TempDir()
+	cert, err := PrepararTLS(dir, "192.168.1.10")
+	if err != nil {
+		t.Fatal(err)
+	}
+	antigo, err := os.ReadFile(cert)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PrepararTLS(dir, "10.0.0.5"); err != nil {
+		t.Fatal(err)
+	}
+	novo, err := lerCertificado(cert)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raizes := x509.NewCertPool()
+	if !raizes.AppendCertsFromPEM(antigo) {
+		t.Fatal("PEM antigo inválido")
+	}
+	if _, err := novo.Verify(x509.VerifyOptions{Roots: raizes, DNSName: "10.0.0.5"}); err != nil {
+		t.Fatalf("o cliente com o certificado antigo recusa o novo: %v", err)
 	}
 }

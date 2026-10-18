@@ -26,6 +26,7 @@ import (
 
 	"github.com/arkame-app/agent/internal/api"
 	"github.com/arkame-app/agent/internal/atualizacao"
+	"github.com/arkame-app/agent/internal/caminho"
 	"github.com/arkame-app/agent/internal/config"
 	"github.com/arkame-app/agent/internal/estado"
 	"github.com/arkame-app/agent/internal/fsbrowse"
@@ -114,16 +115,17 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// atualizam sozinhos: quem troca o programa é o principal, e eles
 	// reiniciam quando ele muda. Sem isto, o da rede ficava na versão antiga.
 	if ehIrmao(cfg) || atualizacao.Desligada(cfg.AutoUpdate) {
-		// No Docker, o programa novo chega no volume (o da imagem não muda).
-		var vigiar []string
+		// No Docker, o programa novo chega no volume (o da imagem não muda), e
+		// conta quando o principal o confirma.
+		var noVolume func() string
 		if atualizacao.EmDocker() {
 			v := atualizacao.ProgramaDoVolume(cfg.ConfigPath)
-			vigiar = append(vigiar, v, atualizacao.LugarDe(v).Estado)
+			noVolume = func() string { return atualizacao.VersaoConfirmadaNoVolume(v) }
 		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			seguirOPrograma(ctx, oc, func() { parar(atualizacao.ErrReiniciar) }, vigiar...)
+			seguirOPrograma(ctx, oc, func() { parar(atualizacao.ErrReiniciar) }, noVolume)
 		}()
 	}
 	wg.Add(11)
@@ -603,6 +605,22 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 			ErrorMessage: msg,
 		})
 		return fmt.Errorf("%s: %s", codigoOutroArmazenamento, msg)
+	}
+
+	// Pastas vindas do MCP: o caminho real, depois dos links, não pode cair
+	// numa pasta sensível. O painel confere o texto; isto pega o link.
+	if plan.RestrictedPaths {
+		for _, origem := range plan.SourcePaths {
+			if real := caminho.PastaSensivel(cfg.HostRoot, origem); real != "" {
+				msg := fmt.Sprintf("a origem %s leva a %s, uma pasta com chaves ou senhas do sistema: um plano criado pelo assistente (MCP) não a lê. Para fazer backup dela, edite as pastas do plano no painel", origem, real)
+				slog.Error("origem recusada: pasta sensível", "plan_id", plan.ID, "origem", origem, "real", real)
+				marcarFalha(ctx, c, cfg, startResp.SessionID, struct {
+					ErrorCode    string `json:"error_code"`
+					ErrorMessage string `json:"error_message"`
+				}{ErrorCode: "restricted_path", ErrorMessage: msg})
+				return fmt.Errorf("restricted_path: %s", msg)
+			}
+		}
 	}
 
 	// Versionamento antes de enviar qualquer coisa. A checagem depois do

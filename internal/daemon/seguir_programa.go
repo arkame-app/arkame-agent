@@ -18,10 +18,10 @@ import (
 // cortar um backup ou uma restauração no meio.
 var intervaloDeSeguir = time.Minute
 
-// `outros` são mais arquivos a vigiar: no Docker, o programa do volume e o
-// registro da troca (o da imagem não muda; o irmão sobe o do volume quando o
-// principal o confirma).
-func seguirOPrograma(ctx context.Context, oc *ocupacao, reiniciar func(), outros ...string) {
+// `marcaExtra`, se dada, entra na marca: no Docker, a versão confirmada no
+// volume (o programa da imagem não muda; o irmão sobe o do volume quando o
+// principal confirma a versão, e não a cada mudança do registro durante a prova).
+func seguirOPrograma(ctx context.Context, oc *ocupacao, reiniciar func(), marcaExtra func() string) {
 	programa, err := os.Executable()
 	if err != nil {
 		return
@@ -29,16 +29,13 @@ func seguirOPrograma(ctx context.Context, oc *ocupacao, reiniciar func(), outros
 	if real, err := filepath.EvalSymlinks(programa); err == nil {
 		programa = real
 	}
-	arquivos := append([]string{programa}, outros...)
-	// A marca de cada arquivo: data e tamanho; o que não existe conta como vazio.
 	marca := func() string {
-		m := ""
-		for _, a := range arquivos {
-			if fi, err := os.Stat(a); err == nil {
-				m += fi.ModTime().String() + "|" + strconv.FormatInt(fi.Size(), 10) + ";"
-			} else {
-				m += "-;"
-			}
+		m := "-"
+		if fi, err := os.Stat(programa); err == nil {
+			m = fi.ModTime().String() + "|" + strconv.FormatInt(fi.Size(), 10)
+		}
+		if marcaExtra != nil {
+			m += ";" + marcaExtra()
 		}
 		return m
 	}

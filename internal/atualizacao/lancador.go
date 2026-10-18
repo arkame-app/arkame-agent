@@ -238,3 +238,15 @@ func AbandonarDoVolume(programa, motivo string) {
 		slog.Warn("não consegui registrar o abandono do programa do volume", "err", err)
 	}
 }
+
+// VersaoConfirmadaNoVolume é a versão do programa do volume que o principal já
+// confirmou, ou "" (nada confirmado: em prova, abandonado, sem programa). É o
+// que o irmão no Docker vigia: reiniciar a cada mudança do registro o levava
+// ao programa da imagem durante a prova de uma versão nova.
+func VersaoConfirmadaNoVolume(programa string) string {
+	e, ok := LugarDe(programa).lerEstado()
+	if !ok || !e.PeloLancador || e.Situacao != SituacaoConfirmada {
+		return ""
+	}
+	return e.Versao
+}

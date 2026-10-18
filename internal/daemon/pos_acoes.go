@@ -3,6 +3,7 @@ package daemon
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -25,6 +26,12 @@ import (
 // nome, que seja dele (do root) e fechada para os outros: é ela que o
 // RemoveAll do fim limpa.
 const nomeDaPastaDeRestauracao = "zimbra-restauracao"
+
+// tipoDaLimpeza: apagar a pasta da restauração que não terminou inteira (0.5.5).
+const tipoDaLimpeza = "zimbra_cleanup"
+
+// errSemPasta: a pasta da restauração não está no disco.
+var errSemPasta = errors.New("pasta ausente")
 
 // posAcao: o que fazer depois de uma restauração concluída, como o painel manda
 // em GET /api/agents/<id>/post-actions.
@@ -88,7 +95,20 @@ func processarPosAcoes(ctx context.Context, c *api.Client, cfg *config.Config, o
 		}
 		var log bytes.Buffer
 		err := conferirPosAcao(a)
-		if err == nil {
+		if a.Type == tipoDaLimpeza {
+			// A restauração não terminou inteira: só apaga a pasta temporária
+			// (as conferências são as da importação).
+			if err == nil {
+				pasta := filepath.Dir(filepath.Clean(a.Path))
+				if rerr := os.RemoveAll(pasta); rerr != nil {
+					err = fmt.Errorf("apagando %s: %w", pasta, rerr)
+				} else {
+					fmt.Fprintf(&log, "pasta temporária apagada: %s\n", pasta)
+				}
+			} else if errors.Is(err, errSemPasta) {
+				err = nil // já não estava no disco
+			}
+		} else if err == nil {
 			err = importar(ctx, a, &log)
 			// Parado no meio (o serviço reiniciando): nem apaga nem relata. A
 			// pendência fica no painel e o próximo processo importa de novo da
@@ -110,7 +130,9 @@ func processarPosAcoes(ctx context.Context, c *api.Client, cfg *config.Config, o
 		corpo := map[string]any{"ok": err == nil, "log": ultimasLinhas(log.String(), 4000)}
 		if err != nil {
 			corpo["error"] = err.Error()
-			slog.Warn("importação da conta do Zimbra falhou", "job_id", a.JobID, "conta", a.Account, "err", err)
+			slog.Warn("pós-ação do Zimbra falhou", "tipo", a.Type, "job_id", a.JobID, "conta", a.Account, "err", err)
+		} else if a.Type == tipoDaLimpeza {
+			slog.Info("pasta da restauração do Zimbra que não terminou apagada", "job_id", a.JobID, "conta", a.Account)
 		} else {
 			slog.Info("conta do Zimbra importada", "job_id", a.JobID, "conta", a.Account)
 		}
@@ -123,7 +145,7 @@ func processarPosAcoes(ctx context.Context, c *api.Client, cfg *config.Config, o
 // conferirPosAcao recusa o que não for uma importação do Zimbra de dentro da
 // pasta das restaurações: o painel não manda o agente ler de qualquer lugar.
 func conferirPosAcao(a posAcao) error {
-	if a.Type != "zimbra_restore" {
+	if a.Type != "zimbra_restore" && a.Type != tipoDaLimpeza {
 		return fmt.Errorf("pós-ação desconhecida: %q", a.Type)
 	}
 	if !zimbra.ContaValida(a.Account) || (a.To != "" && !zimbra.ContaValida(a.To)) {
@@ -139,7 +161,7 @@ func conferirPosAcao(a posAcao) error {
 	}
 	st, err := os.Lstat(p)
 	if err != nil {
-		return fmt.Errorf("a pasta restaurada não está no servidor: %w", err)
+		return fmt.Errorf("a pasta restaurada não está no servidor: %w", errors.Join(errSemPasta, err))
 	}
 	if !st.IsDir() {
 		return fmt.Errorf("%s não é uma pasta", p)

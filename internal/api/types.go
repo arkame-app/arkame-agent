@@ -49,17 +49,21 @@ type TokenResponse struct {
 
 // Plan é a descrição de um plano de backup ou restore enviada ao agent.
 type Plan struct {
-	ID           string     `json:"id"`
-	Kind         string     `json:"kind"` // "backup" | "restore"
-	Status       string     `json:"status"`
-	SourcePaths  []string   `json:"source_paths,omitempty"`
-	ExcludeGlobs []string   `json:"exclude_globs,omitempty"`
-	DestPath     string     `json:"dest_path,omitempty"`
-	StorageRef   StorageRef `json:"storage"`
-	Schedule     Schedule   `json:"schedule"`
-	Windows      []Window   `json:"windows,omitempty"`
-	Throttle     Throttle   `json:"throttle,omitempty"`
-	NextRunAt    *time.Time `json:"next_run_at,omitempty"`
+	ID          string   `json:"id"`
+	Kind        string   `json:"kind"` // "backup" | "restore"
+	Status      string   `json:"status"`
+	SourcePaths []string `json:"source_paths,omitempty"`
+	// RestrictedPaths: as pastas vieram do MCP (assistente de IA). O agente
+	// 0.5.5 resolve o caminho real de cada uma e recusa o backup se alguma
+	// cair numa pasta sensível (caminho.PastaSensivel).
+	RestrictedPaths bool       `json:"restricted_paths,omitempty"`
+	ExcludeGlobs    []string   `json:"exclude_globs,omitempty"`
+	DestPath        string     `json:"dest_path,omitempty"`
+	StorageRef      StorageRef `json:"storage"`
+	Schedule        Schedule   `json:"schedule"`
+	Windows         []Window   `json:"windows,omitempty"`
+	Throttle        Throttle   `json:"throttle,omitempty"`
+	NextRunAt       *time.Time `json:"next_run_at,omitempty"`
 
 	// Comandos que o plano roda no servidor antes e depois do backup.
 	//
@@ -615,6 +619,10 @@ const CapacidadeZimbra = "zimbra"
 // existe. Sem ela, o painel usa a pasta fixa e avisa que a conta de destino
 // precisa existir.
 const CapacidadeZimbraPastaDaRestauracao = "zimbra_restore_dir"
+
+// CapacidadeZimbraLimpeza: o agente (0.5.5+) apaga a pasta temporária da
+// restauração de conta que não terminou inteira (pós-ação zimbra_cleanup).
+const CapacidadeZimbraLimpeza = "zimbra_cleanup"
 
 // InventoryItem é uma versão que o catálogo do painel diz existir.
 type InventoryItem struct {

@@ -147,3 +147,20 @@ func TestServicoDoIrmao(t *testing.T) {
 		}
 	}
 }
+
+func TestServicoDoIrmaoComNomeProprio(t *testing.T) {
+	dir := t.TempDir()
+	arq := filepath.Join(dir, "agent-local.env")
+	if err := os.WriteFile(arq, []byte("ARKAME_SERVICE_NAME=copia-do-nas\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := servicoDoIrmao(arq); got != "copia-do-nas" {
+		t.Fatalf("nome = %q", got)
+	}
+	if err := os.WriteFile(arq, []byte("ARKAME_SERVICE_NAME=x; rm -rf /\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := servicoDoIrmao(arq); got != "arkame-agent-local" {
+		t.Fatalf("aceitou nome que o shell interpretaria: %q", got)
+	}
+}
