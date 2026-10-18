@@ -61,6 +61,10 @@ type EngineOptions struct {
 	// lê-la: o instantâneo do volume (instantaneo.Instantaneo.Ler). nil lê do
 	// disco. A chave no bucket é sempre a do disco.
 	Leitura func(string) string
+	// Restrito: plano com origens escritas pelo assistente (MCP). A varredura
+	// pula o que cai numa pasta com chaves ou senhas dentro da origem, e o
+	// link que aponta para uma (caminho.CaminhoSensivel).
+	Restrito bool
 	// LeituraViva confere, ao fim da varredura, que o instantâneo ainda
 	// existe. O Windows apaga a cópia de sombra quando a área dela lota: dali
 	// em diante tudo dá "não existe", e sem esta conferência a falta virava
@@ -315,7 +319,7 @@ func Run(ctx context.Context, o EngineOptions) (*Result, error) {
 	if o.Delta && o.RemovidosEmParcial {
 		listadas = novasPastasListadas()
 	}
-	fileCh, errCh := walkSem(ctx, o.HostRoot, o.SourcePaths, o.ExcludeGlobs, &pulados, o.Ignorar, listadas, o.Leitura)
+	fileCh, errCh := walkSem(ctx, o.HostRoot, o.SourcePaths, o.ExcludeGlobs, &pulados, o.Ignorar, listadas, o.Leitura, o.Restrito)
 
 	numerados := make(chan itemDoWalk, 128)
 	go func() {

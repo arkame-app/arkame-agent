@@ -692,6 +692,7 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 		SourcePaths:  plan.SourcePaths,
 		ExcludeGlobs: exclusoes,
 		MaxMbps:      plan.Throttle.MaxMbps,
+		Restrito:     plan.RestrictedPaths,
 	}
 	indice.configurar(&opcoes, cfg)
 	// Instantâneo do volume, depois do comando de antes (o dump dele entra) e

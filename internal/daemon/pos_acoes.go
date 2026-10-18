@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/url"
 	"os"
@@ -160,8 +161,13 @@ func conferirPosAcao(a posAcao) error {
 		return fmt.Errorf("a pasta das restaurações do Zimbra %s não é segura: %w", base, err)
 	}
 	st, err := os.Lstat(p)
-	if err != nil {
+	if errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("a pasta restaurada não está no servidor: %w", errors.Join(errSemPasta, err))
+	}
+	if err != nil {
+		// Sem permissão ou erro de disco: a pasta pode estar lá, e a limpeza
+		// não pode ser dada como feita.
+		return fmt.Errorf("não consegui conferir a pasta restaurada: %w", err)
 	}
 	if !st.IsDir() {
 		return fmt.Errorf("%s não é uma pasta", p)

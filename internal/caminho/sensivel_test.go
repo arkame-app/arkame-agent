@@ -59,3 +59,24 @@ func TestPastaSensivelNoWindows(t *testing.T) {
 		}
 	}
 }
+
+// No macOS o caminho real de /etc é /private/etc: a lista vale com e sem o
+// prefixo (revisão de segurança, 18/10).
+func TestSensivelComPrefixoPrivate(t *testing.T) {
+	casos := map[string]bool{
+		"/private/etc/sudoers.d":       true,
+		"/private/etc/master.passwd":   true,
+		"/private/etc/letsencrypt/x":   true,
+		"/private/etc/ssl/private":     true,
+		"/private/var/root":            true,
+		"/private/var/db/dslocal/node": true,
+		"/private":                     true,
+		"/private/tmp":                 false,
+		"/private/var/log":             false,
+	}
+	for p, quer := range casos {
+		if got := sensivelNoUnix(p); got != quer {
+			t.Errorf("%s: sensível=%v, queria %v", p, got, quer)
+		}
+	}
+}

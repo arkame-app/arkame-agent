@@ -83,7 +83,7 @@ func linkSemAlvo(err error) bool {
 // é gravado antes de o canal de erros fechar: só se lê depois de vê-lo fechado
 // (receber o erro não basta, ele vai antes da gravação).
 func walk(ctx context.Context, hostRoot string, sourcePaths []string, excludeGlobs []string, puladosOut *puladosDoWalk) (<-chan FileInfo, <-chan error) {
-	return walkSem(ctx, hostRoot, sourcePaths, excludeGlobs, puladosOut, nil, nil, nil)
+	return walkSem(ctx, hostRoot, sourcePaths, excludeGlobs, puladosOut, nil, nil, nil, false)
 }
 
 // walkSem é o walk que nunca entra nas pastas de ignorar (caminhos reais,
@@ -91,8 +91,9 @@ func walk(ctx context.Context, hostRoot string, sourcePaths []string, excludeGlo
 // não é dado do cliente. Com listadas, anota as pastas que abriu e listou sem
 // erro (remocao_provada.go); só se lê depois de o canal de erros fechar.
 // ler leva o caminho real ao caminho de onde ler (o instantâneo do volume,
-// EngineOptions.Leitura); nil lê do disco.
-func walkSem(ctx context.Context, hostRoot string, sourcePaths []string, excludeGlobs []string, puladosOut *puladosDoWalk, ignorar []string, listadas *pastasListadas, ler func(string) string) (<-chan FileInfo, <-chan error) {
+// EngineOptions.Leitura); nil lê do disco. restrito (plano do MCP) pula o que
+// cai numa pasta sensível dentro da origem, e o link que aponta para uma.
+func walkSem(ctx context.Context, hostRoot string, sourcePaths []string, excludeGlobs []string, puladosOut *puladosDoWalk, ignorar []string, listadas *pastasListadas, ler func(string) string, restrito bool) (<-chan FileInfo, <-chan error) {
 	if ler != nil {
 		// A pasta do estado local é ignorada também dentro do instantâneo.
 		lidas := make([]string, 0, len(ignorar))
@@ -131,6 +132,12 @@ func walkSem(ctx context.Context, hostRoot string, sourcePaths []string, exclude
 		reparse := 0
 		exemploReparse := ""
 		eperm := false
+		restritos := 0
+		defer func() {
+			if restritos > 0 {
+				slog.Warn("plano criado pelo assistente (MCP): itens em pastas com chaves ou senhas ficaram de fora", "itens", restritos)
+			}
+		}()
 		if puladosOut != nil {
 			defer func() {
 				*puladosOut = puladosDoWalk{SoNaNuvem: soNaNuvem, Reparse: reparse, NaoPermitido: eperm}
@@ -154,6 +161,10 @@ func walkSem(ctx context.Context, hostRoot string, sourcePaths []string, exclude
 			// restaura /home, mesmo que no disco seja /var/home.
 			escolhido := caminho.NoDisco(hostRoot, sp)
 			root := caminho.Real(hostRoot, sp)
+			// O caminho no disco de algo lido em root (que pode ser o
+			// instantâneo): é ele que a conferência do plano restrito olha.
+			raizNoDisco := root
+			noDisco := func(p string) string { return raizNoDisco + strings.TrimPrefix(p, root) }
 			// Do instantâneo, quando há: a mesma pasta, congelada. A chave
 			// continua a do disco (escolhido). A unidade sem instantâneo (um
 			// pendrive em exFAT) volta igual e segue a regra do disco.
@@ -214,6 +225,16 @@ func walkSem(ctx context.Context, hostRoot string, sourcePaths []string, exclude
 					}
 					return nil
 				}
+				// Plano do MCP: a origem passou na conferência, mas o que está
+				// dentro dela pode ser sensível (/home leva /home/x/.ssh). Fica
+				// de fora, sem contar como falha.
+				if restrito && path != root && caminho.CaminhoSensivel(hostRoot, noDisco(path)) {
+					restritos++
+					if d.IsDir() {
+						return filepath.SkipDir
+					}
+					return nil
+				}
 				if d.IsDir() {
 					if pastaIgnorada(path, ignorar) {
 						return filepath.SkipDir
@@ -240,6 +261,16 @@ func walkSem(ctx context.Context, hostRoot string, sourcePaths []string, exclude
 					alvo := path
 					if !caminho.Windows {
 						alvo = caminho.Real(hostRoot, strings.TrimPrefix(path, filepath.Clean(hostRoot)))
+					}
+					if restrito {
+						final := alvo
+						if caminho.Windows {
+							final = caminho.FinalNoWindows(path)
+						}
+						if caminho.CaminhoSensivel(hostRoot, final) {
+							restritos++
+							return nil
+						}
 					}
 					st, serr := os.Stat(alvo)
 					if serr != nil {

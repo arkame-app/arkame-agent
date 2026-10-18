@@ -18,10 +18,13 @@ import (
 // cortar um backup ou uma restauração no meio.
 var intervaloDeSeguir = time.Minute
 
-// `marcaExtra`, se dada, entra na marca: no Docker, a versão confirmada no
-// volume (o programa da imagem não muda; o irmão sobe o do volume quando o
-// principal confirma a versão, e não a cada mudança do registro durante a prova).
-func seguirOPrograma(ctx context.Context, oc *ocupacao, reiniciar func(), marcaExtra func() string) {
+// `versaoNoVolume`, se dada (Docker), é a marca inteira: a versão confirmada
+// no volume. O executável não serve de marca lá: o programa da imagem não
+// muda, e o do volume é trocado no começo da prova. E o "" da prova (nada
+// confirmado) não conta como mudança: o irmão segue com o que tem e só
+// reinicia quando o principal confirma uma versão diferente (revisão, 18/10:
+// da 2ª atualização em diante ele caía no programa da imagem durante a prova).
+func seguirOPrograma(ctx context.Context, oc *ocupacao, reiniciar func(), versaoNoVolume func() string) {
 	programa, err := os.Executable()
 	if err != nil {
 		return
@@ -30,14 +33,13 @@ func seguirOPrograma(ctx context.Context, oc *ocupacao, reiniciar func(), marcaE
 		programa = real
 	}
 	marca := func() string {
-		m := "-"
+		if versaoNoVolume != nil {
+			return versaoNoVolume()
+		}
 		if fi, err := os.Stat(programa); err == nil {
-			m = fi.ModTime().String() + "|" + strconv.FormatInt(fi.Size(), 10)
+			return fi.ModTime().String() + "|" + strconv.FormatInt(fi.Size(), 10)
 		}
-		if marcaExtra != nil {
-			m += ";" + marcaExtra()
-		}
-		return m
+		return "-"
 	}
 	if _, err := os.Stat(programa); err != nil {
 		return
@@ -49,7 +51,7 @@ func seguirOPrograma(ctx context.Context, oc *ocupacao, reiniciar func(), marcaE
 			return
 		case <-time.After(intervaloDeSeguir):
 		}
-		if marca() == m0 {
+		if m := marca(); m == m0 || versaoNoVolume != nil && m == "" {
 			continue
 		}
 		if _, motivo := oc.reservar(); motivo != "" {

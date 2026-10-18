@@ -217,6 +217,7 @@ func compartilharCopiaLocal(ctx context.Context, o opcoesDoShare, out io.Writer)
 	}
 	// 1. O certificado cobrindo os endereços da rede, e o RustFS escutando nela.
 	certAntes, _ := localstore.ImpressaoDoCertificado(filepath.Join(local.LocalStoreTLS, localstore.ArquivoDoCertificado))
+	mesmaChave := localstore.TemChaveTLS(local.LocalStoreTLS)
 	cert, err := localstore.PrepararTLS(local.LocalStoreTLS, nomes...)
 	if err != nil {
 		return fmt.Errorf("certificado da cópia local: %w", err)
@@ -244,7 +245,11 @@ func compartilharCopiaLocal(ctx context.Context, o opcoesDoShare, out io.Writer)
 		}
 		fmt.Fprintf(out, "  ✓ Cópia local escutando na rede (porta %s)\n", porta)
 		if impressao != certAntes && certAntes != "" {
-			fmt.Fprintln(out, "  ✓ Certificado refeito com a mesma chave: os servidores que já gravam aqui continuam; os novos usam a impressão abaixo.")
+			if mesmaChave {
+				fmt.Fprintln(out, "  ✓ Certificado refeito com a mesma chave: os servidores que já gravam aqui continuam; os novos usam a impressão abaixo.")
+			} else {
+				fmt.Fprintln(out, "  ! Certificado refeito com chave nova (a antiga não pôde ser lida): os servidores que já gravam aqui precisam refazer o join com a impressão abaixo.")
+			}
 		}
 	}
 	// 2. A chave do cliente: grava e lê, não apaga.

@@ -13,8 +13,7 @@ var sensiveisUnix = []string{
 	"/root", "/etc/ssh", "/etc/shadow", "/etc/shadow-", "/etc/gshadow", "/etc/gshadow-",
 	"/etc/sudoers", "/etc/sudoers.d", "/etc/arkame", "/etc/ssl/private", "/etc/pki/tls/private",
 	"/etc/letsencrypt", "/etc/kubernetes/pki", "/run/secrets", "/etc/master.passwd", "/proc",
-	"/sysroot", "/ostree", "/.snapshots", "/private/etc/ssh", "/private/etc/arkame",
-	"/private/etc/sudoers", "/private/var/root", "/system/volumes/data", "/private/var/db/dslocal",
+	"/sysroot", "/ostree", "/.snapshots", "/system/volumes/data",
 }
 
 // Só a própria pasta ou dentro dela (não o que a contém): /var inteiro é backup comum.
@@ -32,13 +31,22 @@ func cobre(p, s string) bool {
 // servidor (/host no Docker).
 func PastaSensivel(hostRoot, origem string) string {
 	if Windows {
-		real := NoDisco(hostRoot, origem)
-		if r, err := filepath.EvalSymlinks(real); err == nil {
-			real = r
-		}
-		return sensivelNoWindows(real)
+		return sensivelNoWindows(FinalNoWindows(NoDisco(hostRoot, origem)))
 	}
-	real := Real(hostRoot, origem)
+	return sensivelNoReal(hostRoot, Real(hostRoot, origem))
+}
+
+// CaminhoSensivel faz a mesma conferência sobre um caminho já resolvido
+// (dentro de uma origem já conferida, ou o alvo de um link): é o que a cópia
+// de um plano do MCP pula, para `/home` não levar `/home/x/.ssh`.
+func CaminhoSensivel(hostRoot, real string) bool {
+	if Windows {
+		return sensivelNoWindows(real) != ""
+	}
+	return sensivelNoReal(hostRoot, real) != ""
+}
+
+func sensivelNoReal(hostRoot, real string) string {
 	raiz := filepath.Clean(hostRoot)
 	if raiz == "" || raiz == "." {
 		raiz = "/"
@@ -59,6 +67,15 @@ func PastaSensivel(hostRoot, origem string) string {
 
 func sensivelNoUnix(p string) bool {
 	u := strings.ToLower(p)
+	// No macOS, /etc e /var são links para /private/etc e /private/var, e o
+	// caminho real vem com o prefixo: confere-se também sem ele. /private
+	// inteiro contém /etc, como a raiz.
+	if u == "/private" {
+		return true
+	}
+	if resto, ok := strings.CutPrefix(u, "/private/"); ok && sensivelNoUnix("/"+resto) {
+		return true
+	}
 	if pastaDeChave(u) {
 		return true
 	}

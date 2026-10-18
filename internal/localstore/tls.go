@@ -218,6 +218,13 @@ func HashDoArquivo(caminho string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
+// TemChaveTLS diz se a pasta já tem uma chave que o PrepararTLS reaproveita:
+// com ela, o certificado refeito vale para quem guardou o antigo.
+func TemChaveTLS(pasta string) bool {
+	_, err := chaveExistente(filepath.Join(pasta, arquivoDaChaveTLS))
+	return err == nil
+}
+
 // chaveExistente lê a chave ECDSA do RustFS, se há uma válida.
 func chaveExistente(caminho string) (*ecdsa.PrivateKey, error) {
 	b, err := os.ReadFile(caminho)

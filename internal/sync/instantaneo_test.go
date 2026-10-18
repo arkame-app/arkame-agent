@@ -39,7 +39,7 @@ func TestWalkLeDoInstantaneoComAChaveDoDisco(t *testing.T) {
 		return p
 	}
 	arquivos, erros := walkSem(context.Background(), "/", []string{vivo}, nil, nil,
-		[]string{filepath.Join(vivo, "estado")}, nil, ler)
+		[]string{filepath.Join(vivo, "estado")}, nil, ler, false)
 	lidos := map[string]string{}
 	for f := range arquivos {
 		lidos[f.RelativePath] = f.AbsolutePath
