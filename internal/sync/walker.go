@@ -271,7 +271,9 @@ func walkSem(ctx context.Context, hostRoot string, sourcePaths []string, exclude
 							// de fora (revisão, 18/10).
 							final = caminho.FinalNoWindows(noDisco(path))
 						}
-						if caminho.CaminhoSensivel(hostRoot, final) || caminho.Windows && !caminho.ResolvidoNoWindows(final) {
+						// Um link resolvido nunca dá nele mesmo: se deu, o do disco não
+						// abriu (trocado depois do instantâneo), e fica de fora.
+						if caminho.CaminhoSensivel(hostRoot, final) || caminho.Windows && (!caminho.ResolvidoNoWindows(final) || final == noDisco(path)) {
 							restritos++
 							return nil
 						}
