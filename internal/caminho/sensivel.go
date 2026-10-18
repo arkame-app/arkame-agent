@@ -124,3 +124,13 @@ func pastaDeChave(u string) bool {
 	}
 	return strings.Contains(u+"/", "/.config/arkame/")
 }
+
+// ResolvidoNoWindows diz se p é um caminho com unidade (C:\...) ou de
+// compartilhamento (\\srv\...), e não um caminho de dispositivo
+// (\\?\GLOBALROOT\...) que a conferência não sabe ler.
+func ResolvidoNoWindows(p string) bool {
+	if Unidade(p) != "" && len(p) >= 3 && (p[2] == '\\' || p[2] == '/') {
+		return true
+	}
+	return strings.HasPrefix(p, `\\`) && !strings.HasPrefix(p, `\\?\`) && !strings.HasPrefix(p, `\\.\`)
+}

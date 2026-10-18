@@ -265,9 +265,13 @@ func walkSem(ctx context.Context, hostRoot string, sourcePaths []string, exclude
 					if restrito {
 						final := alvo
 						if caminho.Windows {
-							final = caminho.FinalNoWindows(path)
+							// Pelo caminho do disco: o do instantâneo (VSS) não tem
+							// unidade, e a conferência não o reconheceria. O que não
+							// resolve para uma unidade ou um compartilhamento fica
+							// de fora (revisão, 18/10).
+							final = caminho.FinalNoWindows(noDisco(path))
 						}
-						if caminho.CaminhoSensivel(hostRoot, final) {
+						if caminho.CaminhoSensivel(hostRoot, final) || caminho.Windows && !caminho.ResolvidoNoWindows(final) {
 							restritos++
 							return nil
 						}

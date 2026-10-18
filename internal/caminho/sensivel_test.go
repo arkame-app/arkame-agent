@@ -80,3 +80,20 @@ func TestSensivelComPrefixoPrivate(t *testing.T) {
 		}
 	}
 }
+
+func TestResolvidoNoWindows(t *testing.T) {
+	casos := map[string]bool{
+		`C:\dados\x`: true,
+		`D:/x`:       true,
+		`\\srv\x`:    true,
+		`\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy3\dados\x`: false,
+		`\\.\PhysicalDrive0`: false,
+		`C:`:                 false,
+		`dados`:              false,
+	}
+	for p, quer := range casos {
+		if got := ResolvidoNoWindows(p); got != quer {
+			t.Errorf("%s: %v, queria %v", p, got, quer)
+		}
+	}
+}
