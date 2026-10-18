@@ -222,7 +222,11 @@ func lancarDoVolume(configFile string) {
 	// O programa do volume vem aberto e conferido pelo descritor, e é pelo
 	// descritor que é executado: entre conferir e executar não há caminho em
 	// texto para alguém trocar.
-	aberto, porque := atualizacao.AbrirDoVolume(programa, version.Version,
+	abrir := atualizacao.AbrirDoVolume
+	if segue {
+		abrir = atualizacao.AbrirDoVolumeParaIrmao
+	}
+	aberto, porque := abrir(programa, version.Version,
 		atualizacao.ChavesConfiaveis(), atualizacao.NomeNoRelease())
 	if aberto == nil {
 		slog.Debug("lançador: sigo com o programa da imagem", "motivo", porque)

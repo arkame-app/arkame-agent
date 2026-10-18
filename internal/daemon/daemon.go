@@ -113,9 +113,18 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// Os processos irmãos (a cópia local, a cópia da rede do `join`) não se
 	// atualizam sozinhos: quem troca o programa é o principal, e eles
 	// reiniciam quando ele muda. Sem isto, o da rede ficava na versão antiga.
-	if cfg.LocalStoreProgram != "" || atualizacao.Desligada(cfg.AutoUpdate) {
+	if ehIrmao(cfg) || strings.EqualFold(strings.TrimSpace(cfg.AutoUpdate), "off") {
+		// No Docker, o programa novo chega no volume (o da imagem não muda).
+		var vigiar []string
+		if atualizacao.EmDocker() {
+			v := atualizacao.ProgramaDoVolume(cfg.ConfigPath)
+			vigiar = append(vigiar, v, atualizacao.LugarDe(v).Estado)
+		}
 		wg.Add(1)
-		go func() { defer wg.Done(); seguirOPrograma(ctx, oc, func() { parar(atualizacao.ErrReiniciar) }) }()
+		go func() {
+			defer wg.Done()
+			seguirOPrograma(ctx, oc, func() { parar(atualizacao.ErrReiniciar) }, vigiar...)
+		}()
 	}
 	wg.Add(11)
 	go func() { defer wg.Done(); heartbeatLoop(ctx, client, cfg, svc, atl) }()

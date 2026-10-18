@@ -254,6 +254,18 @@ func Load(envFile string, o Overrides) (*Config, error) {
 	}
 	cfg.StateAlways = cfg.StateDir != "" && (modoDoEstado == "always" || modoDoEstado == "sempre")
 
+	// Os irmãos gravados pela 0.5.3 (sem ARKAME_ROLE, com ARKAME_AUTO_UPDATE=off):
+	// pelo nome do arquivo, o da rede é network_copy e os dois seguem o
+	// programa do principal (revisão, 18/10).
+	base := filepath.Base(cfg.ConfigPath)
+	daRede := strings.HasPrefix(base, "agent-rede-") && strings.HasSuffix(base, ".env")
+	if cfg.Role == "" && daRede {
+		cfg.Role = "network_copy"
+	}
+	if (daRede || base == "agent-local.env") && strings.EqualFold(strings.TrimSpace(cfg.AutoUpdate), "off") {
+		cfg.AutoUpdate = "follow"
+	}
+
 	// O AGENT_ID só entrava pelo env-file, e só o `install` com a pergunta da
 	// chave o escrevia lá. Com a chave já no arquivo, ou com
 	// --check-storage=false, o enrollment gravava só o agent.id — e o daemon

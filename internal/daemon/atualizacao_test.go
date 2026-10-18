@@ -715,3 +715,12 @@ func TestCopiaLocalTambemNoConteiner(t *testing.T) {
 		t.Fatalf("em contêiner, o agente não anunciou a cópia local: %v", caps)
 	}
 }
+
+// Só o principal abre a prova do programa novo.
+func TestIrmaoNaoAbreAProva(t *testing.T) {
+	for _, cfg := range []*config.Config{{LocalStoreProgram: "/opt/arkame/rustfs/rustfs"}, {Role: api.PapelCopiaDaRede}, {AutoUpdate: "follow"}} {
+		if p := provaDoProcesso(cfg, "/usr/local/bin/arkame-agent"); p != nil {
+			t.Fatalf("o irmão %+v abriu a prova", cfg)
+		}
+	}
+}

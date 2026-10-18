@@ -191,7 +191,7 @@ func novoAtualizador(cfg *config.Config, svc service.Detected, s3c *s3.Client, o
 		impedimento: inst.Impedimento(),
 		svc:         svc,
 		s3c:         s3c,
-		prova:       atualizacao.AbrirProva(programa, version.Version),
+		prova:       provaDoProcesso(cfg, programa),
 		pedidos:     make(chan api.UpdateOffer, 1),
 		naoAntesDe:  map[string]time.Time{},
 		aplicar:     atualizacao.Aplicar,
@@ -500,4 +500,20 @@ func versaoDoLancador() string {
 		return ""
 	}
 	return os.Getenv(atualizacao.EnvVersaoDoLancador)
+}
+
+// ehIrmao: a cópia local ou a cópia da rede, que seguem o programa do
+// principal em vez de trocá-lo.
+func ehIrmao(cfg *config.Config) bool {
+	return cfg.LocalStoreProgram != "" || cfg.Role == api.PapelCopiaDaRede || atualizacao.Segue(cfg.AutoUpdate)
+}
+
+// provaDoProcesso: só o principal abre (e confirma) a prova do programa novo.
+// O irmão confirmava pelo principal, e um programa que só derrubava o
+// principal não voltava atrás (revisão, 18/10).
+func provaDoProcesso(cfg *config.Config, programa string) *atualizacao.Prova {
+	if ehIrmao(cfg) {
+		return nil
+	}
+	return atualizacao.AbrirProva(programa, version.Version)
 }

@@ -76,10 +76,26 @@ func ProgramaDoVolume(configPath string) string {
 // Conferido pelo caminho e executado pelo caminho, sobrava a janela entre os
 // dois: quem trocasse o arquivo ali rodava o que quisesse como o agente.
 func AbrirDoVolume(programa, versaoDaImagem string, chaves []ed25519.PublicKey, nomeNoRelease string) (*os.File, string) {
+	return abrirDoVolume(programa, versaoDaImagem, chaves, nomeNoRelease, false)
+}
+
+// AbrirDoVolumeParaIrmao é o AbrirDoVolume do processo irmão (a cópia local, a
+// cópia da rede): só o programa que o principal já confirmou, e sem contar a
+// partida. Contando, e rodando a versão em prova, o irmão a confirmava pelo
+// principal (o heartbeat dele é aceito) e a volta automática não acontecia
+// quando o defeito era só do principal (revisão, 18/10).
+func AbrirDoVolumeParaIrmao(programa, versaoDaImagem string, chaves []ed25519.PublicKey, nomeNoRelease string) (*os.File, string) {
+	return abrirDoVolume(programa, versaoDaImagem, chaves, nomeNoRelease, true)
+}
+
+func abrirDoVolume(programa, versaoDaImagem string, chaves []ed25519.PublicKey, nomeNoRelease string, irmao bool) (*os.File, string) {
 	l := LugarDe(programa)
 	e, ok := l.lerEstado()
 	if !ok || !e.PeloLancador {
 		return nil, "sem programa baixado no volume"
+	}
+	if irmao && e.Situacao != SituacaoConfirmada {
+		return nil, "o programa do volume ainda está em prova no agente principal"
 	}
 	if e.Situacao != SituacaoEmProva && e.Situacao != SituacaoConfirmada {
 		return nil, "o programa do volume foi abandonado (" + e.Motivo + ")"
