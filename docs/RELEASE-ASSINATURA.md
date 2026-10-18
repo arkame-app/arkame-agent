@@ -2,7 +2,7 @@
 
 O agente troca o próprio programa quando o painel manda (`internal/atualizacao`).
 Ele só aceita um programa cujo `checksums.txt` foi assinado pela **chave de
-release** — Ed25519, com a parte pública embutida no agente. Este documento é
+release** (Ed25519), com a parte pública embutida no agente. Este documento é
 de quem publica: como gerar a chave, onde guardá-la, como trocá-la e como
 ensaiar tudo sem a chave de verdade.
 
@@ -12,7 +12,7 @@ Antes de pôr um programa novo no lugar, o agente exige, nesta ordem:
 
 1. **Versão maior** que a atual (X.Y.Z, comparada campo a campo).
 2. **Assinatura Ed25519** do `checksums.txt` do release (`checksums.txt.ed25519`)
-   contra as chaves públicas embutidas — duas posições, a atual e a próxima.
+   contra as chaves públicas embutidas, em duas posições, a atual e a próxima.
    O que se assina é `arkame-agent-release\n<versão>\n` + o conteúdo do
    `checksums.txt`: a versão entra para um `checksums.txt` antigo (e assinado)
    não poder ser servido como se fosse a versão nova.
@@ -51,7 +51,7 @@ Mais o que o agente confere no caminho:
   SHA-256 do programa que saiu, guardado no registro da troca.
 - **Sem anterior utilizável**, a prova que vence não finge que reverteu: o
   registro vira `sem_volta`, o painel recebe `rollback_unavailable` e o
-  programa novo segue — o primeiro heartbeat aceito ainda confirma a troca.
+  programa novo segue; o primeiro heartbeat aceito ainda confirma a troca.
 - **A restauração não grava na pasta do programa** nem na da configuração do
   agente (`protected_destination`): é a pasta que o serviço pode gravar para
   se atualizar, e por ela um item restaurado como `arkame-agent` entraria sem
@@ -76,14 +76,14 @@ terminal.
    A **privada** (o seed, 44 caracteres em base64) é gravada no arquivo, com
    modo `0600`; o comando recusa gravar por cima de um arquivo que já existe.
    No terminal saem só a **pública** (44 caracteres) e o caminho do arquivo.
-   Prefira um caminho que não seja sincronizado (nuvem, backup automático) —
+   Prefira um caminho que não seja sincronizado (nuvem, backup automático)
    ou, melhor, um disco em memória (`/dev/shm/arkame-release.key`).
 
 2. Guarde a privada em dois lugares, **nesta ordem**:
    - **Fora do GitHub**: copie o conteúdo do arquivo para o cofre
      (gerenciador de senhas, ou papel em cofre). Sem essa cópia, perder o
      acesso ao GitHub é perder a capacidade de publicar atualização que os
-     agentes aceitem — só restaria a atualização manual de cada servidor.
+     agentes aceitem: só restaria a atualização manual de cada servidor.
    - **GitHub** → repositório `arkame-app/arkame-agent` → *Settings* →
      *Environments* → **New environment** `release`. Em *Deployment protection
      rules*, marque **Required reviewers** (você) e, em *Deployment branches
@@ -103,7 +103,7 @@ terminal.
    ```
 
 4. Embuta a pública: em `internal/atualizacao/chaves.go`, preencha
-   `chavePublicaAtual` com a linha da chave pública. Commit normal — a chave
+   `chavePublicaAtual` com a linha da chave pública. Commit normal: a chave
    pública não é segredo. A mesma linha vai na variável
    `AGENT_RELEASE_PUBLIC_KEYS` do backoffice (ver "Publicar a versão no
    backoffice").
@@ -127,14 +127,14 @@ confia em atualização nenhuma.
 sequência. Todas as actions estão fixadas pelo SHA do commit, o GoReleaser tem
 a versão fixa, e cada job declara só as permissões que usa.
 
-1. **`testes`** (`contents: read`) — prova o commit da tag; inclui
+1. **`testes`** (`contents: read`): prova o commit da tag; inclui
    `go test -tags release ./internal/atualizacao/`.
-2. **`goreleaser`** — compila com `-tags release`, gera o `checksums.txt`,
+2. **`goreleaser`**: compila com `-tags release`, gera o `checksums.txt`,
    assina com o cosign (keyless), publica as imagens no ghcr e cria o release
    como **rascunho**. Este job **não tem a chave Ed25519**: nele rodam o
    GoReleaser, o cosign, o buildx e o go-winres, e nenhum deles vê o segredo.
    O `checksums.txt` sai como artefato do workflow.
-3. **`assinar`**, no environment `release` (espera a sua aprovação) — só
+3. **`assinar`**, no environment `release` (espera a sua aprovação): só
    `actions/checkout` e `actions/setup-go` (fixados), a ferramenta deste
    repositório e o `gh` do runner. Baixa o `checksums.txt` do job anterior,
    confere que é, byte a byte, o que está no rascunho do release, assina com
@@ -145,7 +145,7 @@ a versão fixa, e cada job declara só as permissões que usa.
 
 **Não existe release público sem a assinatura.** Se o job `assinar` falhar, ou
 se a aprovação for negada ou expirar, o workflow fica vermelho e o release
-continua rascunho — invisível para o `install.sh` (que baixa o "latest") e
+continua rascunho, invisível para o `install.sh` (que baixa o "latest") e
 para os agentes. Para tentar de novo: *Re-run failed jobs* no workflow. Para
 desistir: apague o rascunho e a tag.
 
@@ -161,7 +161,7 @@ Versões): informe só a versão. O backoffice baixa o `checksums.txt` e o
 `checksums.txt.ed25519` **daquele release**, confere a assinatura com a chave
 pública configurada em `AGENT_RELEASE_PUBLIC_KEYS` (as mesmas de
 `chaves.go`; duas, separadas por vírgula, durante uma rotação) e tira dali o
-SHA-256 de cada sistema — o segundo canal da conferência que o agente faz.
+SHA-256 de cada sistema, o segundo canal da conferência que o agente faz.
 
 **Onde fica a variável.** `AGENT_RELEASE_PUBLIC_KEYS` é variável de ambiente
 do Deployment `admin` no cluster. A chave é pública, então fica em texto no
@@ -188,10 +188,10 @@ com `signature_invalid` em todo servidor. Sem a variável configurada, publicar
 As duas posições existem para a troca não exigir atualização manual:
 
 1. Gere a chave nova (`gerar --saida`, como acima) e ponha a pública em
-   `chavePublicaProxima` — e, no backoffice, acrescente-a a
+   `chavePublicaProxima` e, no backoffice, acrescente-a a
    `AGENT_RELEASE_PUBLIC_KEYS`. Publique uma versão (assinada ainda com a
    chave atual).
-2. Espere os agentes chegarem a essa versão — eles passam a conhecer as duas.
+2. Espere os agentes chegarem a essa versão: eles passam a conhecer as duas.
 3. Troque o segredo `ARKAME_RELEASE_ED25519_KEY` pela privada nova
    (`gh secret set … --env release < arquivo`, e apague o arquivo); no código,
    passe a pública nova para `chavePublicaAtual` e esvazie
@@ -259,8 +259,8 @@ código):
 Ao mexer nos workflows, passe o `actionlint` neles antes do commit (não é
 dependência do repositório; a mudança que separou o job `assinar` foi
 conferida só com um leitor de YAML, e a primeira execução de verdade é a do
-ensaio acima). A lógica do job `assinar` — baixar, comparar, assinar,
-conferir — roda igual fora do GitHub, com os comandos `assinar` e `verificar`
+ensaio acima). A lógica do job `assinar` (baixar, comparar, assinar,
+conferir) roda igual fora do GitHub, com os comandos `assinar` e `verificar`
 acima.
 
 ## Limites conhecidos
@@ -284,12 +284,12 @@ acima.
   imagem em si não muda: trocar a imagem continua manual
   (`docker run --pull always …`). `ARKAME_AUTO_UPDATE=off` desliga.
 - **Agente rodando à mão** (sem systemd, launchd, SCM ou Docker): não se
-  atualiza sozinho — ninguém religaria o processo. O comando
+  atualiza sozinho: ninguém religaria o processo. O comando
   `arkame-agent update` continua valendo.
 - **Painel fora do ar durante a prova**: a prova é estendida enquanto o
   painel não atende, até 30 minutos contados da troca. Passado o teto, o
   programa novo é revertido mesmo que a culpa seja do painel; a versão
-  revertida não volta sozinha àquele servidor — no painel, "Tentar de novo"
+  revertida não volta sozinha àquele servidor; no painel, "Tentar de novo"
   (ou, no backoffice, "Retomar e tentar de novo" para a onda inteira). O
   painel não conta esse tipo de falha contra a versão.
 - **Windows: a janela entre os dois renames.** No Windows o `.exe` em uso não
@@ -304,7 +304,7 @@ acima.
   cinco vezes (um antivírus lendo o arquivo recém-baixado o segura por um
   instante) antes de desfazer o primeiro. **O que resta**: uma queda de
   energia, ou o processo morto, exatamente entre os dois renames deixa o
-  serviço sem programa para subir — o SCM não tem o que executar, e nenhum
+  serviço sem programa para subir: o SCM não tem o que executar, e nenhum
   código do agente roda para consertar. Os dois arquivos ficam inteiros ao
   lado, e o conserto é um destes: rodar o instalador de novo; renomear
   `arkame-agent.anterior.exe` de volta; ou executar o anterior, que põe o

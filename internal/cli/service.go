@@ -176,7 +176,7 @@ func newServiceStatusCmd() *cobra.Command {
 		RunE: func(_ *cobra.Command, _ []string) error {
 			d := service.Detect()
 			if d.Name == "" {
-				fmt.Println("Nenhum serviço detectado — este processo está rodando à mão.")
+				fmt.Println("Nenhum serviço detectado: este processo está rodando à mão.")
 				return nil
 			}
 			fmt.Printf("Serviço: %s (%s)\n", d.Name, d.Scope)

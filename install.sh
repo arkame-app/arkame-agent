@@ -548,7 +548,7 @@ main() {
       return 0
     fi
     printf '\n'
-    info "Próximo passo — registre este servidor no painel:"
+    info "Próximo passo: registre este servidor no painel:"
     printf '\n'
     case "$BIN_DIR/" in
       "${HOME:-/nenhum}"/*)

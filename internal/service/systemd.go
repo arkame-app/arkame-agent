@@ -239,7 +239,7 @@ func installSystemd(ctx context.Context, cfg *config.Config, opts Options) (*Ins
 		// parado por 10 minutos.
 		if err := enableLinger(ctx); err != nil {
 			inst.LingerNote = fmt.Sprintf(
-				"não consegui habilitar lingering automaticamente (%v). Rode: sudo loginctl enable-linger %s — sem isso o agent para quando você deslogar.",
+				"não consegui habilitar lingering automaticamente (%v). Rode: sudo loginctl enable-linger %s. Sem isso, o agent para quando você deslogar.",
 				err, currentUsername())
 		}
 	} else {

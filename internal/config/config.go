@@ -283,7 +283,7 @@ func (c *Config) TokenExists() bool {
 		return false
 	}
 	if strings.TrimSpace(string(b)) == "" {
-		slog.Error("o arquivo do token está vazio — a gravação pode ter sido interrompida (queda de energia); rode 'arkame-agent install' de novo", "path", c.TokenPath)
+		slog.Error("o arquivo do token está vazio: a gravação pode ter sido interrompida (queda de energia); rode 'arkame-agent install' de novo", "path", c.TokenPath)
 		return false
 	}
 	return true

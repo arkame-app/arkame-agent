@@ -226,7 +226,7 @@ func outrosNaoTrocam(p string, raiz bool) error {
 			return fmt.Errorf("%w: %s: %v", ErrDonoNaoConfiavel, abs, err)
 		}
 		if entrega {
-			return fmt.Errorf("%w: %s deixa a conta %s renomeá-la ou mudar a permissão dela — tire dessa conta o direito de modificar a pasta, ou use a pasta padrão (C:\\ProgramData\\Arkame\\dumps)", ErrDonoNaoConfiavel, abs, nomeDaConta(a.SID))
+			return fmt.Errorf("%w: %s deixa a conta %s renomeá-la ou mudar a permissão dela; tire dessa conta o direito de modificar a pasta, ou use a pasta padrão (C:\\ProgramData\\Arkame\\dumps)", ErrDonoNaoConfiavel, abs, nomeDaConta(a.SID))
 		}
 	}
 	runtime.KeepAlive(sd)

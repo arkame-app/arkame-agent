@@ -65,7 +65,7 @@ func outrosNaoTrocam(p string, _ bool) error {
 		return err
 	}
 	if fi.Mode().Perm()&0o022 != 0 && fi.Mode()&os.ModeSticky == 0 {
-		return fmt.Errorf("%w: %s pode ser alterada por outros usuários (modo %v) — tire a escrita do grupo e dos outros (chmod go-w)", ErrDonoNaoConfiavel, p, fi.Mode().Perm())
+		return fmt.Errorf("%w: %s pode ser alterada por outros usuários (modo %v); tire a escrita do grupo e dos outros (chmod go-w)", ErrDonoNaoConfiavel, p, fi.Mode().Perm())
 	}
 	return nil
 }

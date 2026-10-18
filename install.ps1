@@ -23,7 +23,7 @@
 
   Instalar o serviço exige administrador. Quem roda sem ser administrador vê o
   pedido de permissão do Windows e o instalador continua numa janela nova, já
-  elevada — ninguém precisa saber abrir o PowerShell como administrador.
+  elevada; ninguém precisa saber abrir o PowerShell como administrador.
 
   O comando da primeira linha não usa `$`: colado no Executar, no Prompt de
   Comando ou no PowerShell, chega igual ao instalador.

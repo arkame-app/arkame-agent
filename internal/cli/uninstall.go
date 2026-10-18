@@ -56,7 +56,7 @@ func newUninstallCmd() *cobra.Command {
 
 			configFile, err := configDoAgente(cmd, configFile, serviceName, serviceScope)
 			if err != nil {
-				return fmt.Errorf("%w — nada foi removido", err)
+				return fmt.Errorf("%w (nada foi removido)", err)
 			}
 			cfg, err := config.Load(configFile, config.Overrides{})
 			if err != nil {
@@ -77,7 +77,7 @@ func newUninstallCmd() *cobra.Command {
 				return fmt.Errorf("não encontrei a configuração do agente em %s: nada foi removido (use --config com o caminho da instalação)", configFile)
 			}
 			if perr := setup.PodeGravar(configFile); perr != nil {
-				return fmt.Errorf("%w — nada foi removido", perr)
+				return fmt.Errorf("%w (nada foi removido)", perr)
 			}
 			// Os outros agentes desta máquina podem usar o mesmo token, chave
 			// e agent.id (o padrão é /etc/arkame/ para todos): apagá-los

@@ -71,7 +71,7 @@ func Registrar(exe, versao, servico string, argsDoUninstall []string) error {
 		return fmt.Errorf("registrando em Aplicativos instalados: %w", err)
 	}
 	defer k.Close()
-	nome := "Arkame — agente de backup"
+	nome := "Agente de backup Arkame"
 	if servico != "" && servico != "arkame-agent" {
 		nome += " (" + servico + ")"
 	}

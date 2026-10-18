@@ -34,7 +34,7 @@ painel reapontado para outro provedor mantém o id e o nome do bucket, mas as ve
 registradas não existem lá.
 
 **A pasta é só do administrador.** O estado decide o que o backup lê e o que ele afirma ao
-painel, e guarda o nome de todos os arquivos do servidor. A pasta é criada fechada — 0700; no
+painel, e guarda o nome de todos os arquivos do servidor. A pasta é criada fechada: 0700; no
 Windows, com a DACL protegida de Administradores e SYSTEM, herdada pelo que for gravado
 dentro (o 0700 lá não restringe nada, e `%ProgramData%` deixa qualquer usuário ler e criar
 arquivos). Pasta que **já existia em nome de outro usuário** (no Windows, também a que é
@@ -60,12 +60,12 @@ não é consultado. Não servem de atalho:
 
 - entrada de uma sessão que o painel não confirmou (ver "duas fases");
 - entrada de **data suspeita**: a data de modificação estava a menos de 2 s do início da
-  leitura — uma alteração logo depois pode cair na mesma data;
+  leitura, e uma alteração logo depois pode cair na mesma data;
 - entrada que venceu na **reconferência rotativa**: cada arquivo é relido e conferido com
   `HeadObject` uma vez a cada 30 dias (`ARKAME_VERIFY_DAYS`), em dia espalhado por um hash
   da chave, com teto por execução: a fração do ciclo que passou desde a última execução
-  confirmada, com 10% de folga — 1/30 dos arquivos num plano diário, 7/30 num semanal, o
-  ciclo inteiro depois de 30 dias parado —, no mínimo 1.000 (o que não coube fica para a
+  confirmada, com 10% de folga (1/30 dos arquivos num plano diário, 7/30 num semanal, o
+  ciclo inteiro depois de 30 dias parado), no mínimo 1.000 (o que não coube fica para a
   execução seguinte). A contagem de arquivos do plano é atualizada também em sessão
   parcial. Data de reconferência além de hoje + o ciclo (o relógio do servidor esteve
   adiantado) conta como vencida. É o que pega conteúdo alterado com as mesmas datas
@@ -74,17 +74,17 @@ não é consultado. Não servem de atalho:
 - nada, quando a **amostra** não confere ou o estado é de **outra época** (abaixo);
 - tudo, com `ARKAME_REHASH_ALL=1` (enquanto a variável estiver ligada) ou `run
   --rehash-all` (a flag vale para UM backup de cada plano depois da partida; os seguintes
-  voltam ao atalho — num serviço a flag ficaria na linha de comando para sempre).
+  voltam ao atalho; num serviço a flag ficaria na linha de comando para sempre).
 
 No Windows o Go não dá o ctime: lá o atalho é tamanho + mtime, e "mudou sem mudar a data"
 depende só da reconferência rotativa.
 
 **Amostra no bucket.** O atalho afirma, sem consultar o bucket, que a versão registrada
-continua lá — e deixa de ser verdade quando alguém mexe no bucket por fora (versões
+continua lá, e deixa de ser verdade quando alguém mexe no bucket por fora (versões
 apagadas, bucket recriado com o mesmo nome, regra de ciclo de vida). Por isso toda execução
 que vai usar o atalho começa conferindo 32 entradas sorteadas do estado: `HeadObject` com o
 `VersionId` registrado, que tem de devolver o mesmo sha256 e o mesmo tamanho. **Uma que
-falhe — versão que sumiu, outro conteúdo, bucket que não respondeu — e a execução inteira lê
+falhe (versão que sumiu, outro conteúdo, bucket que não respondeu) e a execução inteira lê
 e confere tudo**, como a v0.4.31: o que sumiu sobe de novo, o que está lá não é reenviado. A
 amostra é fixa (não cresce com o plano) e sorteada de novo a cada execução. Bucket
 esvaziado, recriado ou trocado derruba todas as entradas e é pego com certeza; perda parcial
@@ -95,15 +95,15 @@ gravar fora do prefixo dos dados (permissão a mais; regra de ciclo de vida que 
 viraria alarme falso para sempre).
 
 **Época.** O atalho só vale se a última sessão confirmada do estado é a que o painel
-devolve como `base_session_id`. Se não é — cópia antiga do arquivo restaurada (rollback de
-snapshot, VM clonada), painel que perdeu sessões ou religou os lotes —, a execução lê e
+devolve como `base_session_id`. Se não é (cópia antiga do arquivo restaurada por rollback de
+snapshot ou VM clonada, painel que perdeu sessões ou religou os lotes), a execução lê e
 confere tudo e manda o inventário inteiro. Contra o painel sem lotes
 (`ARKAME_STATE=always`) não há base para comparar, e vale só a amostra.
 
 **Duas fases.** A entrada nasce com a geração da sessão que a gravou. A geração só passa a
 valer com o `/complete` 200 daquela sessão. `kill -9`, queda de energia, painel que recusa:
 as entradas ficam no arquivo, mas a execução seguinte as trata como ausentes (lê, confere no
-bucket — sem reenviar o que já subiu — e leva ao índice de novo). Uma exceção, que evita
+bucket, sem reenviar o que já subiu, e leva ao índice de novo). Uma exceção, que evita
 reler tudo quando só a resposta se perdeu: se o painel devolve como `base_session_id` a
 sessão pendente **e o agente a tinha marcado como pronta** antes de mandar o `/complete`,
 ela está confirmada. A marca só é gravada com o estado inteiro e alinhado ao índice: quando
@@ -118,20 +118,20 @@ numa exclusão do plano). A entrada vira uma lápide e só some quando o painel 
 sessão que levou a remoção; senão, a remoção sai de novo.
 
 **Removidos em sessão parcial (prova positiva).** Num servidor que sempre tem um arquivo
-que não dá para ler ou enviar — medido: 46 de nome não-UTF-8 em 951 mil —, toda varredura é
+que não dá para ler ou enviar (medido: 46 de nome não-UTF-8 em 951 mil), toda varredura é
 incompleta, e pela regra acima nada sairia do catálogo, nunca. Por isso o agente declara
 `index_removed_partial`; quando o painel responde `index.removed_partial: true` no
 `/sessions/start` (só junto com o delta), a sessão em delta de varredura incompleta emite
 `removed` para a entrada não vista que tem **prova positiva** de ter saído:
 
-1. o `lstat` do arquivo devolve "não existe" — existe, sem permissão, erro de disco ou um
-   arquivo no meio do caminho não provam nada; **e**
+1. o `lstat` do arquivo devolve "não existe" (existe, sem permissão, erro de disco ou um
+   arquivo no meio do caminho não provam nada); **e**
 2. a pasta-mãe foi aberta e listada sem erro nesta varredura. Se a pasta-mãe também não
    existe mais (a pasta inteira foi apagada), vale a pasta listada mais próxima acima dela,
    desde que o filho dela no caminho do arquivo não exista mais.
 
-Pasta que existe e não foi listada — sem permissão, erro de leitura, pasta do plano que não
-abriu — não prova nada do que está abaixo dela: é o caso que a regra existe para separar
+Pasta que existe e não foi listada (sem permissão, erro de leitura, pasta do plano que não
+abriu) não prova nada do que está abaixo dela: é o caso que a regra existe para separar
 ("não foi lido" de "saiu"). O arquivo sem prova segue sem entrada, e o painel o mantém
 presente com a versão da base. Chave sob mais de uma pasta do plano precisa da prova em
 todas. O que **não** muda em sessão parcial: `unselected` continua só na varredura completa;
@@ -140,15 +140,15 @@ que não oferece `removed_partial`, nada é emitido, como antes.
 
 As pastas listadas ficam num conjunto de resumos de 64 bits (8 bytes por pasta, não o
 caminho), montado pelo walker só quando a prova pode ser usada. O custo a mais é um `lstat`
-por entrada não vista — as ilegíveis e as removidas, não o plano inteiro — e uma passada
+por entrada não vista (as ilegíveis e as removidas, não o plano inteiro) e uma passada
 pelo estado, a mesma que a varredura completa já faz ao fechar.
 
 O que a prova não cobre, de propósito (guarda a mais, nunca a menos): no Windows, a pasta
-renomeada só na caixa (`Docs` → `docs`) — as entradas antigas respondem "existe" pelo nome
+renomeada só na caixa (`Docs` → `docs`): as entradas antigas respondem "existe" pelo nome
 novo e esperam a primeira varredura completa; o caminho que deixou de ser arquivo comum
 (virou pasta, soquete); e a pasta do plano que sumiu inteira (não há pasta listada acima
 dela). E o que ela afirma a mais: ponto de montagem vazio (o disco não montou e a pasta
-existe) lista sem erro, e os arquivos dele saem como `removed` — o mesmo que a varredura
+existe) lista sem erro, e os arquivos dele saem como `removed`, o mesmo que a varredura
 completa já fazia nesse caso; quando o disco volta, o backup seguinte os devolve ao índice
 sem reenviar nada.
 
@@ -161,11 +161,11 @@ inventário inteiro e reconstrói o estado. Nenhum arquivo igual é reenviado: o
 **Expurgo e restauração.** Depois de `purge.Run`, as entradas cuja versão foi apagada
 recebem baixa. O mesmo quando uma restauração não acha a versão no bucket (`not_found`) ou
 baixa um conteúdo que não confere com o índice (tamanho ou sha256). A entrada não é apagada:
-deixa de afirmar versão e de servir de atalho. O backup seguinte lê o arquivo, o confere —
-ou envia — e o leva ao índice de novo; se o arquivo saiu da origem nesse meio-tempo, é da
+deixa de afirmar versão e de servir de atalho. O backup seguinte lê o arquivo, o confere
+(ou envia) e o leva ao índice de novo; se o arquivo saiu da origem nesse meio-tempo, é da
 entrada que sai o `removed`. Com um backup em curso, a baixa espera ele fechar. Ela vai a
 todos os arquivos de estado do agente + armazenamento (o da pasta principal e o da pasta da
-configuração, se os dois existirem) e os abre como estão, sem conferir de quem são — a
+configuração, se os dois existirem) e os abre como estão, sem conferir de quem são: a
 identidade do arquivo é assunto do backup.
 
 **Inventário de sessão parcial.** Quando a sessão vai ao painel como inventário (`full`,
@@ -189,7 +189,7 @@ da execução (memória de arquivo, que o sistema recolhe sob pressão).
 O agente declara `index_batches` e `index_delta`. Se a resposta do `/sessions/start` traz
 `index.mode = "batches"`, as entradas vão por `POST …/sessions/{sid}/files` durante o backup
 e o `/complete` leva só estatísticas e a contagem. Sem `index` na resposta (painel de antes
-do contrato), o `/complete` é o de sempre, com o `version_map` inteiro — byte a byte o da
+do contrato), o `/complete` é o de sempre, com o `version_map` inteiro, byte a byte o da
 v0.4.31 (conferido: 32.434.029 bytes nos dois, ver a medição).
 
 - Cada lote fechado vai para um arquivo temporário (gzip) na pasta do estado, e o envio lê
@@ -201,16 +201,16 @@ v0.4.31 (conferido: 32.434.029 bytes nos dois, ver a medição).
   `base_session_id`. Arquivo inalterado não gera entrada; sem mudança são zero lotes.
 - Recusa que reenviar não resolve (`409 base_mismatch`, `seq_conflict`, `session_closed`):
   a sessão leva `/fail` (`index_rejected`) e o índice vai inteiro numa **sessão nova**,
-  tirado do estado local (só os arquivos vistos e guardados nesta execução) — sem reler
+  tirado do estado local (só os arquivos vistos e guardados nesta execução), sem reler
   arquivo, sem reenviar, sem repetir os comandos antes/depois do plano. Uma vez só.
 - **Recusa definitiva**, sem sessão nova: `413 index_too_large` (o índice passa do teto do
-  painel) e `400 invalid_batch` (uma entrada que o painel não aceita — a sessão nova a
+  painel) e `400 invalid_batch` (uma entrada que o painel não aceita; a sessão nova a
   levaria de novo). A sessão leva `/fail` (`complete_failed`) e o backup falha com o que o
   painel devolveu: no `invalid_batch`, o campo e a posição da entrada.
 - **O que o agente não manda**, para o painel não ter o que recusar: chave acima de
-  **1.024 bytes** (o teto do S3) — o arquivo é falha daquele arquivo, com o motivo, antes
+  **1.024 bytes** (o teto do S3): o arquivo é falha daquele arquivo, com o motivo, antes
   de qualquer leitura, e a sessão fecha parcial; e data de modificação fora dos anos
-  **0001–9999** — o arquivo sobe e vai ao índice com a data presa à ponta da faixa (em UTC,
+  **0001–9999**: o arquivo sobe e vai ao índice com a data presa à ponta da faixa (em UTC,
   quando o fuso do servidor levaria o ano escrito a 0000 ou 10000). O arquivo de data
   absurda segue com backup; só a data mostrada é a da ponta.
 
@@ -246,7 +246,7 @@ Leituras:
   (`lstat` de cada arquivo), que é o que a bancada na VM tem de medir.
 - **Memória:** com lotes, o pico não acompanha o número de arquivos (45 MB na primeira com
   100 mil; no teste em processo, 37–59 MiB com 300 mil). No caminho inline o
-  mapa inteiro continua na memória, como antes — é o protocolo antigo, e o painel o limita
+  mapa inteiro continua na memória, como antes; é o protocolo antigo, e o painel o limita
   em 150 mil arquivos.
 - **Painel antigo:** os três corpos do `/complete` têm exatamente o tamanho dos da
   `f52fb25` (32.434.029, 32.434.016 e 32.435.025 bytes) e nenhum `POST /files` acontece.
@@ -286,7 +286,7 @@ pelo estado local para sortear as entradas. Mesma máquina e mesmo teste em proc
 | 0,1% alterado (300) | 4,22 s · 61 MiB | 4,57 s · 64 MiB | 300 `HeadObject` + 300 `PutObject` + amostra **32** |
 
 A diferença de tempo fica dentro do ruído de uma execução para outra. A passada pelo estado,
-medida à parte num arquivo de 1 milhão de entradas (346 MB, cache quente): **0,76 s** —
+medida à parte num arquivo de 1 milhão de entradas (346 MB, cache quente): **0,76 s**,
 1,3% dos ~58 s do backup sem mudança de 1 milhão medido na VM. Com o disco frio ela lê o
 arquivo de estado em sequência, que a varredura leria de qualquer forma (toda entrada é
 consultada). Contra um provedor de verdade somam-se 32 `HeadObject` em até 8 conexões:

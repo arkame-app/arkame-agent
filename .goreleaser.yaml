@@ -162,7 +162,7 @@ release:
     Sem sudo, o agente fica só para o seu usuário (escopo user) e só lê o que
     você lê. No Windows, use o comando que o painel mostra.
 
-    Ou baixe o binário abaixo. Confira a integridade com `checksums.txt` — a
+    Ou baixe o binário abaixo. Confira a integridade com `checksums.txt`; a
     assinatura keyless está em `checksums.txt.sig` e `checksums.txt.pem`.
     O `checksums.txt.ed25519` é a assinatura que o próprio agente confere
     antes de se atualizar sozinho.

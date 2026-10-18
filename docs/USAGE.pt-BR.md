@@ -7,7 +7,7 @@
 
 ## Uso
 
-### Primeira instalação — um comando
+### Primeira instalação: um comando
 
 O painel, em **Servidores → Novo servidor**, gera o comando com o código de
 instalação (`atk_…`, vale 24 horas e uma vez). Ele baixa o agente, confere o
@@ -113,8 +113,8 @@ trocasse o arquivo viraria root no próximo reinício do serviço. É o caso de
 home, instale sem sudo (`~/.local/bin/arkame-agent install --token=atk_...`,
 escopo user) ou rode o instalador com sudo, que o põe em `/usr/local/bin`. No
 macOS (LaunchDaemon) vale o mesmo. Quando o `/usr/local/bin` (ou uma pasta
-acima dele) não é só do root — o Homebrew, em Macs Intel, o deixa com o seu
-usuário —, o instalador com sudo põe o programa em `/opt/arkame/bin`, e o
+acima dele) não é só do root (o Homebrew, em Macs Intel, o deixa com o seu
+usuário), o instalador com sudo põe o programa em `/opt/arkame/bin`, e o
 comando do painel funciona como está. Para outra pasta só do root:
 `curl -fsSL https://get.arkame.app/install.sh | sudo env ARKAME_BIN_DIR=/caminho sh -s -- --token=atk_...`.
 No Windows, o serviço roda como SYSTEM e o `install` confere a mesma coisa pela
@@ -127,20 +127,20 @@ passa; um `install` rodado de Downloads é recusado.
 
 No Windows, o serviço grava o log ao lado da configuração, em
 `C:\etc\arkame\agent.log` (rodízio aos 10 MB; o anterior fica em
-`agent.log.1`) — o Visualizador de Eventos não tem nada do agente:
+`agent.log.1`); o Visualizador de Eventos não tem nada do agente:
 
 ```text
 powershell -Command "Get-Content -Tail 50 -Wait 'C:\etc\arkame\agent.log'"
 ```
 
 > **OneDrive (Windows):** arquivos que estão só na nuvem (os marcadores
-> "disponível online") ficam de fora do backup — lê-los faria o agente baixar o
+> "disponível online") ficam de fora do backup: lê-los faria o agente baixar o
 > OneDrive inteiro para o disco do servidor. Para entrar no backup, o arquivo
 > precisa estar disponível offline ("Sempre manter neste dispositivo"). A sessão
 > informa ao painel quantos ficaram de fora, e a falta deles não conta como
 > arquivo removido na origem.
 
-> **macOS — Acesso Total ao Disco:** como serviço (LaunchDaemon ou
+> **macOS, Acesso Total ao Disco:** como serviço (LaunchDaemon ou
 > LaunchAgent), o agente não lê Mesa, Documentos, Downloads nem o iCloud Drive
 > até receber o Acesso Total ao Disco: o macOS devolve "operation not
 > permitted" e o backup sai parcial. Depois do `install`:
@@ -165,13 +165,13 @@ o teste.
 O `install` sempre espera a aprovação no painel (Ctrl-C cancela sem mexer no
 arquivo de configuração): a identidade nova, e também o armazenamento e a
 chave já testados, só são gravados com ela, e o serviço só é instalado
-depois, com o token no disco. Não há `--wait=false` — o enrollment deixado sem
+depois, com o token no disco. Não há `--wait=false`: o enrollment deixado sem
 espera não teria quem o concluísse.
 
 ### Teste de restauração por amostra
 
 De tempos em tempos (o padrão do painel é uma vez por semana, por armazenamento) o painel
-escolhe uma amostra de arquivos do backup e o agente os restaura de verdade — baixa a versão
+escolhe uma amostra de arquivos do backup e o agente os restaura de verdade: baixa a versão
 do bucket, grava, relê, confere tamanho e SHA-256 e apaga. É a prova de que o backup restaura.
 
 - Os arquivos vão para `verificacao/` dentro da pasta do estado local (no Linux,
@@ -264,9 +264,9 @@ sudo docker stop -t 150 arkame-agent 2>/dev/null; sudo docker rm arkame-agent 2>
 ```
 
 Tira o serviço, o arquivo de configuração com a chave, a identidade (token,
-chave privada, agent.id), o estado local do backup deste agente — o do
+chave privada, agent.id), o estado local do backup deste agente (o do
 armazenamento de hoje e o de armazenamentos anteriores (`ARKAME_STATE_DIR`: ele
-guarda os nomes dos arquivos do servidor) — e o programa;
+guarda os nomes dos arquivos do servidor)) e o programa;
 cada pasta só sai se ficar vazia, e o estado de outro agente da máquina fica. No
 Docker o estado está no disco do servidor: `sudo rm -rf /var/lib/arkame/estado`.
 Os backups continuam no bucket. No painel, arquive o servidor para ele deixar de ser cobrado.
@@ -284,8 +284,8 @@ ao lado do arquivo (`agent-oci.token.jwt`, `agent-oci.key.pem`,
 `agent-oci.agent.id`), a menos que `TOKEN_PATH`, `PRIVATE_KEY_PATH` ou
 `AGENT_ID_PATH` já estejam definidos.
 
-No Windows, o agente aparece em **Aplicativos instalados** ("Arkame — agente de
-backup"); o Desinstalar chama `uninstall --pause` e pede administrador sozinho.
+No Windows, o agente aparece em **Aplicativos instalados** ("Agente de backup
+Arkame"); o Desinstalar chama `uninstall --pause` e pede administrador sozinho.
 Pelo Executar: `powershell -Command "Start-Process -Verb RunAs 'C:\Program Files\Arkame\arkame-agent.exe' 'uninstall --pause'"`.
 
 ### Re-enrollment (trocar servidor mantendo histórico)
@@ -296,7 +296,7 @@ Mesmo comando na nova máquina, com um **código novo** gerado no painel em
 instalador pergunta a chave do bucket que o servidor já usava.
 Com a chave já no arquivo, o `install` confere no painel o armazenamento do
 código: se for outro (bucket, região ou endereço), testa a chave nele e grava o
-armazenamento novo inteiro; recusada, pergunta outra — sem terminal, para com a
+armazenamento novo inteiro; recusada, pergunta outra; sem terminal, para com a
 causa e não mexe no arquivo.
 
 ### Cópia local ("local primeiro, nuvem depois")
@@ -322,7 +322,7 @@ principal passa a deixar o bucket local para ele (`SIBLING_BUCKETS`).
 O RustFS fala só HTTPS, com um certificado gerado na instalação e guardado ao
 lado da credencial (`rustfs/tls`). O agente confia só nesse certificado: a porta
 em `127.0.0.1` é de todos os usuários da máquina, e quem escutasse nela antes do
-RustFS não tem a chave — a conexão falha em vez de o backup ir para ele. O
+RustFS não tem a chave: a conexão falha em vez de o backup ir para ele. O
 programa do RustFS é conferido pelo SHA-256 antes de cada início, e recusado se
 uma pasta acima dele puder ser trocada por quem não é administrador. As opções
 do principal (proxy, pasta do estado, intervalos) vão para o processo local; a
@@ -381,16 +381,16 @@ Lidas do env-file ou das env vars do processo (CLI tem precedência).
 | `ENROLLMENT_TOKEN` | Temporário, só durante install; sai do arquivo com a aprovação |
 | `AGENT_ID` | Identidade do agente; sem ela, vale o conteúdo de `AGENT_ID_PATH` (gravado no enrollment) |
 | `AGENT_ID_PATH` | `/etc/arkame/agent.id` |
-| `TOKEN_PATH` | `/etc/arkame/token.jwt` — bearer do painel (0600; no Windows, Administradores e SYSTEM) |
+| `TOKEN_PATH` | `/etc/arkame/token.jwt`: bearer do painel (0600; no Windows, Administradores e SYSTEM) |
 | `PRIVATE_KEY_PATH` | `/etc/arkame/key.pem` (idem) |
 | `HOST_ROOT` | `/` nativo, `/host` em Docker |
 | `SIBLING_BUCKETS` | Buckets atendidos por outros processos deste agente no host (CSV): planos e restaurações desses buckets ficam para o irmão |
 | `POLL_INTERVAL_SEC` | Intervalo de consulta de planos e restaurações (padrão 60) |
 | `HEARTBEAT_INTERVAL_SEC` | Intervalo do heartbeat (padrão 60) |
 | `ARKAME_STATE_DIR` | Pasta do estado local do backup (o que o agente já sabe de cada arquivo, para não reler o que não mudou). Padrão: `<HOST_ROOT>/var/lib/arkame/estado` (Linux, root), `~/.local/state/arkame/estado` (Linux, usuário), `%ProgramData%\Arkame\estado` (Windows), `/Library/Application Support/Arkame/estado` (macOS). `off` desliga: todo backup lê e confere tudo. A pasta nunca entra no backup; apagá-la é seguro (o backup seguinte a reconstrói, sem reenviar arquivo igual). O agente a cria só para o administrador (no Windows, Administradores e SYSTEM) e não usa uma pasta que já existia em nome de outro usuário: nesse caso o estado vai para `estado/` ao lado do arquivo de configuração. Ver `docs/ESCALA.md` |
-| `ARKAME_STATE` | Quando o estado local vale. `auto` (padrão): só quando o painel oferece o índice em lotes — contra um painel de antes disso o agente lê e confere tudo, como a v0.4.31, e não cria arquivo nenhum na pasta do estado. `always`: também contra o painel antigo (o `/complete` segue inline, mas o arquivo que não mudou não é relido). `off`: nunca (o mesmo que `ARKAME_STATE_DIR=off`) |
+| `ARKAME_STATE` | Quando o estado local vale. `auto` (padrão): só quando o painel oferece o índice em lotes; contra um painel de antes disso o agente lê e confere tudo, como a v0.4.31, e não cria arquivo nenhum na pasta do estado. `always`: também contra o painel antigo (o `/complete` segue inline, mas o arquivo que não mudou não é relido). `off`: nunca (o mesmo que `ARKAME_STATE_DIR=off`) |
 | `ARKAME_RESTORE_TEST_INTERVAL_SEC` | De quantos em quantos segundos o agente pergunta ao painel se há teste de restauração por amostra a fazer. Padrão (vazio ou `0`): de hora em hora, a primeira vez 5 minutos depois do arranque. Só encurta a pergunta: quem decide se há rodada, e quando (semanal por padrão), é o painel. Vale também para a pergunta do inventário do bucket (padrão: de hora em hora, a primeira vez 12 minutos depois do arranque). Serve ao laço de ponta a ponta e a diagnóstico; em produção, deixe sem valor |
-| `ARKAME_REHASH_ALL` | `1`: todo backup relê e confere no bucket todos os arquivos, ignorando o atalho do estado — **enquanto a variável estiver ligada**. Para uma vez só, use a flag `run --rehash-all`: ela vale para o primeiro backup de cada plano depois da partida do agente, e os seguintes voltam ao atalho |
-| `ARKAME_VERIFY_DAYS` | Ciclo, em dias, da reconferência rotativa — cada arquivo é relido e conferido no bucket uma vez por ciclo (padrão 30) |
+| `ARKAME_REHASH_ALL` | `1`: todo backup relê e confere no bucket todos os arquivos, ignorando o atalho do estado, **enquanto a variável estiver ligada**. Para uma vez só, use a flag `run --rehash-all`: ela vale para o primeiro backup de cada plano depois da partida do agente, e os seguintes voltam ao atalho |
+| `ARKAME_VERIFY_DAYS` | Ciclo, em dias, da reconferência rotativa: cada arquivo é relido e conferido no bucket uma vez por ciclo (padrão 30) |
 | `UPLOAD_CONCURRENCY` | Quantos arquivos o backup lê e envia ao mesmo tempo (padrão: 4, ou o número de CPUs se menor). O limite de banda do plano vale para a soma |
 

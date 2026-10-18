@@ -51,12 +51,12 @@ func newInstallCmd() *cobra.Command {
 A espera pela aprovação faz parte do install: a identidade nova só existe em
 memória até lá, e não há como concluí-la depois noutro processo.
 
-Um host pode rodar mais de um agent — um por conjunto de credenciais de
+Um host pode rodar mais de um agent, um por conjunto de credenciais de
 storage. Nesse caso dê um nome a cada um com --service-name (arkame-agent-aws,
 arkame-agent-oci, ...) e aponte --config para o env-file correspondente.
 
 Em re-enrollment (trocar servidor físico / reinstalar), o token novo é
-gerado no painel clicando "Reinstalar" em /agents/:id — ele é amarrado ao
+gerado no painel clicando "Reinstalar" em /agents/:id. Ele é amarrado ao
 agent_id existente, preservando histórico e path no bucket.`,
 		RunE: func(cmd *cobra.Command, _ []string) (err error) {
 			if pausar {
@@ -169,7 +169,7 @@ agent_id existente, preservando histórico e path no bucket.`,
 				return fmt.Errorf("enrollment: %w", err)
 			}
 
-			slog.Info("enrollment pendente — aguardando aprovação no painel",
+			slog.Info("enrollment pendente, aguardando aprovação no painel",
 				"fingerprint", result.Fingerprint,
 				"agent_id", result.AgentID)
 			fmt.Fprintln(os.Stderr, "")
@@ -186,7 +186,7 @@ agent_id existente, preservando histórico e path no bucket.`,
 			if err := enrollment.Concluir(cfg, result, tok.AgentToken, pendentes); err != nil {
 				return err
 			}
-			slog.Info("aprovado — token persistido", "expires_at", tok.ExpiresAt)
+			slog.Info("aprovado, token persistido", "expires_at", tok.ExpiresAt)
 			fmt.Fprintln(os.Stderr, "  ✓ Aprovado. Token válido até", tok.ExpiresAt.Format("2006-01-02"))
 
 			if installService {
@@ -247,7 +247,7 @@ agent_id existente, preservando histórico e path no bucket.`,
 	// env-file (painel de parceiro whitelabel). O padrão vem do config.
 	cmd.Flags().StringVar(&panelURL, "panel-url", "", "URL base do painel Arkame. Padrão: PANEL_URL, senão https://save.arkame.app")
 	cmd.Flags().BoolVar(&installService, "install-service", true, "instalar como serviço systemd/launchd/Windows Service (set false para só enrollar)")
-	cmd.Flags().StringVar(&serviceName, "service-name", service.DefaultName, "nome do serviço — use um por credencial de storage no mesmo host (ex.: arkame-agent-aws)")
+	cmd.Flags().StringVar(&serviceName, "service-name", service.DefaultName, "nome do serviço; use um por credencial de storage no mesmo host (ex.: arkame-agent-aws)")
 	cmd.Flags().StringVar(&serviceScope, "service-scope", "", "system (todo o host, exige root) ou user (só o seu usuário, sem sudo). Padrão: system se root, senão user")
 	cmd.Flags().StringVar(&hostName, "hostname", "", "hostname reportado (default: hostname do sistema)")
 	cmd.Flags().BoolVar(&pausar, "pause", false, "esperar um Enter antes de sair (janela aberta pelo setup no Windows)")

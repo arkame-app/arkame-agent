@@ -18,7 +18,7 @@ var (
 func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:     "arkame-agent",
-		Short:   "Arkame — agent de backup para BYOS",
+		Short:   "Arkame: agent de backup para BYOS",
 		Long:    "Arkame é um SaaS de backup em nuvem com BYOS. Este agent lê arquivos do servidor onde roda e envia ao bucket do cliente, reportando status ao painel.",
 		Version: version.String(),
 		PersistentPreRun: func(_ *cobra.Command, _ []string) {

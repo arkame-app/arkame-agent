@@ -47,7 +47,7 @@ Why the flags:
 
 - `--pull always`: re-running this command is how you update the **image**;
   without the flag Docker reuses the `:latest` image already on the host. (The
-  agent program also updates itself between image pulls — see "Automatic
+  agent program also updates itself between image pulls; see "Automatic
   updates" below.)
 - `--stop-timeout 150` / `stop -t 150`: a stopping agent may need up to 150 s
   to finish the upload in progress and send the backup's index to the panel.
@@ -233,7 +233,7 @@ sudo /opt/arkame/bin/arkame-agent uninstall
 
 Windows (elevated prompt): `arkame-agent status`, `arkame-agent check-storage`,
 `arkame-agent check-snapshot` (creates a volume snapshot, reads a file from it
-and releases it — the same thing every backup does before reading).
+and releases it, the same thing every backup does before reading).
 
 Docker: `sudo docker logs --tail 50 arkame-agent`, and always restart or stop
 with `-t 150`. Removing the agent leaves your backups in the bucket.
@@ -290,8 +290,8 @@ only. Process environment variables override the file.
 | `POLL_INTERVAL_SEC`, `HEARTBEAT_INTERVAL_SEC` | Plan/restore polling and heartbeat intervals (default 60) |
 | `TOKEN_PATH`, `PRIVATE_KEY_PATH`, `AGENT_ID_PATH`, `AGENT_ID` | Agent identity files (written at enrollment) |
 | `SIBLING_BUCKETS` | Buckets served by other agent processes on the same host |
-| `ARKAME_STATE_DIR` | Folder for the local backup state (what the agent already knows about each file, so unchanged files are not re-read). Default `/var/lib/arkame/estado` under `HOST_ROOT` (per-user and per-OS equivalents elsewhere); `off` disables it. Never backed up; safe to delete. Created for the administrator only (on Windows, Administrators and SYSTEM); a pre-existing folder owned by another user is not used — the state then goes to `estado/` next to the config file |
-| `ARKAME_STATE` | When the local state is used: `auto` (default) only when the panel offers the batched index — against an older panel the agent re-reads and checks everything, as v0.4.31 did, and writes nothing to the state folder; `always` also against an older panel; `off` never |
+| `ARKAME_STATE_DIR` | Folder for the local backup state (what the agent already knows about each file, so unchanged files are not re-read). Default `/var/lib/arkame/estado` under `HOST_ROOT` (per-user and per-OS equivalents elsewhere); `off` disables it. Never backed up; safe to delete. Created for the administrator only (on Windows, Administrators and SYSTEM); a pre-existing folder owned by another user is not used: the state then goes to `estado/` next to the config file |
+| `ARKAME_STATE` | When the local state is used: `auto` (default) only when the panel offers the batched index (against an older panel the agent re-reads and checks everything, as v0.4.31 did, and writes nothing to the state folder); `always` also against an older panel; `off` never |
 | `ARKAME_REHASH_ALL`, `ARKAME_VERIFY_DAYS`, `UPLOAD_CONCURRENCY` | Force a full re-read on every backup while set (`1`; the `run --rehash-all` flag does it for one backup of each plan only); rotating re-verification cycle in days (default 30); files processed in parallel (default 4) |
 | `HTTPS_PROXY`, `NO_PROXY` | Standard proxy variables, honored for panel calls. Read from the process environment only; see below |
 
@@ -344,7 +344,7 @@ Things you should know before relying on it:
   the install command (on Linux it also rewrites the systemd unit so the
   service may replace its own program).
 - **Windows binaries are not code-signed yet.** Windows 11 with Smart App
-  Control turned on blocks the agent — and blocks the automatic update, which
+  Control turned on blocks the agent, and blocks the automatic update, which
   then fails safely and keeps the current program; Windows 10 and Windows
   Server work. Integrity is covered by the signed checksums.
 - **The container image is not signed** with cosign; only `checksums.txt` is.
@@ -352,7 +352,7 @@ Things you should know before relying on it:
   from a Volume Shadow Copy (VSS): after the plan's pre-backup command, the
   volumes of the plan are frozen for a few seconds, applications that take
   part (SQL Server, Exchange) flush their writes, and files are read from the
-  frozen copy — open and locked files (an open Outlook `.pst`) included. It is
+  frozen copy, open and locked files (an open Outlook `.pst`) included. It is
   a copy-only backup (`VSS_BT_COPY`), so other backup software's history is
   untouched, and the snapshot is released as soon as reading ends; the agent
   never deletes shadow copies. If a snapshot can't be created (FAT32/exFAT or
@@ -361,13 +361,13 @@ Things you should know before relying on it:
   `snapshot_unavailable` warning. A plan can turn it off. Test it with
   `arkame-agent check-snapshot [folder]` from an elevated prompt. Linux and
   macOS read files as they are (no LVM/btrfs snapshots yet); for databases,
-  dump to a folder first — the panel's plan form has ready-made recipes for
+  dump to a folder first: the panel's plan form has ready-made recipes for
   PostgreSQL, MySQL/MariaDB, MongoDB and SQL Server (a host cron job with
   Docker, where pre/post commands do not run).
 - **Native Linux service restores** into `/etc`, `/usr` or `/boot` fail because
   the systemd unit uses `ProtectSystem=full`; restore elsewhere and copy. The
   Docker install can write there.
-- **Restores never write into the agent's own folders** — the folder of its
+- **Restores never write into the agent's own folders**: the folder of its
   program and the folder of its configuration (`/etc/arkame`). Such an item
   fails with `protected_destination`: that folder is writable by the service
   so it can update itself, and a restored file there would bypass the release

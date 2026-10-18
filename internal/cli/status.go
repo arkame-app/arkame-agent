@@ -89,23 +89,23 @@ func situacaoDoRegistro(cfg *config.Config, agora time.Time) string {
 	tok, err := cfg.LoadToken()
 	switch {
 	case errors.Is(err, fs.ErrPermission):
-		return "DESCONHECIDO — sem permissão para ler " + cfg.TokenPath + " (rode com sudo)"
+		return "DESCONHECIDO: sem permissão para ler " + cfg.TokenPath + " (rode com sudo)"
 	case err != nil:
-		return fmt.Sprintf("DESCONHECIDO — não consegui ler %s: %v", cfg.TokenPath, err)
+		return fmt.Sprintf("DESCONHECIDO: não consegui ler %s: %v", cfg.TokenPath, err)
 	case tok != "":
 		venc, ok := daemon.VencimentoDoToken(tok)
 		switch {
 		case !ok:
 			return "APROVADO (token presente)"
 		case !venc.After(agora):
-			return "TOKEN VENCIDO em " + venc.Format("2006-01-02") + " — gere um código em Reinstalar no painel e rode o install com ele"
+			return "TOKEN VENCIDO em " + venc.Format("2006-01-02") + ". Gere um código em Reinstalar no painel e rode o install com ele"
 		default:
 			return "APROVADO (token válido até " + venc.Format("2006-01-02") + ")"
 		}
 	case cfg.EnrollmentToken != "":
-		return "PENDENTE — install não concluído (sem token; aprove no painel enquanto o install espera)"
+		return "PENDENTE: install não concluído (sem token; aprove no painel enquanto o install espera)"
 	default:
-		return "NÃO INICIADO — rode 'arkame-agent install'"
+		return "NÃO INICIADO: rode 'arkame-agent install'"
 	}
 }
 

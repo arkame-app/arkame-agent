@@ -82,7 +82,7 @@ func conteudoDeConfianca(dir string) error {
 			return fmt.Errorf("%w: %s é um link ou uma junção", ErrDonoNaoConfiavel, p)
 		}
 		if err := ConferirDono(p); err != nil {
-			return fmt.Errorf("%w — apague-o e rode de novo", err)
+			return fmt.Errorf("%w; apague-o e rode de novo", err)
 		}
 	}
 	return nil

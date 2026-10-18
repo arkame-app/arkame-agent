@@ -6,7 +6,7 @@
 
 ## Status
 
-**Status:** funcional. Enrollment (Ed25519 + bearer JWT), daemon com 9 loops (heartbeat com renovação do token, atualização do próprio programa, probe, planos/backup, restauração, explorador de pastas, expurgo de retenção, teste de restauração por amostra, inventário do bucket), sync engine (walker + hash + dedup HeadObject + multipart upload), restore com escrita atômica + verify, e warming de cold storage estão implementados. Build limpo (`go vet ./...`). Resta hardening (mTLS, snapshots, observabilidade) — ver "O que falta".
+**Status:** funcional. Enrollment (Ed25519 + bearer JWT), daemon com 9 loops (heartbeat com renovação do token, atualização do próprio programa, probe, planos/backup, restauração, explorador de pastas, expurgo de retenção, teste de restauração por amostra, inventário do bucket), sync engine (walker + hash + dedup HeadObject + multipart upload), restore com escrita atômica + verify, e warming de cold storage estão implementados. Build limpo (`go vet ./...`). Resta hardening (mTLS, snapshots, observabilidade); ver "O que falta".
 
 ## Arquitetura
 
@@ -27,7 +27,7 @@
 
 **Princípio:** dados NUNCA passam pelo painel Arkame. O agent fala direto com o bucket do cliente (credenciais via env-file local) e reporta apenas metadata (filenames, paths, sizes, hashes, version_ids) ao painel para indexação.
 
-> **Auth atual:** o agent autentica no painel via **bearer JWT** (obtido no enrollment Ed25519), não mTLS. O diagrama acima reflete o alvo de longo prazo — mTLS é hardening de fase 2 e não quebra o contrato atual.
+> **Auth atual:** o agent autentica no painel via **bearer JWT** (obtido no enrollment Ed25519), não mTLS. O diagrama acima reflete o alvo de longo prazo: mTLS é hardening de fase 2 e não quebra o contrato atual.
 
 ## Estrutura do código
 
@@ -79,15 +79,15 @@ Binários vão pra `bin/`. Makefile embute `version.Version` / `version.Commit` 
 
 Núcleo funcional entregue. Itens concluídos e pendências de hardening:
 
-- [x] `enrollment.WaitForApproval` — long-poll real (bearer JWT via `wait-token`)
-- [x] `daemon.executePlan` — SessionStart → sync → SessionComplete (com `version_map`)
-- [x] `sync.engine` — dedup via HeadObject + multipart upload para arquivos grandes
-- [x] `daemon.probeLoop` — cabeado com `storage.Probe` (versioning/object-lock/lifecycle)
+- [x] `enrollment.WaitForApproval`: long-poll real (bearer JWT via `wait-token`)
+- [x] `daemon.executePlan`: SessionStart → sync → SessionComplete (com `version_map`)
+- [x] `sync.engine`: dedup via HeadObject + multipart upload para arquivos grandes
+- [x] `daemon.probeLoop`: cabeado com `storage.Probe` (versioning/object-lock/lifecycle)
 - [x] `service.launchd` / `service.systemd` / `service.windows`
-- [x] Restore (Plan kind=restore — executor com escrita atômica + SHA-256 verify + warming)
+- [x] Restore (Plan kind=restore: executor com escrita atômica + SHA-256 verify + warming)
 - [x] Atualização automática (`internal/atualizacao`): o painel sinaliza no heartbeat; o agente confere assinatura Ed25519 + SHA-256 em dois canais, roda o `self-test` do programa novo, troca e prova em 5 min, com volta ao anterior. Ver [RELEASE-ASSINATURA.md](RELEASE-ASSINATURA.md)
-- [ ] mTLS hardening (fase 2) — substituir bearer JWT mantendo o contrato atual
-- [ ] Snapshot orquestrado (LVM / VSS / btrfs) — no roadmap, ainda não implementado
+- [ ] mTLS hardening (fase 2): substituir bearer JWT mantendo o contrato atual
+- [ ] Snapshot orquestrado (LVM / VSS / btrfs): no roadmap, ainda não implementado
 - [x] Testes de integração contra S3 de verdade: a CI e a release rodam `go test -race ./...` com um RustFS 1.0.0 local (o MinIO deixou de ser baixável em 24/09)
 - [ ] Observabilidade: métricas Prometheus + traces OTEL (endpoint opcional)
 
@@ -111,4 +111,4 @@ ARKAME_TEST_S3_ENDPOINT=http://127.0.0.1:9000 go test -race ./...
 
 ## Contrato com o painel
 
-O schema do que este agent reporta ao painel está no repositório do painel (`arkame`), nas migrações em `db/migrations/` e no acesso a dados em `packages/db/` — mudanças nos types `api/` precisam bater com as rotas do Next.js em `apps/save/src/app/api/`.
+O schema do que este agent reporta ao painel está no repositório do painel (`arkame`), nas migrações em `db/migrations/` e no acesso a dados em `packages/db/`. Mudanças nos types `api/` precisam bater com as rotas do Next.js em `apps/save/src/app/api/`.

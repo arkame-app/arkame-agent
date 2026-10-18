@@ -53,7 +53,7 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		return fmt.Errorf("lendo bearer token: %w", err)
 	}
 	if bearer == "" {
-		return fmt.Errorf("bearer token vazio — rode 'arkame-agent install' primeiro")
+		return fmt.Errorf("bearer token vazio; rode 'arkame-agent install' primeiro")
 	}
 
 	client, err := api.New(api.Options{

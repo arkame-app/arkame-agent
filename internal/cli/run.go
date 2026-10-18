@@ -68,10 +68,10 @@ func newRunCmd() *cobra.Command {
 				return fmt.Errorf("carregando config: %w", err)
 			}
 			if !cfg.TokenExists() {
-				return fmt.Errorf("agent ainda não foi aprovado — rode 'arkame-agent install' primeiro")
+				return fmt.Errorf("agent ainda não foi aprovado; rode 'arkame-agent install' primeiro")
 			}
 			if cfg.AgentID == "" {
-				return fmt.Errorf("agent sem identidade: nem AGENT_ID em %s nem o arquivo %s — rode 'arkame-agent install' de novo", configFile, cfg.AgentIDPath)
+				return fmt.Errorf("agent sem identidade: nem AGENT_ID em %s nem o arquivo %s; rode 'arkame-agent install' de novo", configFile, cfg.AgentIDPath)
 			}
 			// Programa novo em prova: conta esta partida. Na terceira sem um
 			// heartbeat aceito, o anterior volta ao lugar e este processo sai

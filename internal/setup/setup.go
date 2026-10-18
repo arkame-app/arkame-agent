@@ -183,7 +183,7 @@ func PerguntarETestar(ctx context.Context, t *terminal.Terminal, base *config.Co
 	out := t.Saida()
 	fmt.Fprintf(out, "\n  Credencial do bucket %s (fica só nesta máquina; o painel não a recebe)\n\n", base.StorageBucket)
 	for tentativa := 1; tentativa <= MaxTentativas; tentativa++ {
-		ak, err := t.Pergunta("Chave de acesso (access key) — em branco para sair")
+		ak, err := t.Pergunta("Chave de acesso (access key; em branco para sair)")
 		if err != nil {
 			return "", "", err
 		}
