@@ -113,7 +113,7 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	// Os processos irmãos (a cópia local, a cópia da rede do `join`) não se
 	// atualizam sozinhos: quem troca o programa é o principal, e eles
 	// reiniciam quando ele muda. Sem isto, o da rede ficava na versão antiga.
-	if cfg.LocalStoreProgram != "" || strings.EqualFold(strings.TrimSpace(cfg.AutoUpdate), "off") {
+	if cfg.LocalStoreProgram != "" || atualizacao.Desligada(cfg.AutoUpdate) {
 		wg.Add(1)
 		go func() { defer wg.Done(); seguirOPrograma(ctx, oc, func() { parar(atualizacao.ErrReiniciar) }) }()
 	}
@@ -236,6 +236,10 @@ func enviarHeartbeatCom(ctx context.Context, c *api.Client, cfg *config.Config, 
 	// O processo da cópia local é o mesmo servidor no painel, mas não é ele
 	// quem diz se o servidor está no ar nem como reiniciá-lo: com o papel, o
 	// painel só registra que a cópia local está viva.
+	// O da cópia da rede (`join`) também não é o servidor: só diz que está vivo.
+	if cfg.Role == api.PapelCopiaDaRede {
+		hb.Role = api.PapelCopiaDaRede
+	}
 	if cfg.LocalStoreProgram != "" {
 		hb.Role = api.PapelCopiaLocal
 		// A pasta como o servidor a vê: no contêiner, sem a raiz montada na frente.

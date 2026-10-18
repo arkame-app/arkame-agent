@@ -21,6 +21,8 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/arkame-app/agent/internal/api"
+	"github.com/arkame-app/agent/internal/atualizacao"
 	"github.com/arkame-app/agent/internal/config"
 	"github.com/arkame-app/agent/internal/segredo"
 	"github.com/arkame-app/agent/internal/service"
@@ -254,8 +256,10 @@ func linhasDoJoin(main *config.Config, o opcoesDoJoin, chave, segredo, caFile st
 		"STORAGE_ACCESS_KEY=" + chave,
 		"STORAGE_SECRET_KEY=" + segredo,
 		"SIBLING_BUCKETS=" + strings.Join(irmaos, ","),
-		// Quem troca o programa é o agente principal.
-		"ARKAME_AUTO_UPDATE=off",
+		// Quem troca o programa é o agente principal; este o segue.
+		"ARKAME_AUTO_UPDATE=" + atualizacao.ValorSegue,
+		// O painel não toma este processo pelo servidor.
+		"ARKAME_ROLE=" + api.PapelCopiaDaRede,
 	}
 }
 

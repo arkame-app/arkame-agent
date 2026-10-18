@@ -104,6 +104,9 @@ func TestJoinGravaOIrmaoENaoDuplica(t *testing.T) {
 	if cfg.AgentID != "ag-1" || cfg.StorageBucket != "arkame-local-a1b2c3" || cfg.StorageEndpoint != "https://"+u.Host || cfg.StorageAccessKey != "arkame-srv-1-abcd" || cfg.StorageCAFile != filepath.Join(dir, "rede", "arkame-local-a1b2c3.pem") {
 		t.Fatalf("configuração do irmão: %+v", cfg)
 	}
+	if cfg.Role != "network_copy" || cfg.AutoUpdate != "follow" {
+		t.Fatalf("o processo da rede tem de se apresentar com o papel dele e seguir o principal: role=%q auto=%q", cfg.Role, cfg.AutoUpdate)
+	}
 	if b, _ := os.ReadFile(filepath.Join(dir, "agent-rede-arkame-local-a1b2c3.env")); !strings.Contains(string(b), "HTTPS_PROXY=http://proxy:3128") {
 		t.Fatal("o irmão não seguiu o proxy do principal")
 	}

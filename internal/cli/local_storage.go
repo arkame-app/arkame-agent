@@ -16,6 +16,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/arkame-app/agent/internal/atualizacao"
 	"github.com/arkame-app/agent/internal/config"
 	"github.com/arkame-app/agent/internal/localstore"
 	"github.com/arkame-app/agent/internal/segredo"
@@ -180,7 +181,7 @@ func linhasDaCopiaLocal(main *config.Config, o opcoesDaCopiaLocal, chave, segred
 		"SIBLING_BUCKETS=" + strings.Join(irmaos, ","),
 		// Quem troca o programa é o agente principal; este processo segue o
 		// principal (reinicia com ele) e não se atualiza sozinho.
-		"ARKAME_AUTO_UPDATE=off",
+		"ARKAME_AUTO_UPDATE=" + atualizacao.ValorSegue,
 		"ARKAME_LOCAL_STORE_PROGRAM=" + prog.caminho,
 		"ARKAME_LOCAL_STORE_PROGRAM_SHA256=" + prog.sha256,
 		"ARKAME_LOCAL_STORE_VERSION=" + localstore.Versao,
@@ -205,7 +206,7 @@ func (o opcoesDaCopiaLocal) raizDoHostOuBarra() string {
 // chavesSoDoPrincipal não vão do env-file do principal para o da cópia local:
 // a identidade e o armazenamento são escritos de propósito (linhasDaCopiaLocal),
 // e o código de ativação já foi usado.
-var chavesSoDoPrincipal = regexp.MustCompile(`^(AWS_[A-Z_0-9]+|STORAGE_[A-Z_]+|SIBLING_BUCKETS|ARKAME_LOCAL_STORE_[A-Z_0-9]+|ARKAME_AUTO_UPDATE|ENROLLMENT_TOKEN|PANEL_URL|AGENT_ID|AGENT_ID_PATH|TOKEN_PATH|PRIVATE_KEY_PATH|HOST_ROOT)$`)
+var chavesSoDoPrincipal = regexp.MustCompile(`^(AWS_[A-Z_0-9]+|STORAGE_[A-Z_]+|SIBLING_BUCKETS|ARKAME_LOCAL_STORE_[A-Z_0-9]+|ARKAME_AUTO_UPDATE|ENROLLMENT_TOKEN|PANEL_URL|AGENT_ID|AGENT_ID_PATH|TOKEN_PATH|PRIVATE_KEY_PATH|HOST_ROOT|ARKAME_ROLE)$`)
 
 // opcoesDoPrincipal: o resto do env-file do principal (proxy, pasta do
 // estado, concorrência, intervalos…), que a cópia local tem de seguir — atrás

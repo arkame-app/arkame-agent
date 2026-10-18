@@ -148,6 +148,10 @@ type HeartbeatRequest struct {
 // PapelCopiaLocal é o Role do processo da cópia local no heartbeat.
 const PapelCopiaLocal = "local_store"
 
+// PapelCopiaDaRede é o Role do processo que grava na cópia local de outro
+// servidor (`local-storage join`, 0.5.4): o painel não o toma pelo servidor.
+const PapelCopiaDaRede = "network_copy"
+
 // UpdateReport é o relato do agente sobre a atualização do próprio programa.
 type UpdateReport struct {
 	// State: "downloading" (baixando e conferindo), "deferred" (adiada: há

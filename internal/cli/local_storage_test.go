@@ -53,7 +53,7 @@ func TestLinhasDaCopiaLocalUsamAMesmaIdentidade(t *testing.T) {
 		"STORAGE_BUCKET=arkame-local-a1b2c3", "STORAGE_ENDPOINT=https://127.0.0.1:9900", "STORAGE_ID=" + o.storageID,
 		"STORAGE_CA_FILE=" + filepath.Join("/etc/arkame/rustfs/tls", "rustfs_cert.pem"),
 		"ARKAME_LOCAL_STORE_TLS=/etc/arkame/rustfs/tls", "ARKAME_LOCAL_STORE_PROGRAM_SHA256=abc123",
-		"ARKAME_AUTO_UPDATE=off", "ARKAME_LOCAL_STORE_LOG=/var/log/arkame/rustfs.log",
+		"ARKAME_AUTO_UPDATE=follow", "ARKAME_LOCAL_STORE_LOG=/var/log/arkame/rustfs.log",
 		"SIBLING_BUCKETS=nuvem,outro", "ARKAME_LOCAL_STORE_ADDRESS=127.0.0.1:9900",
 		"ARKAME_LOCAL_STORE_ACCESS_KEY_FILE=" + filepath.Join("/etc/arkame/rustfs", "access.key"),
 	} {

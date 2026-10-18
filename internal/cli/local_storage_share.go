@@ -252,7 +252,7 @@ func compartilharCopiaLocal(ctx context.Context, o opcoesDoShare, out io.Writer)
 	if err != nil {
 		return err
 	}
-	sufixo := make([]byte, 2)
+	sufixo := make([]byte, 4)
 	if _, err := rand.Read(sufixo); err != nil {
 		return err
 	}

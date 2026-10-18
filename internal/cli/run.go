@@ -208,7 +208,14 @@ func lancarDoVolume(configFile string) {
 	if cfg, err := config.Load(configFile, config.Overrides{}); err == nil {
 		desligada = desligada || atualizacao.Desligada(cfg.AutoUpdate)
 	}
-	if desligada {
+	// O irmão que segue o principal (a cópia local, a cópia da rede) executa o
+	// programa do volume mesmo sem se atualizar sozinho: sem isto, no Docker,
+	// ficava preso na versão da imagem (revisão, 18/10).
+	segue := atualizacao.Segue(os.Getenv(atualizacao.EnvAutoUpdate))
+	if cfg, err := config.Load(configFile, config.Overrides{}); err == nil {
+		segue = segue || atualizacao.Segue(cfg.AutoUpdate)
+	}
+	if desligada && !segue {
 		return
 	}
 	programa := atualizacao.ProgramaDoVolume(configFile)

@@ -147,6 +147,9 @@ type Config struct {
 	// LocalStoreAddress. O agente desta máquina continua falando pelo
 	// 127.0.0.1; os outros servidores usam uma chave que não apaga.
 	LocalStoreListen string // ARKAME_LOCAL_STORE_LISTEN
+	// Role é o papel do processo irmão que não tem cópia local própria
+	// (`network_copy`, o do `join`), mandado no heartbeat (ARKAME_ROLE).
+	Role string
 }
 
 // Overrides representa valores vindos da CLI que têm precedência sobre env.
@@ -238,6 +241,7 @@ func Load(envFile string, o Overrides) (*Config, error) {
 		LocalStoreLog:          get("ARKAME_LOCAL_STORE_LOG"),
 		LocalStoreTLS:          get("ARKAME_LOCAL_STORE_TLS"),
 		LocalStoreListen:       get("ARKAME_LOCAL_STORE_LISTEN"),
+		Role:                   get("ARKAME_ROLE"),
 		LocalStoreProgramSHA:   get("ARKAME_LOCAL_STORE_PROGRAM_SHA256"),
 	}
 	modoDoEstado := strings.ToLower(strings.TrimSpace(get("ARKAME_STATE")))

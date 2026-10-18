@@ -140,6 +140,12 @@ func TestCopiaLocalNaRedeDePontaAPonta(t *testing.T) {
 	if _, err := c.PutObject(ctx, &s3.PutObjectInput{Bucket: &cfg.StorageBucket, Key: aws.String("arkame/data/ag-dono/x.txt"), Body: strings.NewReader("estrago")}); err == nil {
 		t.Fatal("o cliente gravou na pasta do dono")
 	}
+	if _, err := c.GetObject(ctx, &s3.GetObjectInput{Bucket: &cfg.StorageBucket, Key: aws.String("arkame/data/ag-dono/x.txt")}); err == nil {
+		t.Fatal("o cliente leu na pasta do dono")
+	}
+	if _, err := c.ListObjectVersions(ctx, &s3.ListObjectVersionsInput{Bucket: &cfg.StorageBucket}); err == nil {
+		t.Fatal("o cliente listou o bucket inteiro")
+	}
 	// Um intruso com outro certificado no lugar não passa da impressão.
 	if _, err := buscarCertificado(ctx, strings.TrimPrefix(endpoint, "https://"), strings.Repeat("0", 64)); err == nil {
 		t.Fatal("a impressão errada passou")

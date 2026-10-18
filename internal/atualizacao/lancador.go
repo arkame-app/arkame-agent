@@ -41,11 +41,19 @@ func EmDocker() bool { return os.Getenv(envMetodo) == "docker" }
 // Desligada lê o valor de ARKAME_AUTO_UPDATE.
 func Desligada(valor string) bool {
 	switch strings.ToLower(strings.TrimSpace(valor)) {
-	case "off", "false", "0", "no", "nao", "não":
+	case "off", "false", "0", "no", "nao", "não", ValorSegue:
 		return true
 	}
 	return false
 }
+
+// ValorSegue é o ARKAME_AUTO_UPDATE dos processos irmãos (a cópia local, a
+// cópia da rede): não se atualizam sozinhos, mas seguem o programa que o
+// principal baixou. No Docker, o lançador executa o do volume para eles também.
+const ValorSegue = "follow"
+
+// Segue: o processo segue o programa do principal (ValorSegue).
+func Segue(valor string) bool { return strings.EqualFold(strings.TrimSpace(valor), ValorSegue) }
 
 // ProgramaDoVolume é onde o programa baixado mora no Docker: bin/ ao lado do
 // arquivo de configuração (/etc/arkame/bin/arkame-agent).
