@@ -248,7 +248,7 @@ The panel's **Local copy** tab (server page) gives the exact commands. In short:
 sudo arkame-agent local-storage install --storage-id <ID> --bucket <BUCKET> --dir /srv/arkame-local
 sudo arkame-agent local-storage move --dir /mnt/new-disk/arkame-local   # new disk: moves data and versions
 
-# Let another server on the same network back up to this local copy (0.5.3+).
+# Let another server on the same network back up to this local copy (0.5.4+).
 # Prints the "join" command for that server and its key, once. The key only
 # reads and writes that server's own folder in the bucket.
 sudo arkame-agent local-storage share --server erp-01 --agent-id <SERVER-ID>
@@ -270,7 +270,7 @@ servers kept on the storage server. Only the storage server's own process, with 
 credential, purges by the retention policy. Open the port (9900 by default) to
 the internal network only.
 
-On Docker (0.5.3+) the same commands run from a one-off container, and the
+On Docker (0.5.4+) the same commands run from a one-off container, and the
 local copy is a second container (`arkame-agent-local`, host network); the
 panel shows each command ready to paste.
 
