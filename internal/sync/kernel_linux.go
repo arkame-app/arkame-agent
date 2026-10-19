@@ -15,7 +15,8 @@ func doKernel(f *os.File) bool {
 	if unix.Fstatfs(int(f.Fd()), &s) != nil {
 		return false
 	}
-	switch int64(s.Type) {
+	// uint32: em 32 bits o tipo é int32, e 0xcafe4a11 (bpf) sairia negativo.
+	switch uint32(s.Type) {
 	case unix.PROC_SUPER_MAGIC, unix.SYSFS_MAGIC, unix.DEBUGFS_MAGIC, unix.SECURITYFS_MAGIC, unix.TRACEFS_MAGIC, unix.BPF_FS_MAGIC:
 		return true
 	}

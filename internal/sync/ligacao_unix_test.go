@@ -29,16 +29,17 @@ func TestLigacaoDeArquivoFechado(t *testing.T) {
 		modo  fs.FileMode
 		links int
 		uid   uint32
-		pasta int64
+		pasta pastaDoNome
 		quer  bool
 	}{
-		{"chave do host com dois nomes", 0o600, 2, 0, 1000, true},
-		{"chave do host com um nome", 0o600, 1, 0, 1000, false},
-		{"arquivo do usuário com dois nomes", 0o600, 2, 1000, 1000, false},
-		{"arquivo do root legível com dois nomes", 0o644, 2, 0, 1000, false},
-		{"chave de conta de serviço (_postgres) com dois nomes", 0o600, 2, 216, 1000, true},
-		{"pasta de dono desconhecido: só o root conta", 0o600, 2, 216, -1, false},
-		{"chave do host em pasta do root aberta a todos (/Users/Shared)", 0o600, 2, 0, 0, true},
+		{"chave do host com dois nomes", 0o600, 2, 0, pastaDoNome{dono: 1000}, true},
+		{"chave do host com um nome", 0o600, 1, 0, pastaDoNome{dono: 1000}, false},
+		{"arquivo do usuário com dois nomes", 0o600, 2, 1000, pastaDoNome{dono: 1000}, false},
+		{"arquivo do root legível com dois nomes", 0o644, 2, 0, pastaDoNome{dono: 1000}, false},
+		{"chave de conta de serviço (_postgres) com dois nomes", 0o600, 2, 216, pastaDoNome{dono: 1000}, true},
+		{"pasta de dono desconhecido: só o root conta", 0o600, 2, 216, pastaDoNome{dono: -1}, false},
+		{"chave do host em pasta do root aberta a todos (/Users/Shared)", 0o600, 2, 0, pastaDoNome{dono: 0, aberta: true}, true},
+		{"dump do root no rsnapshot (pasta do root, fechada)", 0o600, 2, 0, pastaDoNome{dono: 0}, false},
 	}
 	for _, c := range casos {
 		st := &syscall.Stat_t{Uid: c.uid}

@@ -4,8 +4,10 @@ package sync
 
 import "io/fs"
 
+type pastaDoNome struct{}
+
 // ligacaoDeArquivoFechado: no Windows o hardlink exige escrita no arquivo, e
 // a conferência fica com o caminho real.
-func ligacaoDeArquivoFechado(fs.FileInfo, int64) bool { return false }
+func ligacaoDeArquivoFechado(fs.FileInfo, pastaDoNome) bool { return false }
 
-func donoDaPasta(string) int64 { return -1 }
+func donoDaPasta(string) pastaDoNome { return pastaDoNome{} }
