@@ -134,3 +134,18 @@ func ResolvidoNoWindows(p string) bool {
 	}
 	return strings.HasPrefix(p, `\\`) && !strings.HasPrefix(p, `\\?\`) && !strings.HasPrefix(p, `\\.\`)
 }
+
+// DoSistemaVivo diz se real (já resolvido) está em /proc ou /sys do servidor:
+// pseudoarquivos do kernel, nunca dado de backup.
+func DoSistemaVivo(hostRoot, real string) bool {
+	raiz := filepath.Clean(hostRoot)
+	if raiz == "" || raiz == "." {
+		raiz = "/"
+	}
+	rel, err := filepath.Rel(raiz, real)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return false
+	}
+	p := "/" + filepath.ToSlash(rel)
+	return p == "/proc" || p == "/sys" || strings.HasPrefix(p, "/proc/") || strings.HasPrefix(p, "/sys/")
+}

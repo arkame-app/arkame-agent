@@ -3,11 +3,13 @@ package sync
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/arkame-app/agent/internal/caminho"
 )
@@ -181,3 +183,40 @@ func TestLeituraRecusaDispositivoEArquivoTrocado(t *testing.T) {
 		}
 	}
 }
+
+// No Windows, o OneDrive já baixado e o WOF chegam como irregulares (o Go
+// marca assim os reparse points) e são lidos; dispositivo, pasta e link não.
+// Fora do Windows, só o regular (revisão, 18/10).
+func TestArquivoComum(t *testing.T) {
+	antes := caminho.Windows
+	t.Cleanup(func() { caminho.Windows = antes })
+	casos := []struct {
+		windows bool
+		modo    fs.FileMode
+		quer    bool
+	}{
+		{true, 0, true},
+		{true, fs.ModeIrregular, true},
+		{true, fs.ModeDevice, false},
+		{true, fs.ModeDir, false},
+		{true, fs.ModeSymlink | fs.ModeIrregular, false},
+		{false, 0, true},
+		{false, fs.ModeIrregular, false},
+		{false, fs.ModeDevice | fs.ModeCharDevice, false},
+	}
+	for _, c := range casos {
+		caminho.Windows = c.windows
+		if got := arquivoComum(modoFalso(c.modo)); got != c.quer {
+			t.Errorf("windows=%v modo=%v: %v, queria %v", c.windows, c.modo, got, c.quer)
+		}
+	}
+}
+
+type modoFalso fs.FileMode
+
+func (m modoFalso) Name() string       { return "x" }
+func (m modoFalso) Size() int64        { return 1 }
+func (m modoFalso) Mode() fs.FileMode  { return fs.FileMode(m) }
+func (m modoFalso) ModTime() time.Time { return time.Time{} }
+func (m modoFalso) IsDir() bool        { return fs.FileMode(m).IsDir() }
+func (m modoFalso) Sys() any           { return nil }

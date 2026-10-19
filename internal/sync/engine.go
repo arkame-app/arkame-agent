@@ -56,7 +56,7 @@ func processFile(ctx context.Context, o EngineOptions, fi FileInfo) (*api.FileEn
 	if err != nil {
 		return nil, false, err
 	}
-	if !st.Mode().IsRegular() {
+	if !arquivoComum(st) {
 		return nil, false, fmt.Errorf("abrindo %s: %w", fi.RelativePath, ErrArquivoMudou)
 	}
 	if o.Restrito {
@@ -66,7 +66,7 @@ func processFile(ctx context.Context, o EngineOptions, fi FileInfo) (*api.FileEn
 		if !mesmoArquivo(fi.visto, st) {
 			return nil, false, fmt.Errorf("abrindo %s: %w", fi.RelativePath, ErrArquivoMudou)
 		}
-		if ligacaoDeArquivoFechado(st) {
+		if ligacaoDeArquivoFechado(st, donoDaPasta(fi.AbsolutePath)) {
 			return nil, false, ErrCaminhoRestrito
 		}
 		if o.Leitura == nil {
@@ -394,6 +394,18 @@ func conferirAberto(hostRoot string, f *os.File) error {
 		return ErrCaminhoRestrito
 	}
 	return nil
+}
+
+// arquivoComum: arquivo, e não dispositivo, pasta, FIFO ou link. No Windows o
+// Go marca como irregular os reparse points que a varredura copia (OneDrive
+// já baixado, WOF do compact.exe), e o File.Stat devolve o mesmo: lá vale o
+// irregular sem outro tipo, o critério do irregularLegivel (revisão, 18/10:
+// sem isto, todo arquivo do OneDrive falhava).
+func arquivoComum(st fs.FileInfo) bool {
+	if caminho.Windows {
+		return st.Mode().Type()&^fs.ModeIrregular == 0
+	}
+	return st.Mode().IsRegular()
 }
 
 // mesmoArquivo: fora do Windows, o dispositivo e o inode do que abriu são os

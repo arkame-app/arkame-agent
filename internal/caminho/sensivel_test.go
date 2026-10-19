@@ -97,3 +97,15 @@ func TestResolvidoNoWindows(t *testing.T) {
 		}
 	}
 }
+
+func TestDoSistemaVivo(t *testing.T) {
+	casos := map[string]bool{"/proc/kcore": true, "/sys/kernel/x": true, "/proc": true, "/procurar/x": false, "/srv/sys": false}
+	for p, quer := range casos {
+		if got := DoSistemaVivo("/", p); got != quer {
+			t.Errorf("%s: %v, queria %v", p, got, quer)
+		}
+	}
+	if !DoSistemaVivo("/host", "/host/proc/kcore") || DoSistemaVivo("/host", "/proc/kcore") {
+		t.Error("no Docker, /proc do servidor é /host/proc")
+	}
+}

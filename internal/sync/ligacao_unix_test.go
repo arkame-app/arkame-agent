@@ -29,12 +29,15 @@ func TestLigacaoDeArquivoFechado(t *testing.T) {
 		modo  fs.FileMode
 		links int
 		uid   uint32
+		pasta int64
 		quer  bool
 	}{
-		{"chave do host com dois nomes", 0o600, 2, 0, true},
-		{"chave do host com um nome", 0o600, 1, 0, false},
-		{"arquivo do usuário com dois nomes", 0o600, 2, 1000, false},
-		{"arquivo do root legível com dois nomes", 0o644, 2, 0, false},
+		{"chave do host com dois nomes", 0o600, 2, 0, 1000, true},
+		{"chave do host com um nome", 0o600, 1, 0, 1000, false},
+		{"arquivo do usuário com dois nomes", 0o600, 2, 1000, 1000, false},
+		{"arquivo do root legível com dois nomes", 0o644, 2, 0, 1000, false},
+		{"chave de conta de serviço (_postgres) com dois nomes", 0o600, 2, 216, 1000, true},
+		{"pasta de dono desconhecido: só o root conta", 0o600, 2, 216, -1, false},
 	}
 	for _, c := range casos {
 		st := &syscall.Stat_t{Uid: c.uid}
@@ -42,7 +45,7 @@ func TestLigacaoDeArquivoFechado(t *testing.T) {
 		if c.links > 1 {
 			st.Nlink = 2
 		}
-		if got := ligacaoDeArquivoFechado(infoFalso{modo: c.modo, sys: st}); got != c.quer {
+		if got := ligacaoDeArquivoFechado(infoFalso{modo: c.modo, sys: st}, c.pasta); got != c.quer {
 			t.Errorf("%s: %v, queria %v", c.nome, got, c.quer)
 		}
 	}

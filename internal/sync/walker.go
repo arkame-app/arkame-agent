@@ -267,6 +267,12 @@ func walkSem(ctx context.Context, hostRoot string, sourcePaths []string, exclude
 					alvo := path
 					if !caminho.Windows {
 						alvo = caminho.Real(hostRoot, strings.TrimPrefix(path, filepath.Clean(hostRoot)))
+						// /proc e /sys têm "arquivos" que são a memória do
+						// sistema (/proc/kcore): um link para lá não é dado
+						// do cliente, em plano nenhum (revisão, 18/10).
+						if caminho.DoSistemaVivo(hostRoot, alvo) {
+							return nil
+						}
 					}
 					if restrito {
 						final := alvo
