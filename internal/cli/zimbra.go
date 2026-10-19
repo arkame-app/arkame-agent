@@ -115,9 +115,8 @@ existe, só as mensagens voltam; --settings reaplica também a configuração (a
 senha nunca). O que manda e-mail para fora (encaminhamento, resposta
 automática, aviso de mensagem nova) só volta com --with-forwarding.
 
---resolve diz o que fazer com o item que já está na caixa: skip (padrão, não
-mexe no que está lá), modify, replace, ou reset (APAGA a caixa antes de
-importar). --to restaura as mensagens noutra conta; se ela não existe, é criada
+A restauração só mescla: o que já está na caixa fica como está, e o que
+faltava volta. Nada é apagado nem substituído. --to restaura as mensagens noutra conta; se ela não existe, é criada
 vazia, com uma senha aleatória (sem a configuração da original).`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if !filepath.IsAbs(r.De) {
@@ -132,7 +131,7 @@ vazia, com uma senha aleatória (sem a configuração da original).`,
 	}
 	restaurar.Flags().StringVar(&r.De, "from", "", "pasta da conta restaurada (…/contas/<conta>)")
 	restaurar.Flags().StringVar(&r.Para, "to", "", "conta que recebe as mensagens (padrão: a mesma)")
-	restaurar.Flags().StringVar(&r.Resolver, "resolve", "skip", "skip, modify, replace ou reset")
+	restaurar.Flags().StringVar(&r.Resolver, "resolve", "skip", "só skip: a restauração mescla, nada é apagado nem substituído")
 	restaurar.Flags().BoolVar(&r.SemMensagens, "settings-only", false, "só a configuração, os filtros e as assinaturas")
 	restaurar.Flags().BoolVar(&r.Configuracao, "settings", false, "numa conta que existe, reaplica também a configuração, os filtros e as assinaturas")
 	restaurar.Flags().BoolVar(&r.Encaminhamentos, "with-forwarding", false, "reaplica também encaminhamento, resposta automática e aviso de mensagem nova")

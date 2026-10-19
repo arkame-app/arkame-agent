@@ -879,7 +879,7 @@ func TestRestaurarRecriaSemSenhaNemEncaminhamento(t *testing.T) {
 	delete(z.contas, "ana@exemplo.com.br") // a conta foi apagada
 	z.limpar()
 	var log bytes.Buffer
-	if err := Restaurar(context.Background(), z.cliente(t), OpcoesDeRestauracao{De: dir, Resolver: "reset"}, &log); err != nil {
+	if err := Restaurar(context.Background(), z.cliente(t), OpcoesDeRestauracao{De: dir}, &log); err != nil {
 		t.Fatal(err)
 	}
 	cria := z.corpos["CreateAccountRequest"][0]
@@ -911,8 +911,31 @@ func TestRestaurarRecriaSemSenhaNemEncaminhamento(t *testing.T) {
 			posts = append(posts, p)
 		}
 	}
-	if len(posts) < 3 || !strings.HasPrefix(posts[0], "POST ana@exemplo.com.br reset 2019") || strings.Contains(strings.Join(posts[1:], "\n"), " reset ") || posts[len(posts)-1] != "POST ana@exemplo.com.br skip ESTRUTURA" {
-		t.Fatalf("importação fora de ordem ou reset repetido:\n%s", strings.Join(posts, "\n"))
+	if len(posts) < 3 || !strings.HasPrefix(posts[0], "POST ana@exemplo.com.br skip 2019") || posts[len(posts)-1] != "POST ana@exemplo.com.br skip ESTRUTURA" {
+		t.Fatalf("importação fora de ordem:\n%s", strings.Join(posts, "\n"))
+	}
+	for _, p := range posts {
+		if !strings.Contains(p, " skip ") {
+			t.Fatalf("importação que não mescla: %s", p)
+		}
+	}
+}
+
+// A restauração só mescla (Hugo, 19/10): o que apaga ou substitui o que está
+// na caixa é recusado antes de qualquer pedido ao Zimbra.
+func TestRestaurarSoMescla(t *testing.T) {
+	z := servidorDeExemplo(t)
+	dir := exportarAna(t, z)
+	for _, r := range []string{"reset", "replace", "modify"} {
+		z.limpar()
+		if err := Restaurar(context.Background(), z.cliente(t), OpcoesDeRestauracao{De: dir, Resolver: r}, io.Discard); err == nil {
+			t.Errorf("--resolve %s foi aceito", r)
+		}
+		for _, p := range z.rest {
+			if strings.HasPrefix(p, "POST") {
+				t.Errorf("--resolve %s chegou a importar: %s", r, p)
+			}
+		}
 	}
 }
 

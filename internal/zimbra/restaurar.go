@@ -27,8 +27,10 @@ type OpcoesDeRestauracao struct {
 	// Para: a conta que recebe (padrão: a mesma do backup). Outra conta só
 	// recebe as mensagens — a configuração é da original.
 	Para string
-	// Resolver: o que fazer com o item que já está na caixa — skip (padrão:
-	// deixa o que está), modify, replace ou reset (apaga a caixa antes).
+	// Resolver: o que fazer com o item que já está na caixa. Só skip: a
+	// restauração mescla, deixa o que está lá e traz de volta o que faltava.
+	// modify, replace e reset (este apagava a caixa antes) saíram em 19/10
+	// (Hugo: "deve apenas mesclar"); pedir um deles é recusado.
 	Resolver string
 	// SemMensagens: só a configuração, os filtros e as assinaturas.
 	SemMensagens bool
@@ -43,7 +45,7 @@ type OpcoesDeRestauracao struct {
 	Encaminhamentos bool
 }
 
-var resolucoes = map[string]bool{"skip": true, "modify": true, "replace": true, "reset": true}
+var resolucoes = map[string]bool{"skip": true}
 
 // atributosDeContato: os do LDAP que voltam, além dos zimbraPref* e
 // zimbraFeature*.
@@ -120,7 +122,7 @@ func Restaurar(ctx context.Context, c *Cliente, o OpcoesDeRestauracao, log io.Wr
 		o.Resolver = "skip"
 	}
 	if !resolucoes[o.Resolver] {
-		return fmt.Errorf("--resolve tem de ser skip, modify, replace ou reset")
+		return fmt.Errorf("a restauração do Zimbra só mescla (--resolve skip): nada da caixa é apagado nem substituído")
 	}
 	origem := filepath.Base(filepath.Clean(o.De))
 	if !ContaValida(origem) {
@@ -441,14 +443,8 @@ func restaurarMensagens(ctx context.Context, c *Cliente, o OpcoesDeRestauracao, 
 		fmt.Fprintf(log, "nenhuma mensagem para restaurar em %s\n", o.De)
 		return nil
 	}
-	for i, nome := range arquivos {
-		// reset apaga a caixa: só na primeira importação, senão cada mês
-		// apagaria o anterior.
-		r := o.Resolver
-		if r == "reset" && i > 0 {
-			r = "skip"
-		}
-		if err := importar(ctx, c, o.Para, o.De, nome, r); err != nil {
+	for _, nome := range arquivos {
+		if err := importar(ctx, c, o.Para, o.De, nome, o.Resolver); err != nil {
 			return fmt.Errorf("importando %s em %s: %w", nome, o.Para, err)
 		}
 		fmt.Fprintf(log, "%s importado em %s\n", strings.TrimSuffix(nome, ".tgz"), o.Para)
