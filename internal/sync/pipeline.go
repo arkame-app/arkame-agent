@@ -135,6 +135,10 @@ type Result struct {
 	// inline), na ordem da varredura.
 	VersionMap  []api.FileEntry
 	FilesFailed int // arquivos que falharam no upload (pulados); usado p/ decidir partial/failed
+	// RestritosNaLeitura: arquivos de um plano do MCP que, abertos, estavam
+	// numa pasta com chaves ou senhas (ErrCaminhoRestrito); somam ao
+	// RestrictedSkipped.
+	RestritosNaLeitura int
 	// NuvemNaLeitura: arquivos que o provedor de nuvem recusou entregar na
 	// leitura ("Access to the cloud file is denied"); somam ao CloudOnlySkipped.
 	NuvemNaLeitura int
@@ -155,6 +159,12 @@ type Result struct {
 	// File Sync em camada fria, HSM) ou que não deu para ler: ficam de fora e
 	// vão ao painel no /complete pelo mesmo motivo do CloudOnlySkipped.
 	ReparseSkipped int
+	// RestrictedSkipped conta o que um plano do MCP deixou de fora por cair
+	// numa pasta com chaves ou senhas: pastas inteiras e arquivos, na
+	// varredura e na leitura. Vai ao painel no /complete, para quem olha o
+	// backup saber por que não acha o .ssh. Não tira a sessão do inventário:
+	// é como uma exclusão, e o que já estava guardado sai do catálogo.
+	RestrictedSkipped int
 	// NaoPermitido: alguma leitura (varredura ou arquivo) voltou EPERM. No
 	// macOS é o TCC: o serviço precisa de Acesso Total ao Disco, e a causa da
 	// sessão parcial diz isso.
@@ -386,6 +396,7 @@ func Run(ctx context.Context, o EngineOptions) (*Result, error) {
 	}
 	result.CloudOnlySkipped = pulados.SoNaNuvem + result.NuvemNaLeitura
 	result.ReparseSkipped = pulados.Reparse
+	result.RestrictedSkipped = pulados.Restritos + result.RestritosNaLeitura
 	result.NaoPermitido = result.NaoPermitido || pulados.NaoPermitido
 	c.ordenarMapa()
 	if c.fatal != nil {
@@ -561,6 +572,10 @@ func (c *coletor) receber(ctx context.Context, t tratado) {
 		}
 		if ctx.Err() != nil && errors.Is(t.err, context.Canceled) {
 			return // o serviço parando no meio do envio não é falha do arquivo
+		}
+		if errors.Is(t.err, ErrCaminhoRestrito) {
+			r.RestritosNaLeitura++
+			return
 		}
 		if erroDeArquivoDeNuvem(t.err) {
 			// Só na nuvem, e o provedor não o entrega ao serviço: fica de fora

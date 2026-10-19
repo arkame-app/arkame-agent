@@ -466,8 +466,11 @@ type corpoDeConclusao struct {
 	CloudOnlySkipped int `json:"cloud_only_skipped"`
 	// Reparse points fora do OneDrive (Azure File Sync em camada fria,
 	// HSM) ou ilegíveis que ficaram de fora. Mesma regra: vai sempre.
-	ReparseSkipped int               `json:"reparse_skipped"`
-	Index          *api.IndexSummary `json:"index,omitempty"`
+	ReparseSkipped int `json:"reparse_skipped"`
+	// O que um plano do MCP deixou de fora por cair numa pasta com chaves ou
+	// senhas (0.5.6). Ausente = zero.
+	RestrictedSkipped int               `json:"restricted_skipped,omitempty"`
+	Index             *api.IndexSummary `json:"index,omitempty"`
 	// ConsistencyMethod: de onde os arquivos foram lidos — "vss" (instantâneo
 	// do volume), "none" (o Windows tentou e leu do disco). Ausente fora do
 	// Windows. Vai no /complete, e não no /start, porque o instantâneo só

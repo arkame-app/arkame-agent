@@ -52,6 +52,9 @@ type puladosDoWalk struct {
 	// NaoPermitido: alguma leitura voltou EPERM ("operation not permitted"),
 	// que no macOS é o TCC barrando o serviço sem Acesso Total ao Disco.
 	NaoPermitido bool
+	// Restritos: o que um plano do MCP pulou por cair numa pasta sensível
+	// (pastas inteiras contam um).
+	Restritos int
 }
 
 // naoPermitido diz se o erro é EPERM. Variável para os testes, que no Linux
@@ -140,7 +143,7 @@ func walkSem(ctx context.Context, hostRoot string, sourcePaths []string, exclude
 		}()
 		if puladosOut != nil {
 			defer func() {
-				*puladosOut = puladosDoWalk{SoNaNuvem: soNaNuvem, Reparse: reparse, NaoPermitido: eperm}
+				*puladosOut = puladosDoWalk{SoNaNuvem: soNaNuvem, Reparse: reparse, NaoPermitido: eperm, Restritos: restritos}
 			}()
 		}
 		anotar := func(p string, err error) {

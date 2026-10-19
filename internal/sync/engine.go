@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/arkame-app/agent/internal/api"
+	"github.com/arkame-app/agent/internal/caminho"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"golang.org/x/time/rate"
@@ -47,6 +48,11 @@ func processFile(ctx context.Context, o EngineOptions, fi FileInfo) (*api.FileEn
 		return nil, false, err
 	}
 	defer f.Close()
+	if o.Restrito && o.Leitura == nil {
+		if err := conferirAberto(o.HostRoot, f); err != nil {
+			return nil, false, err
+		}
+	}
 
 	// 1. SHA-256 streamed, só dos fi.Size bytes que o walker viu. Arquivo que
 	// só cresce (log) seguia sendo lido além disso: o hash cobria bytes que o
@@ -338,6 +344,23 @@ func tamanhoDaParte(tamanho int64) int64 {
 	p := (tamanho + maximoPartes - 1) / maximoPartes
 	p = (p + mib - 1) / mib * mib
 	return max(p, parteMinima)
+}
+
+// ErrCaminhoRestrito: num plano do MCP, o arquivo aberto está numa pasta com
+// chaves ou senhas, ou não deu para saber onde ele está. Fica de fora sem
+// contar como falha (RestrictedSkipped).
+var ErrCaminhoRestrito = errors.New("arquivo numa pasta com chaves ou senhas do sistema; um plano criado pelo assistente (MCP) não o lê")
+
+// conferirAberto confere o arquivo pelo que foi de fato aberto, e não pelo
+// caminho da varredura: entre uma e outra, uma pasta no meio pode ter virado
+// link (Unix) ou junção (Windows, sem privilégio) para /root/.ssh. Com
+// instantâneo não se aplica: a leitura vem de uma cópia que não muda.
+func conferirAberto(hostRoot string, f *os.File) error {
+	final, err := caminho.DoAberto(f)
+	if err != nil || caminho.CaminhoSensivel(hostRoot, final) || caminho.Windows && !caminho.ResolvidoNoWindows(final) {
+		return ErrCaminhoRestrito
+	}
+	return nil
 }
 
 // ErrArquivoMudou: o conteúdo enviado não é o que foi hasheado — o arquivo foi

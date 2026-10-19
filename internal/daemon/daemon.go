@@ -802,6 +802,7 @@ func executePlan(ctx context.Context, c *api.Client, s3c *s3.Client, cfg *config
 		Stats:             result.Stats,
 		CloudOnlySkipped:  result.CloudOnlySkipped,
 		ReparseSkipped:    result.ReparseSkipped,
+		RestrictedSkipped: result.RestrictedSkipped,
 		ConsistencyMethod: inst.Metodo,
 	}
 	guardados := result.Guardados()

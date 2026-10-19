@@ -3,6 +3,7 @@
 package caminho
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -37,6 +38,16 @@ func finalPeloHandle(p string) (string, error) {
 		return "", err
 	}
 	defer windows.CloseHandle(h)
+	return finalDoHandle(h)
+}
+
+// DoAberto devolve o caminho real do arquivo já aberto: o que foi de fato
+// lido, mesmo que uma pasta no meio tenha virado junção depois da varredura.
+func DoAberto(f *os.File) (string, error) {
+	return finalDoHandle(windows.Handle(f.Fd()))
+}
+
+func finalDoHandle(h windows.Handle) (string, error) {
 	buf := make([]uint16, windows.MAX_LONG_PATH)
 	for {
 		n, err := windows.GetFinalPathNameByHandle(h, &buf[0], uint32(len(buf)), 0)
