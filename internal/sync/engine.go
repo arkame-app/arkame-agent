@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path"
@@ -48,9 +49,30 @@ func processFile(ctx context.Context, o EngineOptions, fi FileInfo) (*api.FileEn
 		return nil, false, err
 	}
 	defer f.Close()
-	if o.Restrito && o.Leitura == nil {
-		if err := conferirAberto(o.HostRoot, f); err != nil {
-			return nil, false, err
+	// O que abriu tem de ser um arquivo comum, como o que a varredura viu.
+	// Trocado no meio por um link para /dev/sda1, a leitura levaria o disco
+	// cru, com /etc/shadow dentro (revisão, 18/10). Vale para todo plano.
+	st, err := f.Stat()
+	if err != nil {
+		return nil, false, err
+	}
+	if !st.Mode().IsRegular() {
+		return nil, false, fmt.Errorf("abrindo %s: %w", fi.RelativePath, ErrArquivoMudou)
+	}
+	if o.Restrito {
+		// No plano do MCP, também o mesmo arquivo (dispositivo e inode). Nos
+		// outros, um arquivo salvo por "grava e renomeia" durante o backup
+		// é lido na versão nova, como sempre foi.
+		if !mesmoArquivo(fi.visto, st) {
+			return nil, false, fmt.Errorf("abrindo %s: %w", fi.RelativePath, ErrArquivoMudou)
+		}
+		if ligacaoDeArquivoFechado(st) {
+			return nil, false, ErrCaminhoRestrito
+		}
+		if o.Leitura == nil {
+			if err := conferirAberto(o.HostRoot, f); err != nil {
+				return nil, false, err
+			}
 		}
 	}
 
@@ -355,12 +377,33 @@ var ErrCaminhoRestrito = errors.New("arquivo numa pasta com chaves ou senhas do 
 // caminho da varredura: entre uma e outra, uma pasta no meio pode ter virado
 // link (Unix) ou junção (Windows, sem privilégio) para /root/.ssh. Com
 // instantâneo não se aplica: a leitura vem de uma cópia que não muda.
+//
+// Não saber onde o arquivo está não é o mesmo que ele ser sensível: é falha
+// do arquivo (a sessão fica parcial e nada vira remoção no catálogo), e não
+// um item pulado, que numa sessão completa tiraria do catálogo tudo o que
+// estava guardado (revisão, 18/10).
 func conferirAberto(hostRoot string, f *os.File) error {
 	final, err := caminho.DoAberto(f)
-	if err != nil || caminho.CaminhoSensivel(hostRoot, final) || caminho.Windows && !caminho.ResolvidoNoWindows(final) {
+	if err != nil {
+		return fmt.Errorf("não consegui conferir onde está o arquivo aberto: %w", err)
+	}
+	if caminho.Windows && !caminho.ResolvidoNoWindows(final) {
+		return fmt.Errorf("não consegui conferir onde está o arquivo aberto (%s)", final)
+	}
+	if caminho.CaminhoSensivel(hostRoot, final) {
 		return ErrCaminhoRestrito
 	}
 	return nil
+}
+
+// mesmoArquivo: fora do Windows, o dispositivo e o inode do que abriu são os
+// que a varredura viu. No Windows a varredura vem do FindFirstFile, sem o
+// número do arquivo, e a conferência fica com o tipo e o caminho real.
+func mesmoArquivo(visto, aberto fs.FileInfo) bool {
+	if visto == nil || caminho.Windows {
+		return true
+	}
+	return os.SameFile(visto, aberto)
 }
 
 // ErrArquivoMudou: o conteúdo enviado não é o que foi hasheado — o arquivo foi

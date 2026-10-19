@@ -36,6 +36,9 @@ type FileInfo struct {
 	// onde o sistema não o dá (Windows).
 	CtimeSeg  int64
 	CtimeNano uint32
+	// visto: o que a varredura viu (Lstat do arquivo, ou Stat do alvo do
+	// link). A leitura confere que abriu o mesmo arquivo (os.SameFile).
+	visto fs.FileInfo
 }
 
 // Walk percorre os paths fornecidos, respeitando excludeGlobs (patterns tipo *.tmp, node_modules).
@@ -401,6 +404,7 @@ var lerCtime = ctimeDe
 // comCtime preenche o ctime do arquivo, onde o sistema o dá.
 func comCtime(fi FileInfo, info fs.FileInfo) FileInfo {
 	fi.CtimeSeg, fi.CtimeNano = lerCtime(info)
+	fi.visto = info
 	return fi
 }
 

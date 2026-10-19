@@ -126,3 +126,58 @@ func TestRunContaOsRestritos(t *testing.T) {
 		t.Fatalf("restritos=%d arquivos=%d falhas=%d", r.RestrictedSkipped, r.Stats.FilesTotal, r.FilesFailed)
 	}
 }
+
+// Trocado depois da varredura por um link para um dispositivo, o arquivo não
+// é lido em plano nenhum: levaria o disco cru (revisão, 18/10). E no plano do
+// MCP, outro arquivo no lugar do que a varredura viu também não.
+func TestLeituraRecusaDispositivoEArquivoTrocado(t *testing.T) {
+	if caminho.Windows {
+		t.Skip("links simbólicos do Unix")
+	}
+	raiz := t.TempDir()
+	p := filepath.Join(raiz, "srv/big")
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte("12345"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Lstat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fi := comCtime(FileInfo{AbsolutePath: p, RelativePath: "srv/big", Size: 5, ModTime: info.ModTime()}, info)
+	_, c := novoS3Falso(t)
+	comum := EngineOptions{S3: c, Bucket: "b", PrefixRoot: "data/a/", HostRoot: raiz}
+	restrito := comum
+	restrito.Restrito = true
+
+	// Outro arquivo no lugar (grava e renomeia): o plano comum lê a versão
+	// nova; o do MCP recusa.
+	novo := filepath.Join(raiz, "srv/big.tmp")
+	if err := os.WriteFile(novo, []byte("abcde"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(novo, p); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := processFile(context.Background(), comum, fi); err != nil {
+		t.Fatalf("plano comum recusou o arquivo regravado: %v", err)
+	}
+	if _, _, err := processFile(context.Background(), restrito, fi); !errors.Is(err, ErrArquivoMudou) {
+		t.Fatalf("plano do MCP leu outro arquivo no lugar: %v", err)
+	}
+
+	// Link para um dispositivo: ninguém lê.
+	if err := os.Remove(p); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/dev/zero", p); err != nil {
+		t.Fatal(err)
+	}
+	for nome, o := range map[string]EngineOptions{"comum": comum, "restrito": restrito} {
+		if _, _, err := processFile(context.Background(), o, fi); !errors.Is(err, ErrArquivoMudou) {
+			t.Fatalf("%s: leu o dispositivo: %v", nome, err)
+		}
+	}
+}
