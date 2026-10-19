@@ -220,3 +220,24 @@ func (m modoFalso) Mode() fs.FileMode  { return fs.FileMode(m) }
 func (m modoFalso) ModTime() time.Time { return time.Time{} }
 func (m modoFalso) IsDir() bool        { return fs.FileMode(m).IsDir() }
 func (m modoFalso) Sys() any           { return nil }
+
+// Um arquivo de /proc é regular para o sistema, mas é a memória do kernel:
+// aberto, fica de fora (revisão, 18/10).
+func TestLeituraRecusaArquivoDoKernel(t *testing.T) {
+	f, err := os.Open("/proc/self/status")
+	if err != nil {
+		t.Skip("sem /proc")
+	}
+	defer f.Close()
+	if !doKernel(f) {
+		t.Fatal("/proc/self/status não foi reconhecido como do kernel")
+	}
+	g, err := os.Open(filepath.Join(t.TempDir(), "."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close()
+	if doKernel(g) {
+		t.Fatal("pasta comum reconhecida como do kernel")
+	}
+}

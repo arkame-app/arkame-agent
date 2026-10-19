@@ -38,6 +38,7 @@ func TestLigacaoDeArquivoFechado(t *testing.T) {
 		{"arquivo do root legível com dois nomes", 0o644, 2, 0, 1000, false},
 		{"chave de conta de serviço (_postgres) com dois nomes", 0o600, 2, 216, 1000, true},
 		{"pasta de dono desconhecido: só o root conta", 0o600, 2, 216, -1, false},
+		{"chave do host em pasta do root aberta a todos (/Users/Shared)", 0o600, 2, 0, 0, true},
 	}
 	for _, c := range casos {
 		st := &syscall.Stat_t{Uid: c.uid}

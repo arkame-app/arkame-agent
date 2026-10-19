@@ -302,7 +302,7 @@ func walkSem(ctx context.Context, hostRoot string, sourcePaths []string, exclude
 						}
 						return nil
 					}
-					if !st.Mode().IsRegular() {
+					if !arquivoComum(st) {
 						return nil
 					}
 					leitura, info = alvo, st

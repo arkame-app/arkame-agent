@@ -573,6 +573,9 @@ func (c *coletor) receber(ctx context.Context, t tratado) {
 		if ctx.Err() != nil && errors.Is(t.err, context.Canceled) {
 			return // o serviço parando no meio do envio não é falha do arquivo
 		}
+		if errors.Is(t.err, ErrDoKernel) {
+			return
+		}
 		if errors.Is(t.err, ErrCaminhoRestrito) {
 			r.RestritosNaLeitura++
 			return

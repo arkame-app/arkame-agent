@@ -59,6 +59,12 @@ func processFile(ctx context.Context, o EngineOptions, fi FileInfo) (*api.FileEn
 	if !arquivoComum(st) {
 		return nil, false, fmt.Errorf("abrindo %s: %w", fi.RelativePath, ErrArquivoMudou)
 	}
+	// /proc e /sys: "arquivos" que são a memória e o estado do kernel
+	// (/proc/kcore), regulares para o sistema. Por um link trocado depois da
+	// varredura, ou num procfs montado dentro de um chroot da origem.
+	if doKernel(f) {
+		return nil, false, ErrDoKernel
+	}
 	if o.Restrito {
 		// No plano do MCP, também o mesmo arquivo (dispositivo e inode). Nos
 		// outros, um arquivo salvo por "grava e renomeia" durante o backup
@@ -367,6 +373,10 @@ func tamanhoDaParte(tamanho int64) int64 {
 	p = (p + mib - 1) / mib * mib
 	return max(p, parteMinima)
 }
+
+// ErrDoKernel: o arquivo aberto está num sistema de arquivos do kernel
+// (procfs, sysfs). Fica de fora calado: não é dado de backup.
+var ErrDoKernel = errors.New("pseudoarquivo do kernel (/proc, /sys), fora do backup")
 
 // ErrCaminhoRestrito: num plano do MCP, o arquivo aberto está numa pasta com
 // chaves ou senhas, ou não deu para saber onde ele está. Fica de fora sem

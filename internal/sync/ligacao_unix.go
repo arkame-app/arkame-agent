@@ -21,10 +21,9 @@ func ligacaoDeArquivoFechado(st fs.FileInfo, donoDaPasta int64) bool {
 	if !ok || s.Nlink <= 1 || st.Mode().Perm()&0o004 != 0 {
 		return false
 	}
-	if donoDaPasta < 0 {
-		return s.Uid == 0
-	}
-	return int64(s.Uid) != donoDaPasta
+	// Do root, sempre: a pasta do nome também pode ser do root e aberta a
+	// todos (/Users/Shared, /private/tmp).
+	return s.Uid == 0 || donoDaPasta >= 0 && int64(s.Uid) != donoDaPasta
 }
 
 // donoDaPasta: o dono da pasta onde está o nome do arquivo, ou -1.
