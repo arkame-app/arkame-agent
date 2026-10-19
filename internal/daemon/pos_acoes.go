@@ -44,6 +44,8 @@ type posAcao struct {
 	To             string `json:"to,omitempty"`
 	Settings       bool   `json:"settings"`
 	WithForwarding bool   `json:"with_forwarding"`
+	// OnlyNewAccount: em outra conta, só se ela ainda não existe (pedidos do MCP).
+	OnlyNewAccount bool `json:"only_new_account,omitempty"`
 }
 
 // intervaloDasPosAcoes: a importação espera os arquivos chegarem; uma consulta
@@ -187,6 +189,7 @@ func importarContaDoZimbra(ctx context.Context, a posAcao, log *bytes.Buffer) er
 		Resolver:        "skip",
 		Configuracao:    a.Settings,
 		Encaminhamentos: a.WithForwarding,
+		SoContaNova:     a.OnlyNewAccount,
 	}, log)
 }
 

@@ -1001,6 +1001,30 @@ func TestRestaurarEmOutraConta(t *testing.T) {
 	}
 }
 
+// O pedido do MCP (SoContaNova): numa conta que já existe, nada; numa nova, sim.
+func TestRestaurarSoContaNova(t *testing.T) {
+	z := servidorDeExemplo(t)
+	dir := exportarAna(t, z)
+	z.conta("bruno@exemplo.com.br", &contaFalsa{})
+	z.limpar()
+	if err := Restaurar(context.Background(), z.cliente(t), OpcoesDeRestauracao{De: dir, Para: "bruno@exemplo.com.br", SoContaNova: true}, io.Discard); err == nil {
+		t.Fatal("restaurou numa conta que já existe")
+	}
+	if z.contar("POST bruno@exemplo.com.br") != 0 {
+		t.Fatalf("mensagens entraram na conta que já existia: %v", z.rest)
+	}
+	if err := Restaurar(context.Background(), z.cliente(t), OpcoesDeRestauracao{De: dir, Para: "nova2@exemplo.com.br", SoContaNova: true}, io.Discard); err != nil {
+		t.Fatalf("conta nova recusada: %v", err)
+	}
+	if z.contar("POST nova2@exemplo.com.br") == 0 {
+		t.Fatal("a conta nova não recebeu as mensagens")
+	}
+	// Na própria conta, SoContaNova não muda nada: mescla.
+	if err := Restaurar(context.Background(), z.cliente(t), OpcoesDeRestauracao{De: dir, SoContaNova: true}, io.Discard); err != nil {
+		t.Fatalf("a própria conta foi recusada: %v", err)
+	}
+}
+
 func TestNaoSegueRedirecionamento(t *testing.T) {
 	z := novoZimbra(t)
 	z.redirecionar = true

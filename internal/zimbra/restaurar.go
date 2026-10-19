@@ -34,6 +34,11 @@ type OpcoesDeRestauracao struct {
 	Resolver string
 	// SemMensagens: só a configuração, os filtros e as assinaturas.
 	SemMensagens bool
+	// SoContaNova: outra conta só se ela ainda não existe. É o que o MCP pede
+	// (Hugo, 19/10): copiar a caixa de uma pessoa para a de outra que já
+	// existe é o que um assistente enganado faria; uma conta nova não expõe
+	// nada a quem já tem caixa.
+	SoContaNova bool
 	// Configuracao: numa conta que ainda existe, reaplica também a
 	// configuração (sem ela, a conta que existe só recebe as mensagens: a
 	// pessoa pode ter mudado as preferências depois do backup).
@@ -156,6 +161,9 @@ func Restaurar(ctx context.Context, c *Cliente, o OpcoesDeRestauracao, log io.Wr
 	id, err := idDaConta(ctx, c, o.Para)
 	if err != nil {
 		return err
+	}
+	if o.SoContaNova && !mesma && id != "" {
+		return fmt.Errorf("a conta %s já existe: este pedido só restaura numa conta nova", o.Para)
 	}
 	switch {
 	case id == "" && !mesma:

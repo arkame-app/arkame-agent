@@ -624,6 +624,11 @@ const CapacidadeZimbraPastaDaRestauracao = "zimbra_restore_dir"
 // restauração de conta que não terminou inteira (pós-ação zimbra_cleanup).
 const CapacidadeZimbraLimpeza = "zimbra_cleanup"
 
+// CapacidadeZimbraSoContaNova: o agente (0.5.8+) respeita `only_new_account`
+// na pós-ação: em outra conta, recusa se ela já existe. O painel só manda a
+// restauração do MCP para outra conta a quem a declara.
+const CapacidadeZimbraSoContaNova = "zimbra_new_account_only"
+
 // InventoryItem é uma versão que o catálogo do painel diz existir.
 type InventoryItem struct {
 	Key       string `json:"key"`
