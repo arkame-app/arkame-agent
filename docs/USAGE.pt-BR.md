@@ -16,7 +16,11 @@ só então registra o servidor e instala o serviço. Chave recusada: diz a causa
 pergunta de novo. A chave fica no servidor; o painel só informa qual bucket
 (`POST /api/agents/install-config`).
 
-#### Docker (padrão em Linux)
+#### Docker (alternativa no Linux)
+
+O instalador nativo é o padrão. No Docker, os comandos antes e depois do backup,
+e portanto as receitas de banco e do Zimbra, não rodam.
+
 
 O registro roda num container com terminal (`-it`): pergunta e testa a chave,
 registra e espera a aprovação, gravando tudo em `/etc/arkame`. Só se ele terminar
@@ -61,13 +65,15 @@ curl -fsSL https://get.arkame.app/install.sh | sudo sh -s -- --token=atk_...
 ```
 
 ```text
-# Windows: Windows + R, colar, Enter. O curl.exe do Windows baixa o agente
-# (get.arkame.app/agente.exe → release mais recente) e o `setup` dele pede
-# administrador (o "Sim" do Windows), confere o SHA-256 do próprio programa
-# com o checksums.txt do release da versão dele, se copia para Program Files,
-# entra no PATH e roda o `install`. Sem PowerShell: o Defender barrava o formato
-# `powershell -ExecutionPolicy Bypass … irm` como Trojan:Win32/Commando.A!ml.
-cmd /c "curl -fsSLo "%TEMP%\arkame-agent.exe" https://get.arkame.app/agente.exe && "%TEMP%\arkame-agent.exe" setup --token=atk_... || pause"
+# Windows: baixe get.arkame.app/agente.exe no servidor e dê dois cliques. O
+# `setup` pede administrador (o "Sim" do Windows) e, numa janela própria, o
+# código de instalação e a chave do bucket; confere o SHA-256 do próprio
+# programa com o checksums.txt do release, se copia para Program Files, entra
+# no PATH e roda o `install`. Baixar e executar numa linha só (curl && exe, ou
+# `powershell … irm`) o Defender barra como padrão de ataque: o painel não
+# oferece mais. Pela linha de comando, com o arquivo já baixado, o painel mostra
+# um comando do PowerShell (administrador) que confere o SHA-256 antes do
+# `setup --token=atk_...`.
 ```
 
 Checksum diferente aborta sem instalar nada. Se o `checksums.txt` não pode ser

@@ -87,7 +87,8 @@ Núcleo funcional entregue. Itens concluídos e pendências de hardening:
 - [x] Restore (Plan kind=restore: executor com escrita atômica + SHA-256 verify + warming)
 - [x] Atualização automática (`internal/atualizacao`): o painel sinaliza no heartbeat; o agente confere assinatura Ed25519 + SHA-256 em dois canais, roda o `self-test` do programa novo, troca e prova em 5 min, com volta ao anterior. Ver [RELEASE-ASSINATURA.md](RELEASE-ASSINATURA.md)
 - [ ] mTLS hardening (fase 2): substituir bearer JWT mantendo o contrato atual
-- [ ] Snapshot orquestrado (LVM / VSS / btrfs): no roadmap, ainda não implementado
+- [x] Snapshot no Windows (VSS, `internal/instantaneo`): o backup lê de uma cópia congelada do volume
+- [ ] Snapshot no Linux (LVM / btrfs): não implementado; bancos e Zimbra pelas receitas de dump
 - [x] Testes de integração contra S3 de verdade: a CI e a release rodam `go test -race ./...` com um RustFS 1.0.0 local (o MinIO deixou de ser baixável em 24/09)
 - [ ] Observabilidade: métricas Prometheus + traces OTEL (endpoint opcional)
 

@@ -22,12 +22,30 @@ to your bucket and nowhere else.
 · [Português](https://arkame.app/docs?utm_source=github&utm_medium=readme&utm_campaign=agent-repo)
 · [Español](https://arkame.app/es/docs?utm_source=github&utm_medium=readme&utm_campaign=agent-repo)
 
-## Quickstart (Docker)
+## Quickstart
 
 1. In the [Arkame panel](https://save.arkame.app/?utm_source=github&utm_medium=readme&utm_campaign=agent-repo),
-   add your bucket and go to **Agents → New agent**. It shows this command with
-   a one-time install code (`atk_…`, valid for 24 hours).
-2. Run it on the server:
+   add your bucket and go to **Servers → New server**. It opens on the system
+   of the computer you are using and shows the install for it, with a one-time
+   install code (`atk_…`, valid for 24 hours).
+2. On the server:
+   - **Linux and macOS:** run the command it shows
+     (`curl -fsSL https://get.arkame.app/install.sh | sudo sh -s -- --token=atk_...`);
+   - **Windows:** download the installer
+     ([get.arkame.app/agente.exe](https://get.arkame.app/agente.exe)),
+     double-click it, accept the administrator prompt and paste the code.
+
+   The installer asks for your bucket's access key and secret, **tests them
+   against the bucket**, registers the server and waits for you to approve it.
+3. Approve the server in the panel and create a backup plan.
+
+See [Native install](#native-install-linux-macos-windows) for the options.
+
+## Docker (an alternative on Linux)
+
+The native install is the default. In Docker the plan's pre/post commands, and
+so the database and Zimbra recipes, do not run; use it when a container is what
+you want. The panel shows this command under **Docker**:
 
    ```bash
    sudo docker run --pull always --rm -it --user 0 --security-opt label=disable --hostname "$(hostname)" -v /etc/arkame:/etc/arkame \
@@ -37,11 +55,10 @@ to your bucket and nowhere else.
      -v /:/host -v /etc/arkame:/etc/arkame ghcr.io/arkame-app/arkame-agent:latest; }
    ```
 
-   The first container asks for your bucket's access key and secret, **tests
-   them against the bucket**, registers the server and waits for you to approve
-   it in the panel. Only if that succeeds is the old container (if any) replaced
-   and the service started.
-3. Approve the server in the panel and create a backup plan.
+The first container asks for your bucket's access key and secret, **tests
+them against the bucket**, registers the server and waits for you to approve
+it in the panel. Only if that succeeds is the old container (if any) replaced
+and the service started.
 
 Why the flags:
 
@@ -194,16 +211,17 @@ and reads only what you can read. Useful options: `--version=vX.Y.Z`,
 `--no-service`. For the full list:
 `curl -fsSL https://get.arkame.app/install.sh | sh -s -- --help`.
 
-**Windows** (Windows + R, paste, Enter)
+**Windows:** download [get.arkame.app/agente.exe](https://get.arkame.app/agente.exe)
+on the server and double-click it. It asks for administrator rights, then for
+the install code and the bucket key, in its own window. Downloading and
+running in one command line (`curl … && agente.exe`) is blocked by Microsoft
+Defender as a download-and-execute pattern, so the panel no longer offers it.
+From an elevated PowerShell, once the file is downloaded, the panel shows a
+command that checks its SHA-256 before running `setup --token=atk_...`.
 
-```text
-cmd /c "curl -fsSLo "%TEMP%\arkame-agent.exe" https://get.arkame.app/agente.exe && "%TEMP%\arkame-agent.exe" setup --token=atk_... || pause"
-```
-
-`setup` asks for administrator rights, checks its own SHA-256 against the
-release's `checksums.txt`, copies itself to `C:\Program Files\Arkame` and runs
-`install`. `curl.exe` ships with Windows 10 (1803+), 11 and Server 2019+; on
-Server 2016 use `install.ps1` from an elevated PowerShell.
+`setup` checks its own SHA-256 against the release's `checksums.txt`, copies
+itself to `C:\Program Files\Arkame` and runs `install`. On Server 2016 use
+`install.ps1` from an elevated PowerShell.
 
 **Manual download.** Archives and plain binaries for every platform are on the
 [releases page](https://github.com/arkame-app/arkame-agent/releases); the
@@ -362,8 +380,11 @@ Things you should know before relying on it:
   `arkame-agent check-snapshot [folder]` from an elevated prompt. Linux and
   macOS read files as they are (no LVM/btrfs snapshots yet); for databases,
   dump to a folder first: the panel's plan form has ready-made recipes for
-  PostgreSQL, MySQL/MariaDB, MongoDB and SQL Server (a host cron job with
-  Docker, where pre/post commands do not run).
+  PostgreSQL, MySQL/MariaDB, MongoDB and SQL Server, and one for Zimbra that
+  exports account by account (a host cron job with Docker, where pre/post
+  commands do not run). Restoring a Zimbra account only merges: what is in the
+  mailbox stays, what was missing comes back, nothing is deleted or replaced
+  (tested on Zimbra 8.8.15, 9 and 10.1).
 - **Native Linux service restores** into `/etc`, `/usr` or `/boot` fail because
   the systemd unit uses `ProtectSystem=full`; restore elsewhere and copy. The
   Docker install can write there.
