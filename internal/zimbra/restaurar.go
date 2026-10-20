@@ -271,9 +271,13 @@ func recriar(ctx context.Context, c *Cliente, o OpcoesDeRestauracao, cfg configu
 	var resp struct {
 		Account []contaDoDiretorio `json:"account"`
 	}
-	if err := c.admin(ctx, "CreateAccountRequest", map[string]any{"name": o.Para, "password": senha, "a": as}, &resp); err != nil {
+	as, recusados, err := comAtributosAceitos(as, log, func(as []atributo) error {
+		return c.admin(ctx, "CreateAccountRequest", map[string]any{"name": o.Para, "password": senha, "a": as}, &resp)
+	})
+	if err != nil {
 		return "", fmt.Errorf("recriando a conta %s: %w", o.Para, err)
 	}
+	nomes = semOsRecusados(nomes, recusados)
 	if len(resp.Account) != 1 || resp.Account[0].ID == "" {
 		return "", fmt.Errorf("recriando a conta %s: o Zimbra não devolveu o id", o.Para)
 	}
@@ -301,9 +305,13 @@ func reaplicar(ctx context.Context, c *Cliente, o OpcoesDeRestauracao, cfg confi
 		as = append(as, atributo{N: "zimbraCOSId", V: cos})
 	}
 	if len(as) > 0 {
-		if err := c.admin(ctx, "ModifyAccountRequest", map[string]any{"id": id, "a": as}, nil); err != nil {
+		_, recusados, err := comAtributosAceitos(as, log, func(as []atributo) error {
+			return c.admin(ctx, "ModifyAccountRequest", map[string]any{"id": id, "a": as}, nil)
+		})
+		if err != nil {
 			return fmt.Errorf("restaurando a configuração de %s: %w", o.Para, err)
 		}
+		nomes = semOsRecusados(nomes, recusados)
 	}
 	fmt.Fprintf(log, "configuração reaplicada em %s: %s\n", o.Para, listaOuNada(nomes))
 	avisarEncaminhamentos(fora, log)
@@ -336,7 +344,11 @@ func apelidos(ctx context.Context, c *Cliente, id string, cfg configuracaoDaCont
 		case err == nil:
 			fmt.Fprintf(log, "apelido %s devolvido\n", a)
 		case errors.As(err, &ez) && ez.Codigo == "account.ACCOUNT_EXISTS":
-			// Já é desta conta (ou de outra: o Zimbra não distingue aqui).
+			// O Zimbra não diz de quem é: pergunta-se pelo endereço. Já é
+			// desta conta, nada a dizer; de outra, fica de fora com aviso.
+			if dono, _ := idDaConta(ctx, c, a); dono != "" && dono != id {
+				fmt.Fprintf(log, "apelido %s não devolvido: o endereço já é de outra conta\n", a)
+			}
 		default:
 			fmt.Fprintf(log, "apelido %s não devolvido: %v\n", a, err)
 		}
@@ -451,6 +463,7 @@ func restaurarMensagens(ctx context.Context, c *Cliente, o OpcoesDeRestauracao, 
 		fmt.Fprintf(log, "nenhuma mensagem para restaurar em %s\n", o.De)
 		return nil
 	}
+	restaurarEtiquetas(ctx, c, o, log)
 	for _, nome := range arquivos {
 		if err := importar(ctx, c, o.Para, o.De, nome, o.Resolver); err != nil {
 			return fmt.Errorf("importando %s em %s: %w", nome, o.Para, err)
@@ -562,4 +575,127 @@ func lerDaPasta(dir, nome string) ([]byte, error) {
 	}
 	defer f.Close()
 	return io.ReadAll(io.LimitReader(f, 16<<20))
+}
+
+// valoresEquivalentes: o valor de um atributo que mudou de nome entre versões
+// do Zimbra, para a conta exportada numa versão voltar noutra. No 8.8.15 a
+// interface moderna é `zimbrax`; no 10 ela se chama `modern` (teste de
+// migração 8.8.15 → 10.1, 20/10/2026).
+var valoresEquivalentes = map[string]map[string]string{
+	"zimbraPrefClientType": {"zimbrax": "modern", "modern": "zimbrax"},
+}
+
+// comAtributosAceitos chama `pedido` com os atributos da conta e, quando o
+// Zimbra recusa o valor ou o nome de um deles (o servidor de destino é de
+// outra versão), troca pelo valor equivalente ou o deixa de fora, com aviso,
+// e tenta de novo. Um atributo que não volta não pode impedir a conta de ser
+// criada, nem as mensagens de voltarem. Devolve os atributos que foram e os
+// nomes dos que ficaram de fora.
+func comAtributosAceitos(as []atributo, log io.Writer, pedido func([]atributo) error) ([]atributo, []string, error) {
+	var recusados []string
+	trocados := map[string]bool{}
+	for tentativa := 0; tentativa <= len(as)+1; tentativa++ {
+		err := pedido(as)
+		var ez *ErroDoZimbra
+		// O código vem como `account.` ou `ldap.` conforme quem recusou (no
+		// CreateAccount, um atributo que o esquema não conhece é `ldap.`).
+		if err == nil || !errors.As(err, &ez) || !(strings.HasSuffix(ez.Codigo, ".INVALID_ATTR_VALUE") || strings.HasSuffix(ez.Codigo, ".INVALID_ATTR_NAME")) {
+			return as, recusados, err
+		}
+		// O motivo cita o atributo ("zimbraPrefClientType must be one of: …").
+		nome := ""
+		for _, a := range as {
+			if strings.Contains(ez.Motivo, a.N) && len(a.N) > len(nome) {
+				nome = a.N
+			}
+		}
+		if nome == "" {
+			return as, recusados, err
+		}
+		var r []atributo
+		trocou := false
+		for _, a := range as {
+			if a.N != nome {
+				r = append(r, a)
+				continue
+			}
+			if novo, ok := valoresEquivalentes[nome][a.V]; ok && !trocados[nome] && strings.Contains(ez.Motivo, novo) {
+				fmt.Fprintf(log, "AVISO: o Zimbra deste servidor não aceita %s=%s: vai %s, o equivalente nesta versão\n", nome, a.V, novo)
+				r = append(r, atributo{N: nome, V: novo})
+				trocou = true
+			}
+		}
+		if trocou {
+			trocados[nome] = true
+		} else {
+			fmt.Fprintf(log, "AVISO: o Zimbra deste servidor recusou %s (%s): a conta segue sem ele\n", nome, ez.Motivo)
+			recusados = append(recusados, nome)
+		}
+		as = r
+	}
+	return as, recusados, errors.New("o Zimbra recusou a configuração da conta mais vezes que ela tem atributos")
+}
+
+func semOsRecusados(nomes, recusados []string) []string {
+	if len(recusados) == 0 {
+		return nomes
+	}
+	var r []string
+	for _, n := range nomes {
+		if !slices.Contains(recusados, n) {
+			r = append(r, n)
+		}
+	}
+	return r
+}
+
+// restaurarEtiquetas cria na conta de destino as etiquetas da exportação que
+// ela ainda não tem, antes das mensagens: assim a etiqueta que a mensagem
+// traz pelo nome existe na conta. Só cria, nunca muda nem apaga uma que
+// existe. Exportação sem etiquetas.json (agente antigo) e falha aqui não
+// impedem as mensagens de voltarem.
+func restaurarEtiquetas(ctx context.Context, c *Cliente, o OpcoesDeRestauracao, log io.Writer) {
+	b, err := lerDaPasta(o.De, "etiquetas.json")
+	if err != nil {
+		return
+	}
+	var etiquetas []Etiqueta
+	if json.Unmarshal(b, &etiquetas) != nil || len(etiquetas) == 0 {
+		return
+	}
+	var atual struct {
+		Tag []struct {
+			Name string `json:"name"`
+		} `json:"tag"`
+	}
+	if err := c.daContaMail(ctx, o.Para, "GetTagRequest", nil, &atual); err != nil {
+		fmt.Fprintf(log, "AVISO: lendo as etiquetas de %s: %v (as mensagens seguem, com o nome da etiqueta)\n", o.Para, err)
+		return
+	}
+	tem := map[string]bool{}
+	for _, t := range atual.Tag {
+		tem[strings.ToLower(t.Name)] = true
+	}
+	var criadas []string
+	for _, e := range etiquetas {
+		if e.Nome == "" || tem[strings.ToLower(e.Nome)] {
+			continue
+		}
+		tag := map[string]any{"name": e.Nome}
+		switch {
+		case e.RGB != "":
+			tag["rgb"] = e.RGB
+		case e.Cor > 0:
+			tag["color"] = e.Cor
+		}
+		if err := c.daContaMail(ctx, o.Para, "CreateTagRequest", map[string]any{"tag": tag}, nil); err != nil {
+			fmt.Fprintf(log, "AVISO: criando a etiqueta %q em %s: %v\n", e.Nome, o.Para, err)
+			continue
+		}
+		tem[strings.ToLower(e.Nome)] = true
+		criadas = append(criadas, e.Nome)
+	}
+	if len(criadas) > 0 {
+		fmt.Fprintf(log, "etiquetas criadas em %s: %s\n", o.Para, strings.Join(criadas, ", "))
+	}
 }

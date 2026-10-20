@@ -260,6 +260,12 @@ func (c *Cliente) daConta(ctx context.Context, conta, pedido string, corpo map[s
 	return c.soap(ctx, "/service/admin/soap", conta, pedido, "urn:zimbraAccount", corpo, saida)
 }
 
+// daContaMail: um pedido do espaço de e-mail (etiquetas) em nome da conta,
+// na porta de administração, como `daConta`.
+func (c *Cliente) daContaMail(ctx context.Context, conta, pedido string, corpo map[string]any, saida any) error {
+	return c.soap(ctx, "/service/admin/soap", conta, pedido, "urn:zimbraMail", corpo, saida)
+}
+
 // urlREST é o endereço REST da caixa de uma conta.
 func (c *Cliente) urlREST(conta string, params url.Values) string {
 	return c.base + "/home/" + url.PathEscape(conta) + "/?" + params.Encode()

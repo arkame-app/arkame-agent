@@ -783,7 +783,44 @@ func exportarConfiguracao(ctx context.Context, c *Cliente, o Opcoes, conta, dir 
 	if sig.Signature == nil {
 		sig.Signature = []json.RawMessage{}
 	}
-	return gravarJSON(filepath.Join(dir, "assinaturas.json"), sig.Signature)
+	if err := gravarJSON(filepath.Join(dir, "assinaturas.json"), sig.Signature); err != nil {
+		return err
+	}
+	exportarEtiquetas(ctx, c, conta, dir)
+	return nil
+}
+
+// Etiqueta é a definição de uma etiqueta da conta (nome e cor). As mensagens
+// exportadas levam só o nome dela; sem a definição, a etiqueta some da lista
+// da conta restaurada e a mensagem aponta para um id que não existe (teste de
+// migração 8.8.15 → 10.1, 20/10/2026).
+type Etiqueta struct {
+	Nome string `json:"nome"`
+	Cor  int    `json:"cor,omitempty"`
+	RGB  string `json:"rgb,omitempty"`
+}
+
+// exportarEtiquetas grava etiquetas.json. Não é motivo para a conta falhar:
+// sem ele, a restauração faz o que fazia antes (as mensagens voltam com o nome
+// da etiqueta, sem a definição).
+func exportarEtiquetas(ctx context.Context, c *Cliente, conta, dir string) {
+	var resp struct {
+		Tag []struct {
+			Name  string `json:"name"`
+			Color int    `json:"color"`
+			RGB   string `json:"rgb"`
+		} `json:"tag"`
+	}
+	if err := c.daContaMail(ctx, conta, "GetTagRequest", nil, &resp); err != nil {
+		return
+	}
+	etiquetas := []Etiqueta{}
+	for _, t := range resp.Tag {
+		if t.Name != "" {
+			etiquetas = append(etiquetas, Etiqueta{Nome: t.Name, Cor: t.Color, RGB: t.RGB})
+		}
+	}
+	_ = gravarJSON(filepath.Join(dir, "etiquetas.json"), etiquetas)
 }
 
 // mesFechado: o arquivo do mês existe e foi gerado depois que o mês acabou

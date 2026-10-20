@@ -384,7 +384,9 @@ Things you should know before relying on it:
   exports account by account (a host cron job with Docker, where pre/post
   commands do not run). Restoring a Zimbra account only merges: what is in the
   mailbox stays, what was missing comes back, nothing is deleted or replaced
-  (tested on Zimbra 8.8.15, 9 and 10.1).
+  (tested on Zimbra 8.8.15, 9 and 10.1). An account exported on 8.8.15 restores
+  on 10.1, tags and their colors included; a setting the target version does
+  not accept is mapped to its equivalent or left out with a warning.
 - **Native Linux service restores** into `/etc`, `/usr` or `/boot` fail because
   the systemd unit uses `ProtectSystem=full`; restore elsewhere and copy. The
   Docker install can write there.
